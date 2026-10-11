@@ -1025,3 +1025,18 @@ def test_pointer_refuses_a_point_off_every_monitor_under_a_guard(monkeypatch):
 def test_click_ui_allow_auth_lifts_the_unreadable_layer_refusal(monkeypatch):
     _layers_down(monkeypatch)
     trust.guard_covering_layer(500, 500, allow_auth=True)
+
+
+
+def test_hyprland_dialogs_are_named_for_what_they_are(monkeypatch):
+    # permission prompt, app-not-responding and safe mode share the class
+    # and an empty title, so all three need allow_auth, under an honest name
+    monkeypatch.delenv("HYPRUSE_CONFINE", raising=False)
+    dialog = client(addr="0xh", cls="hyprland-dialog")
+    _batch(monkeypatch, MON, [dialog])
+    monkeypatch.setattr(trust.hyprctl, "query", lambda cmd: {})
+    with pytest.raises(trust.TrustError, match="Hyprland's own dialog") as e:
+        trust.guard_pointer(*[v + 1 for v in dialog["at"]])
+    assert "not-responding" in str(e.value) and "credential" not in str(e.value)
+    with pytest.raises(trust.TrustError, match="Hyprland's own dialog"):
+        trust.guard_auth_client(dialog, allow_auth=False)

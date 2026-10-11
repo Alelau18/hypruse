@@ -278,9 +278,8 @@ def guard_pointer(x: float | None, y: float | None, allow_auth: bool = False) ->
         hit = next((c for c in under if (c.get("class") or "").lower() in _AUTH_CLASSES), None)
         if hit is not None:
             raise TrustError(
-                f"({px:.0f}, {py:.0f}) is over {hit.get('class')}, a system authentication "
-                "dialog; refusing the click. Pass allow_auth=true only if a human intends "
-                "this credential action."
+                f"({px:.0f}, {py:.0f}) is over {hit.get('class')}, {_auth_what(hit)}; "
+                f"refusing the click. {_auth_consent(hit)}"
             )
         # a shell-integrated polkit agent draws its prompt as a layer, which
         # `clients` never lists (Omarchy 4). ANY auth surface over the point
@@ -426,9 +425,8 @@ def check_click_point(
         hit = next((c for c in over if (c.get("class") or "").lower() in _AUTH_CLASSES), None)
         if hit is not None:
             raise TrustError(
-                f"({x:.0f}, {y:.0f}) is covered by {hit.get('class')}, a system authentication "
-                "dialog, which would take the click; refusing. Pass allow_auth=true only if "
-                "a human intends this credential action."
+                f"({x:.0f}, {y:.0f}) is covered by {hit.get('class')}, {_auth_what(hit)}, "
+                f"which would take the click; refusing. {_auth_consent(hit)}"
             )
     if scope is not None:
         outside = [c for c in over if not _client_in_scope(c, scope)]
@@ -458,10 +456,13 @@ def _would_cover(
     ws = c.get("workspace") or {}
     if (
         (c.get("class") or "").lower() == _PRIORITY_DIALOG
-        and c.get("floating")
         and hyprctl.workspace_ref(ws) in hyprctl.visible_workspaces(monitors)
     ):
-        return True  # priority focus: it takes the pointer before even pinned windows
+        # priority focus, keyed on the dialog's process, floating or tiled:
+        # it takes the pointer before even pinned windows. The app-not-
+        # responding notice shares the class and has no priority, but
+        # nothing tells them apart, so it counts too (fail closed)
+        return True
     if target.get("pinned"):
         # the pinned pass runs first: only another pinned window can be above
         return bool(c.get("pinned"))
@@ -870,9 +871,30 @@ def guard_auth_client(client: dict[str, Any], allow_auth: bool) -> None:
     cls = (client.get("class") or "").lower()
     if cls in _AUTH_CLASSES:
         raise TrustError(
-            f"{cls} is a system authentication dialog; refusing to drive it. "
-            "Pass allow_auth=true only if a human intends this credential action."
+            f"{cls} is {_auth_what(client)}; refusing to drive it. {_auth_consent(client)}"
         )
+
+
+def _auth_what(c: dict[str, Any]) -> str:
+    """What an _AUTH_CLASSES window is, for a refusal. hyprland-dialog is
+    Hyprland's permission prompt, but also its app-not-responding and
+    safe-mode notices: same binary, same class, an empty title, so nothing
+    tells them apart, and all of them are refused."""
+    if (c.get("class") or "").lower() == _PRIORITY_DIALOG:
+        return (
+            "Hyprland's own dialog (a permission prompt, or an app-not-responding or "
+            "safe-mode notice)"
+        )
+    return "a system authentication dialog"
+
+
+def _auth_consent(c: dict[str, Any]) -> str:
+    if (c.get("class") or "").lower() == _PRIORITY_DIALOG:
+        return (
+            "A permission prompt grants or denies a permission; pass allow_auth=true only "
+            "if a human intends this."
+        )
+    return "Pass allow_auth=true only if a human intends this credential action."
 
 
 def guard_password_field(client: dict[str, Any], allow_auth: bool) -> None:

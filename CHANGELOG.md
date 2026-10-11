@@ -34,8 +34,10 @@ Fixes from a review of 0.12.0.
   whose scratchpad is up, and a mark taken before the window was resized.
   Hyprland's own permission prompt (`hyprland-dialog`: Deny / Allow once
   / Allow and remember) takes the pointer before any other window, even a
-  pinned one, so it counts over every target, and it is now treated as an
-  authentication dialog: clicking or typing into it needs `allow_auth`. It refuses when an
+  pinned one, floating or tiled, so it counts over every target, and
+  clicking or typing into it needs `allow_auth`. Its app-not-responding
+  and safe-mode notices share its window class and title, so they need
+  `allow_auth` too. It refuses when an
   authentication dialog will cover the control once the target is
   focused, or under confinement an out-of-scope window: Hyprland gives
   the click to pinned and floating windows first and focusing does not

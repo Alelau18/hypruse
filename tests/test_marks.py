@@ -476,7 +476,7 @@ PERMISSION = {"address": "0xh", "class": "hyprland-dialog", "floating": True,
 def test_the_permission_prompt_counts_even_over_a_pinned_target(monkeypatch, focused):
     _scene(monkeypatch, [PERMISSION])
     pinned = dict(make_client(), floating=True, pinned=True)
-    with pytest.raises(srv.trust.TrustError, match="authentication dialog"):
+    with pytest.raises(srv.trust.TrustError, match="Hyprland's own dialog"):
         _check(pinned, focused=focused)
     monkeypatch.setenv("HYPRUSE_AUTH_GUARD", "0")
     monkeypatch.setenv("HYPRUSE_CONFINE", "class:gedit")
@@ -501,3 +501,14 @@ def test_click_ui_refuses_a_tiled_target_on_another_monitor(wired, monkeypatch):
     with pytest.raises(srv.trust.TrustError, match="own monitor"):
         srv.click_ui(name="Save")
     assert wired["clicks"] == [] and wired["dispatch"] == []
+
+
+
+@pytest.mark.parametrize("target", [
+    {"floating": True, "pinned": True}, {"floating": True}, {"fullscreen": 1}])
+def test_a_tiled_permission_prompt_still_takes_the_click(monkeypatch, target):
+    # its priority is keyed on the dialog process, not on floating: a user
+    # rule (or an agent toggling it) can tile it and it still comes first
+    _scene(monkeypatch, [dict(PERMISSION, floating=False)])
+    with pytest.raises(srv.trust.TrustError, match="Hyprland's own dialog"):
+        _check(dict(make_client(), **target))
