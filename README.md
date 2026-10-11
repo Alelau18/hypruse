@@ -17,7 +17,7 @@ Meanwhile Hyprland already exposes everything an agent needs, better than any ac
 - **Semantic first.** `desktop` returns the real window/workspace tree (addresses, classes, titles, geometry) in one call. The agent switches workspaces and focuses windows the way you do (instantly, over IPC), not by squinting at pixels.
 - **Vision when it matters.** Screenshots of a monitor, one window (with grim 1.5+ on Hyprland 0.54+, captured as itself even on a hidden workspace or under another window, though a hidden app may show how it last looked), or a zoomed region, with the geometry/scale metadata to map any pixel back to a clickable coordinate: a coarse-to-fine loop [grounded in the GUI-agents research](#research).
 - **Native input.** Clicks and scrolls are spoken directly over the Wayland wire (`zwlr_virtual_pointer_v1`); typing goes through `wtype`'s virtual keyboard with a proper XKB keymap, unicode-safe on any layout.
-- **Beside you, not instead of you.** The agent can work in apps on its own workspaces while you keep working on yours. It presses controls through the accessibility tree and types through it or with Hyprland's `sendshortcut`, so your cursor, keyboard focus and workspace stay where you left them. Stock Hyprland, no compositor plugin: see [Background mode](#background-mode).
+- **Works beside you.** The agent can work in apps on its own workspaces while you keep working on yours. It presses controls through the accessibility tree and types through it or with Hyprland's `sendshortcut`, so your cursor, keyboard focus and workspace stay where you left them. Stock Hyprland, no compositor plugin: see [Background mode](#background-mode).
 
 ## How it works
 
