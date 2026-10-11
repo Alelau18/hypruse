@@ -59,6 +59,20 @@ def wired_bg(monkeypatch):
     values = iter(s["values"])
     monkeypatch.setattr(srv.a11y, "current_value",
                         lambda bus, svc, path: next(values, {}))
+    monkeypatch.setattr(srv.a11y, "app_for_pid",
+                        lambda bus, pid, title="", size=None: ("app", "/root"))
+    monkeypatch.setattr(srv.a11y, "window_frame",
+                        lambda bus, svc, path, title="", size=None: (svc, path))
+    monkeypatch.setattr(srv.a11y, "focused_text", lambda bus, svc, path: s["focused_text"])
+    texts = {"field": ""}
+
+    def insert(bus, svc, path, text):
+        s["inserted"].append((svc, path, text))
+        texts["field"] += text
+        return True
+
+    monkeypatch.setattr(srv.a11y, "insert_text", insert)
+    monkeypatch.setattr(srv.a11y, "text_of", lambda bus, svc, path: texts["field"])
     monkeypatch.setattr(srv.trust, "_click_scene", lambda: (MONS, []))
     monkeypatch.setattr(srv.trust, "_read_layers", lambda: [])
     return s
@@ -141,3 +155,62 @@ def test_focusing_a_text_field_does_not_claim_no_change(wired_bg):
     wired_bg["values"][:] = [{"value": ""}, {"value": ""}]
     out = str(srv.click_ui(name="Name", window="0xa"))
     assert "focused" in out and "no change" not in out
+
+
+
+# --- keyboard -----------------------------------------------------------------
+
+
+def test_typing_into_a_hidden_text_field_uses_accessibility_text(wired_bg):
+    wired_bg["focused_text"] = ("svc", "/name", 79)
+    out = str(srv.keyboard("type", text="hello", window="0xa"))
+    assert wired_bg["inserted"] == [("svc", "/name", "hello")]
+    assert wired_bg["typed"] == [] and wired_bg["dispatch"] == [] and wired_bg["shortcuts"] == []
+    assert "accessibility interface" in out and "'hello'" in out
+
+
+def test_typing_without_a_text_field_sends_chords(wired_bg):
+    srv.keyboard("type", text="A1", window="0xa")
+    assert wired_bg["shortcuts"] == [("SHIFT", "a", "0xa"), ("", "1", "0xa")]  # us layout
+
+
+def test_typing_follows_the_layout(wired_bg, monkeypatch):
+    monkeypatch.setattr(srv.hyprctl, "active_layout", lambda: ("fr", "", ""))
+    srv.keyboard("type", text="1@", window="0xa")
+    assert wired_bg["shortcuts"] == [("SHIFT", "ampersand", "0xa"), ("MOD5", "agrave", "0xa")]
+
+
+def test_a_character_the_layout_lacks_is_refused_before_any_key(wired_bg):
+    with pytest.raises(srv.trust.TrustError, match="no key"):
+        srv.keyboard("type", text="ok \u4e0a", window="0xa")
+    assert wired_bg["shortcuts"] == []  # nothing half-typed
+
+
+def test_a_key_combo_goes_through_sendshortcut(wired_bg):
+    out = str(srv.keyboard("key", keys="ctrl+s", window="0xa"))
+    assert wired_bg["shortcuts"] == [("CTRL", "s", "0xa")]
+    assert "sendshortcut" in out
+
+
+def test_keys_to_an_xwayland_window_are_refused(wired_bg):
+    wired_bg["xwayland"] = True
+    with pytest.raises(srv.trust.TrustError, match="XWayland"):
+        srv.keyboard("key", keys="ctrl+s", window="0xa")
+
+
+def test_a_password_field_needs_allow_auth(wired_bg):
+    wired_bg["focused_text"] = ("svc", "/pw", 40)
+    with pytest.raises(srv.trust.TrustError, match="password"):
+        srv.keyboard("type", text="hunter2", window="0xa")
+    assert wired_bg["inserted"] == []
+
+
+def test_keyboard_without_a_window_types_into_the_humans_window_in_automatic_mode(wired_bg):
+    srv.keyboard("type", text="x")
+    assert wired_bg["typed"] == ["x"] and wired_bg["shortcuts"] == []
+
+
+def test_the_guarantee_requires_a_window(wired_bg, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    with pytest.raises(srv.trust.TrustError, match="window="):
+        srv.keyboard("type", text="x")

@@ -22,7 +22,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from hypruse import __version__, a11y, events, hyprctl, journal, safety, session, trust
+from hypruse import __version__, a11y, events, hyprctl, journal, keymap, safety, session, trust
 from hypruse import background as bg
 from hypruse import clipboard as clip
 from hypruse import input as hinput
@@ -754,6 +754,7 @@ def keyboard(
     window: str = "",
     then: str = "none",
     allow_auth: bool = False,
+    background: bool | None = None,
 ) -> list[Any] | str:
     """Keyboard to the focused app. action='type' (text, unicode-safe) |
     'key' (keys combo: 'ctrl+shift+t', 'esc', 'F5'; aliases
@@ -784,6 +785,12 @@ def keyboard(
         # must not have made; it is also what a dry run has to raise
         hinput.parse_combo(keys)
     addr_str = _addr(window) if window else ""  # validate the address format first
+    if window:
+        target_client = _resolve_window(window)
+        if bg.decide(target_client["address"] == _active_address(), background):
+            return _keyboard_in_background(target_client, action, text, keys, then, allow_auth)
+    elif bg.decide(True, background):
+        bg.refuse("keyboard needs window= on one of the agent's workspaces to type there")
     # a locked session eats all input, and a mapped launcher layer holds
     # the keyboard grab regardless of window focus: both refuse when that
     # breaks the caller's stated intent (a named window, or a confinement
@@ -953,6 +960,78 @@ def click_ui(
         then,
         window=client["address"],
     )
+
+
+# Hyprland's modifier names for sendshortcut, from input.MODS' wtype names
+_HYPR_MODS = {"ctrl": "CTRL", "shift": "SHIFT", "alt": "ALT", "logo": "SUPER", "altgr": "MOD5"}
+
+
+def _keyboard_in_background(
+    client: dict[str, Any], action: str, text: str, keys: str, then: str, allow_auth: bool
+) -> list[Any] | str:
+    """keyboard with no focus change: text through the app's accessibility
+    interface when its focused element is a text field, else key by key
+    with sendshortcut, mapped through the active keyboard layout."""
+    trust.guard_client(client)
+    trust.guard_auth_client(client, allow_auth)
+    trust.guard_session_lock(True, allow_auth)
+    addr, cls = client["address"], client.get("class", "")
+    layout = hyprctl.active_layout()
+    kmap = keymap.for_layout(*layout)
+    if action == "type":
+        bus = a11y.connect()
+        app = a11y.app_for_pid(bus, client.get("pid"), client.get("title", ""),
+                               tuple(client["size"]))
+        field = None
+        if app is not None:
+            frame = a11y.window_frame(bus, app[0], app[1], client.get("title", ""),
+                                      tuple(client["size"]))
+            field = a11y.focused_text(bus, *frame)
+        if field is not None and field[2] == a11y.PASSWORD_ROLE and not allow_auth:
+            raise trust.TrustError(
+                f"the focused field in {cls} is a password field; refusing to type into it. "
+                "Pass allow_auth=true only if a human intends this credential entry."
+            )
+        if field is not None:
+            if journal.dry_run():
+                return _acted(f"{_DRY} type {len(text)} characters into the text field in "
+                              f"{cls} through the accessibility interface", then, window=addr)
+            before = a11y.text_of(bus, field[0], field[1])
+            if a11y.insert_text(bus, field[0], field[1], text):
+                after = a11y.text_of(bus, field[0], field[1])
+                seen = f"now {after[:80]!r}" if after != before else "no change seen"
+                return _acted(
+                    f"typed {len(text)} characters into the text field in {cls} through the "
+                    f"accessibility interface (your focus untouched); {seen}", then, window=addr)
+        chords = []
+        for ch in text:
+            chord = kmap.chord(ch)
+            if chord is None:
+                bg.refuse(f"{ch!r} has no key on the {layout[0]} keyboard layout, and {cls} "
+                          "has no accessibility text field to put it in")
+            chords.append(chord)
+    else:
+        mods, key = hinput.parse_combo(keys)
+        if key is None:
+            bg.refuse("a bare modifier tap cannot be sent to one window")
+        names = [_HYPR_MODS.get(m, m.upper()) for m in mods]
+        if len(key) == 1:  # a character key: its base key on this layout
+            chord = kmap.chord(key)
+            if chord is None:
+                bg.refuse(f"{key!r} has no key on the {layout[0]} keyboard layout")
+            names += chord[0].split()
+            key = chord[1]
+        chords = [(" ".join(dict.fromkeys(names)), key)]
+    if client.get("xwayland"):
+        bg.refuse(f"{cls} is an XWayland window, and Hyprland sends background keys between "
+                  "two XWayland windows to the focused one instead")
+    what = f"{len(chords)} keys" if action == "type" else f"{keys}"
+    if journal.dry_run():
+        return _acted(f"{_DRY} send {what} to {addr} with sendshortcut", then, window=addr)
+    for mods_, key_ in chords:
+        hyprctl.send_shortcut(mods_, key_, addr)
+    return _acted(f"sent {what} to {addr} ({cls}) with sendshortcut (your focus untouched)",
+                  then, window=addr)
 
 
 # roles whose "click" is taking keyboard focus, which GrabFocus does inside
