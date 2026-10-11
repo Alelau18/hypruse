@@ -53,3 +53,72 @@ def test_refuse_hints_depend_on_the_mode(monkeypatch):
     with pytest.raises(trust.TrustError, match="ask the human") as e:
         bg.refuse("x")
     assert "background=false" not in str(e.value)
+
+
+def _ws(i):
+    return {"id": i, "name": str(i)}
+
+
+def test_the_default_range_counts_down_from_99(monkeypatch):
+    monkeypatch.delenv("HYPRUSE_AGENT_WORKSPACES", raising=False)
+    assert bg.agent_workspaces() == [str(i) for i in range(99, 89, -1)]
+
+
+@pytest.mark.parametrize("raw, expect", [
+    ("99-97", ["99", "98", "97"]), ("90-92", ["90", "91", "92"]),
+    ("99,98,50", ["99", "98", "50"]), ("name:research,99", ["name:research", "99"])])
+def test_ranges_and_lists(monkeypatch, raw, expect):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", raw)
+    assert bg.agent_workspaces() == expect
+
+
+@pytest.mark.parametrize("raw", ["", "abc", "99-", "0", "-3"])
+def test_a_malformed_range_refuses(monkeypatch, raw):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", raw)
+    with pytest.raises(trust.TrustError, match="HYPRUSE_AGENT_WORKSPACES"):
+        bg.agent_workspaces()
+
+
+def _c(addr, ws):
+    return {"address": addr, "workspace": _ws(ws)}
+
+
+def test_next_workspace_fills_from_the_top(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-97")
+    monkeypatch.setenv("HYPRUSE_AGENT_FILL", "1")
+    owned = {"0xa"}
+    assert bg.next_workspace([], owned) == "99"
+    assert bg.next_workspace([_c("0xa", 99)], owned) == "98"
+
+
+def test_next_workspace_skips_a_workspace_holding_the_humans_window(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-97")
+    assert bg.next_workspace([_c("0xhuman", 99)], set()) == "98"
+
+
+def test_fill_stacks_windows_before_moving_down(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-97")
+    monkeypatch.setenv("HYPRUSE_AGENT_FILL", "2")
+    owned = {"0xa", "0xb"}
+    assert bg.next_workspace([_c("0xa", 99)], owned) == "99"
+    assert bg.next_workspace([_c("0xa", 99), _c("0xb", 99)], owned) == "98"
+
+
+def test_a_full_range_overflows_onto_the_emptiest(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-98")
+    owned = {"0xa", "0xb", "0xc"}
+    cl = [_c("0xa", 99), _c("0xb", 99), _c("0xc", 98)]
+    assert bg.next_workspace(cl, owned) == "98"
+
+
+def test_no_usable_workspace_refuses(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99")
+    with pytest.raises(trust.TrustError, match="not open"):
+        bg.next_workspace([_c("0xhuman", 99)], set())
+
+
+def test_on_agent_workspace(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-98,name:research")
+    assert bg.on_agent_workspace(_c("0xa", 98))
+    assert bg.on_agent_workspace({"workspace": {"name": "research"}})
+    assert not bg.on_agent_workspace(_c("0xa", 5))

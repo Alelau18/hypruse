@@ -13,9 +13,9 @@ HYPRUSE_BACKGROUND=0: off, exactly 0.12's behaviour.
 from __future__ import annotations
 
 import os
-from typing import NoReturn
+from typing import Any, NoReturn
 
-from hypruse import trust
+from hypruse import hyprctl, trust
 
 OFF, AUTO, GUARANTEE = "off", "automatic", "guarantee"
 
@@ -62,3 +62,71 @@ def refuse(what: str) -> NoReturn:
             "human's screen), or ask the human"
         )
     raise trust.TrustError(f"{what}, so it cannot be done in the background: {hint}")
+
+
+def agent_workspaces() -> list[str]:
+    """HYPRUSE_AGENT_WORKSPACES as an ordered list of workspace selectors:
+    `A-B` counts from A to B, a comma list keeps its order, `name:x` names
+    a workspace. Default 99-90. Malformed refuses, like HYPRUSE_CONFINE."""
+    raw = os.environ.get("HYPRUSE_AGENT_WORKSPACES", "99-90").strip()
+    out: list[str] = []
+    for part in (p.strip() for p in raw.split(",")):
+        if part.startswith("name:") and part[5:]:
+            out.append(part)
+            continue
+        lo, sep, hi = part.partition("-")
+        if sep and lo.isdigit() and hi.isdigit() and int(lo) > 0 and int(hi) > 0:
+            a, b = int(lo), int(hi)
+            step = -1 if a > b else 1
+            out.extend(str(i) for i in range(a, b + step, step))
+        elif part.isdigit() and int(part) > 0:
+            out.append(part)
+        else:
+            out = []
+            break
+    if not out:
+        raise trust.TrustError(
+            f"HYPRUSE_AGENT_WORKSPACES={raw!r} is malformed (use 99-90, 99,98,50 or "
+            "name:x); refusing every action until it is fixed"
+        )
+    return out
+
+
+def fill() -> int:
+    raw = os.environ.get("HYPRUSE_AGENT_FILL", "1").strip()
+    if not raw.isdigit() or int(raw) < 1:
+        raise trust.TrustError(f"HYPRUSE_AGENT_FILL={raw!r} must be a whole number of 1 or more")
+    return int(raw)
+
+
+def _matches(selector: str, ws: dict[str, Any]) -> bool:
+    if selector.startswith("name:"):
+        return ws.get("name") == selector[5:]
+    return hyprctl.workspace_ref(ws) == int(selector) or ws.get("name") == selector
+
+
+def on_agent_workspace(client: dict[str, Any]) -> bool:
+    ws = client.get("workspace") or {}
+    return any(_matches(s, ws) for s in agent_workspaces())
+
+
+def next_workspace(clients: list[dict[str, Any]], owned: set[str]) -> str:
+    """Where the agent's next app goes: the first workspace in the range with
+    fewer than fill() agent windows and none of the human's; when all are
+    full, the one with the fewest agent windows."""
+    usable: list[tuple[str, int]] = []
+    for sel in agent_workspaces():
+        here = [c for c in clients if _matches(sel, c.get("workspace") or {})]
+        if any(c.get("address") not in owned for c in here):
+            continue  # holds a window the agent did not open
+        usable.append((sel, len(here)))
+    if not usable:
+        raise trust.TrustError(
+            "every agent workspace holds a window the agent did not open; free one or "
+            "widen HYPRUSE_AGENT_WORKSPACES"
+        )
+    limit = fill()
+    for sel, n in usable:
+        if n < limit:
+            return sel
+    return min(usable, key=lambda u: u[1])[0]
