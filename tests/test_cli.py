@@ -242,3 +242,17 @@ def test_stop_clears_stale_beacon(tmp_path, monkeypatch, capsys):
     assert cli.stop() == 0
     assert "already gone" in capsys.readouterr().out
     assert not beacon.exists()
+
+
+@pytest.mark.parametrize(
+    "help_text, expect",
+    [("  -T <identifier> Set the identifier of a foreign toplevel", "even hidden or covered"),
+     ("  -o <output> Set the output name to capture.", "crop the screen")],
+)
+def test_doctor_says_whether_grim_can_capture_a_window_itself(monkeypatch, help_text, expect):
+    class Done:
+        stdout, stderr = help_text, ""
+
+    monkeypatch.setattr(cli.subprocess, "run", lambda *a, **k: Done())
+    ok, detail = cli._window_capture_note()
+    assert ok is True and expect in detail  # informational, never a failure

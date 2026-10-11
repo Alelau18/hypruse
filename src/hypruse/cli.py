@@ -110,6 +110,22 @@ def _check_screenshot() -> tuple[bool, str]:
     return True, f"grim capture ok ({len(data)} bytes)"
 
 
+def _window_capture_note() -> tuple[bool, str]:
+    """Informational: grim -T (grim 1.5+) is what lets a window screenshot
+    capture the window itself; without it, window screenshots crop the
+    screen. Read from grim's own help, which lists -T when it has it."""
+    try:
+        out = subprocess.run(["grim", "-h"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return True, "grim not found (see dependencies)"
+    if "-T" in (out.stdout or "") + (out.stderr or ""):
+        return True, "grim -T: a window screenshot is the window itself, even hidden or covered"
+    return True, (
+        "grim has no -T (needs grim 1.5+): window screenshots crop the screen, "
+        "so covering windows show and hidden windows are refused"
+    )
+
+
 def _mode_note() -> tuple[bool, str]:
     parts = []
     if os.environ.get("HYPRUSE_READONLY", "").lower() in ("1", "true", "yes", "on"):
@@ -135,6 +151,7 @@ CHECKS = (
     ("events", _check_events),
     ("pointer", _check_pointer),
     ("screenshot", _check_screenshot),
+    ("window shots", _window_capture_note),
     ("mode", _mode_note),
     ("skill", _skill_note),
 )

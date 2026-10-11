@@ -11,6 +11,7 @@ image pixel maps back to a clickable point:
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -75,9 +76,11 @@ def zoom_region(x: float, y: float, size: str = "", window: str = "") -> tuple[i
     w, h = parse_size(size or DEFAULT_ZOOM_SIZE)
     if window:
         active = (hyprctl.query("activewindow") or {}).get("address")
-        c = _find_window(window, hyprctl.query("clients"), active)
-        if not _shown(c, hyprctl.query("monitors")):
-            raise _not_shown(c, "zoom crops the screen")
+        clients = hyprctl.query("clients")
+        c = _find_window(window, clients, active)
+        reason = _hidden_reason(c, hyprctl.query("monitors"), clients)
+        if reason:
+            raise _not_shown(c, reason, "zoom crops the screen")
         (bx, by), (bw, bh) = c["at"], c["size"]
     else:
         monitors = hyprctl.query("monitors")
@@ -228,17 +231,91 @@ def _find_window(window: str, clients: list[dict[str, Any]], active: str | None)
     )
 
 
-def _shown(c: dict[str, Any], monitors: list[dict[str, Any]]) -> bool:
-    return hyprctl.workspace_ref(c.get("workspace")) in hyprctl.visible_workspaces(monitors)
-
-
-def _not_shown(c: dict[str, Any], why: str) -> ScreenshotError:
+def _hidden_reason(
+    c: dict[str, Any],
+    monitors: list[dict[str, Any]],
+    clients: list[dict[str, Any]] | None = None,
+) -> str | None:
+    """Why the compositor does not draw this window on a monitor, or None
+    when it does. That is not "nothing covers it": a floating window over
+    a tiled one sets no flag, so a shown window can still be partly covered."""
     ws = c.get("workspace") or {}
+    ref = hyprctl.workspace_ref(ws)
+    if ref not in hyprctl.visible_workspaces(monitors):
+        return f"no monitor is showing its workspace {ws.get('name') or ws.get('id')}"
+    # an inactive tab in a group: Hyprland 0.56 reports visible false,
+    # older releases hidden true
+    if c.get("hidden") is True or c.get("visible") is False:
+        return "it is an inactive tab in a group"
+    if c.get("acceptsInput") is False and not c.get("fullscreen") and any(
+        o.get("address") != c.get("address")
+        and o.get("fullscreen")
+        and hyprctl.workspace_ref(o.get("workspace")) == ref
+        for o in clients or []
+    ):
+        return "a fullscreen window on its workspace hides it"
+    return None
+
+
+def _shown(
+    c: dict[str, Any],
+    monitors: list[dict[str, Any]],
+    clients: list[dict[str, Any]] | None = None,
+) -> bool:
+    return _hidden_reason(c, monitors, clients) is None
+
+
+def _readonly() -> bool:
+    return os.environ.get("HYPRUSE_READONLY", "").lower() in ("1", "true", "yes", "on")
+
+
+def _bring_forward(c: dict[str, Any]) -> str:
+    """How to get a window on screen, naming only tools that exist: read-only
+    mode registers no `hypr`."""
+    if _readonly():
+        return "ask the human to bring it on screen"
+    return f"bring it on screen with hypr(action='focus_window', target='{c['address']}')"
+
+
+def _not_shown(c: dict[str, Any], reason: str, why: str) -> ScreenshotError:
     return ScreenshotError(
-        f"window {c['address']} is not shown: no monitor is showing its workspace "
-        f"{ws.get('name') or ws.get('id')}, and {why}. Focus it first with "
-        f"hypr(action='focus_window', target='{c['address']}')"
+        f"window {c['address']} is not shown ({reason}), and {why}. To see it, "
+        f"{_bring_forward(c)}."
     )
+
+
+class _NoToplevel(Exception):
+    """grim -T cannot give this window's own pixels; `retry` when a moment
+    later it might (a size animation in flight)."""
+
+    def __init__(self, reason: str, retry: bool = False):
+        super().__init__(reason)
+        self.retry = retry
+
+
+def _xwayland_popup_over(
+    c: dict[str, Any], clients: list[dict[str, Any]], monitors: list[dict[str, Any]]
+) -> bool:
+    """Whether another XWayland window on screen overlaps this XWayland
+    app. An X11 app's open menu, combo list or tooltip is a window of its
+    own, which a -T capture of the app leaves out and the screen crop
+    shows."""
+    if not c.get("xwayland"):
+        return False
+    shown = hyprctl.visible_workspaces(monitors)
+    (x, y), (w, h) = c["at"], c["size"]
+    for o in clients:
+        if (
+            o.get("address") == c.get("address")
+            or not o.get("xwayland")
+            or not o.get("mapped", True)
+            or hyprctl.workspace_ref(o.get("workspace")) not in shown
+        ):
+            continue
+        (ox, oy), (ow, oh) = o["at"], o["size"]
+        if ox < x + w and x < ox + ow and oy < y + h and y < oy + oh:
+            return True
+    return False
 
 
 def _own_scale(c: dict[str, Any], monitors: list[dict[str, Any]], fallback: float) -> float:
@@ -255,7 +332,7 @@ def _grab_toplevel(
     max_bytes: int | None,
     lossless: bool,
     own_scale: float,
-) -> tuple[bytes, str, float] | None:
+) -> tuple[bytes, str, float]:
     """The window's own surface via `grim -T`, so a window on a hidden
     workspace or under another window still returns its own pixels.
     Hyprland's stableId is the window's ext-foreign-toplevel-list
@@ -268,24 +345,32 @@ def _grab_toplevel(
     logical-to-pixel factor, so the fraction goes to grim bare
     (base_scale 1.0) and the window's own scale is folded in here.
 
-    None when that path is unavailable (no stableId on older Hyprland,
-    grim before 1.5, no toplevel capture in the compositor) or when the
-    image is not the window's size: a client-side shadow around the
-    surface would offset every mapped point, where the screen crop maps
-    exactly."""
+    Raises _NoToplevel when that path is unavailable (no stableId on older
+    Hyprland, grim before 1.5, no toplevel capture in the compositor) or
+    when the image is not the window's size: a client-side shadow around
+    the surface would offset every mapped point, where the screen crop
+    maps exactly. Other failures (grim missing, the byte budget) raise
+    ScreenshotError as themselves."""
     toplevel = c.get("stableId")
     if not toplevel:
-        return None
+        raise _NoToplevel("this Hyprland gives no window id to capture it by")
     w, h = c["size"]
     start = scale or _cap_scale(max(w, h) * own_scale, max_edge)
     try:
         data, fmt, applied = _grab_fitting(["-T", str(toplevel)], start, max_bytes, lossless, 1.0)
-        iw, ih = image_size(data)
-    except ScreenshotError:
-        return None
+    except ScreenshotError as exc:
+        if str(exc).startswith("grim failed"):  # it ran: no -T, or no such toplevel
+            raise _NoToplevel(
+                "grim cannot capture it directly (that needs grim 1.5+ and Hyprland window capture)"
+            ) from exc
+        raise
+    iw, ih = image_size(data)
     factor = own_scale * applied
     if abs(iw - w * factor) > 2 or abs(ih - h * factor) > 2:
-        return None
+        raise _NoToplevel(
+            f"its capture came back {iw}x{ih}, not the window's size (it may be mid-animation)",
+            retry=True,
+        )
     return data, fmt, factor
 
 
@@ -329,15 +414,17 @@ def capture(
                 "screen hides. A monitor screenshot shows the lock screen."
             )
         active = (hyprctl.query("activewindow") or {}).get("address")
-        c = _find_window(window, hyprctl.query("clients"), active)
+        clients = hyprctl.query("clients")
+        c = _find_window(window, clients, active)
         (x, y), (w, h) = c["at"], c["size"]
         base = ["-g", f"{x},{y} {w}x{h}"]
+        hidden = _hidden_reason(c, monitors, clients)
         meta = {
             "target": "window",
             "window": c["address"],
             "class": c.get("class", ""),
             "geometry": [x, y, w, h],
-            "visible": _shown(c, monitors),
+            "visible": hidden is None,
         }
         base_scale = _scale_for_rect(x, y, w, h, monitors)
         physical_long = max(w, h) * base_scale
@@ -357,18 +444,27 @@ def capture(
     # explicit scale wins; otherwise fit the long edge to keep the mapping honest
     start_scale = scale or _cap_scale(physical_long, max_edge)
     grabbed = None
-    if window:
-        # cropping the window's rect returns whatever the screen shows there,
-        # another workspace's windows when its own is hidden (#4)
-        own = _own_scale(c, monitors, base_scale)
-        grabbed = _grab_toplevel(c, scale, max_edge, max_bytes, lossless, own)
-        if grabbed is None and not meta["visible"]:
-            raise _not_shown(c, "grim cannot capture it off screen here")
+    # cropping the window's rect returns whatever the screen shows there,
+    # another workspace's windows when its own is hidden (#4); but an
+    # XWayland app's own open menu is a separate window only the crop shows
+    if window and (hidden is not None or not _xwayland_popup_over(c, clients, monitors)):
+        grabbed = _toplevel_or_reason(c, scale, max_edge, max_bytes, lossless,
+                                      _own_scale(c, monitors, base_scale), hidden)
+        if isinstance(grabbed, str):
+            if hidden is not None:
+                raise _not_shown(c, hidden, grabbed)
+            grabbed = None
     if grabbed is not None:
         data, fmt, factor = grabbed
+        meta["source"] = "window"
     else:
         data, fmt, applied = _grab_fitting(base, start_scale, max_bytes, lossless, base_scale)
         factor = base_scale * applied
+        if window:
+            meta["source"] = "screen"
+            meta["note"] = (
+                "cropped from the screen: anything over the window shows in its place"
+            )
     iw, ih = image_size(data)
     meta["image"] = [iw, ih]
     meta["format"] = fmt
@@ -376,17 +472,39 @@ def capture(
     meta["coords"] = "click a target at global = geometry[:2] + image_pixel / scale"
     if meta.get("visible") is False:
         meta["coords"] += (
-            ", after focusing the window (hypr action='focus_window'): it is not on "
-            "screen, so a click there now lands on another window"
+            f"; but the window is not on screen ({hidden}), so {_bring_forward(c)} "
+            "and capture again before clicking: these coordinates now point at "
+            "whatever is shown there, and bringing it forward can move it"
         )
         # Hyprland marks a window on a hidden workspace suspended, and many
         # apps (kitty, ghostty) stop drawing while suspended
         meta["note"] = (
             "not on screen: many apps stop drawing while hidden, so this may "
-            "show the window as it last looked, not as it is now. Focus it and "
-            "capture again for a current view."
+            "show the window as it last looked, not as it is now."
         )
     return data, meta
+
+
+def _toplevel_or_reason(
+    c: dict[str, Any],
+    scale: float,
+    max_edge: int | None,
+    max_bytes: int | None,
+    lossless: bool,
+    own_scale: float,
+    hidden: str | None,
+) -> tuple[bytes, str, float] | str:
+    """_grab_toplevel, or the reason it could not. A hidden window caught
+    mid-animation (its buffer not yet at the size hyprctl reports) is
+    retried for up to about a second, since nothing else can capture it."""
+    for attempt in range(5):
+        try:
+            return _grab_toplevel(c, scale, max_edge, max_bytes, lossless, own_scale)
+        except _NoToplevel as exc:
+            if not exc.retry or hidden is None or attempt == 4:
+                return str(exc)
+            time.sleep(0.25)
+    raise AssertionError("unreachable")
 
 
 def capture_stable(
@@ -417,7 +535,10 @@ def capture_stable(
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         time.sleep(interval)
-        nxt, nmeta = capture(window, region, scale, max_bytes, max_edge, lossless)
+        try:
+            nxt, nmeta = capture(window, region, scale, max_bytes, max_edge, lossless)
+        except ScreenshotError:
+            continue  # e.g. mid-animation: keep the last good frame and try again
         if nxt == data:
             nmeta["stable"] = True
             return nxt, nmeta

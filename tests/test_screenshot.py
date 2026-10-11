@@ -270,3 +270,139 @@ def test_stable_is_not_claimed_for_a_hidden_window(monkeypatch):
     _, meta = screenshot.capture_stable(window="0xb", interval=0, timeout=0.05)
     assert meta["stable"] is None
     assert len(calls) == 1  # no settle loop
+
+
+# --- 0.12.1: what "shown" means, where the pixels came from, honest errors ---
+
+
+def _scene(monkeypatch, clients, toplevel=None):
+    """hyprctl sees ONE_MONITOR and `clients`; grim answers -T with
+    `toplevel(args)` (default: the window's own size) and -g with an image
+    of the requested rect, recording every call."""
+    monkeypatch.setattr(screenshot.hyprctl, "query", lambda what: {
+        "monitors": ONE_MONITOR, "clients": clients, "activewindow": clients[0]}[what])
+    calls = []
+
+    def fake_grim(args):
+        calls.append(args)
+        if "-T" in args:
+            if toplevel is not None:
+                return toplevel(args)
+            c = next(c for c in clients if c.get("stableId") == args[args.index("-T") + 1])
+            return _png(*c["size"])
+        w, h = (int(v) for v in args[args.index("-g") + 1].split(" ")[1].split("x"))
+        return _png(w, h)
+
+    monkeypatch.setattr(screenshot, "_grim", fake_grim)
+    return calls
+
+
+def test_an_inactive_group_tab_is_not_shown(monkeypatch):
+    tab = {**SHOWN, "address": "0xt", "visible": False, "stableId": "180000aa"}
+    _scene(monkeypatch, [SHOWN, tab])
+    _, meta = screenshot.capture(window="0xt")
+    assert meta["visible"] is False
+    with pytest.raises(screenshot.ScreenshotError, match="inactive tab"):
+        screenshot.zoom_region(100, 100, window="0xt")
+
+
+def test_a_window_behind_a_fullscreen_sibling_is_not_shown(monkeypatch):
+    full = {**SHOWN, "address": "0xf", "fullscreen": 2, "stableId": "180000ab"}
+    behind = {**SHOWN, "address": "0xb2", "acceptsInput": False, "stableId": "180000ac"}
+    _scene(monkeypatch, [full, behind])
+    assert screenshot.capture(window="0xb2")[1]["visible"] is False
+    with pytest.raises(screenshot.ScreenshotError, match="fullscreen"):
+        screenshot.zoom_region(100, 100, window="0xb2")
+    assert screenshot.capture(window="0xf")[1]["visible"] is True
+
+
+def test_a_toplevel_capture_says_where_its_pixels_came_from(monkeypatch):
+    _scene(monkeypatch, [SHOWN])
+    _, meta = screenshot.capture(window="0xa")
+    assert meta["source"] == "window" and "note" not in meta
+
+
+def test_a_screen_crop_fallback_says_covering_windows_show(monkeypatch):
+    _scene(monkeypatch, [SHOWN], toplevel=_no_toplevel_capture)
+    _, meta = screenshot.capture(window="0xa")
+    assert meta["source"] == "screen"
+    assert "over the window" in meta["note"]
+
+
+def test_an_xwayland_app_with_its_own_popup_open_is_cropped_from_the_screen(monkeypatch):
+    # an X11 menu or tooltip is a separate window, which -T would leave out
+    app = {**SHOWN, "xwayland": True}
+    menu = {"address": "0xm", "class": "steam", "at": [50, 60], "size": [200, 300],
+            "workspace": {"id": 1}, "xwayland": True, "mapped": True}
+    calls = _scene(monkeypatch, [app, menu])
+    _, meta = screenshot.capture(window="0xa")
+    assert all("-T" not in a for a in calls) and meta["source"] == "screen"
+
+
+def test_hidden_window_hints_never_promise_the_old_coordinates(monkeypatch):
+    _scene(monkeypatch, [SHOWN, HIDDEN])
+    _, meta = screenshot.capture(window="0xb")
+    assert "capture again" in meta["coords"]
+    _, shown = screenshot.capture(window="0xa")
+    assert "focus" not in shown["coords"] and "capture again" not in shown["coords"]
+
+
+def test_read_only_hints_do_not_name_tools_that_are_not_there(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_READONLY", "1")
+    _scene(monkeypatch, [SHOWN, HIDDEN])
+    _, meta = screenshot.capture(window="0xb")
+    assert "hypr(" not in meta["coords"] and "ask the human" in meta["coords"]
+    with pytest.raises(screenshot.ScreenshotError) as e:
+        screenshot.zoom_region(100, 100, window="0xb")
+    assert "hypr(" not in str(e.value) and "ask the human" in str(e.value)
+
+
+def test_a_missing_grim_is_reported_as_missing(monkeypatch):
+    def gone(args):
+        raise screenshot.ScreenshotError("grim not found, install grim for screenshots")
+
+    _scene(monkeypatch, [SHOWN, HIDDEN])
+    monkeypatch.setattr(screenshot, "_grim", gone)
+    with pytest.raises(screenshot.ScreenshotError, match="grim not found"):
+        screenshot.capture(window="0xb")
+
+
+def test_a_hidden_window_caught_mid_animation_is_retried(monkeypatch):
+    sizes = iter([(812, 610), (800, 600)])  # first frame mid-resize, then settled
+    monkeypatch.setattr(screenshot.time, "sleep", lambda s: None)
+    _scene(monkeypatch, [SHOWN, HIDDEN], toplevel=lambda args: _png(*next(sizes)))
+    _, meta = screenshot.capture(window="0xb")
+    assert meta["image"] == [800, 600]
+
+
+def test_capture_stable_keeps_its_last_good_frame_when_one_capture_fails(monkeypatch):
+    frames = iter([(b"a", {"visible": True}), screenshot.ScreenshotError("mid-animation"),
+                   (b"a", {"visible": True})])
+
+    def fake_capture(*a, **k):
+        f = next(frames)
+        if isinstance(f, Exception):
+            raise f
+        return f[0], dict(f[1])
+
+    monkeypatch.setattr(screenshot, "capture", fake_capture)
+    data, meta = screenshot.capture_stable(window="0xa", interval=0, timeout=5)
+    assert (data, meta["stable"]) == (b"a", True)
+
+
+@pytest.mark.parametrize("size", [(860, 660), (800, 660), (860, 600)])
+def test_the_size_check_is_per_axis(monkeypatch, size):
+    calls = _scene(monkeypatch, [SHOWN, HIDDEN], toplevel=lambda args: _png(*size))
+    monkeypatch.setattr(screenshot.time, "sleep", lambda s: None)
+    _, meta = screenshot.capture(window="0xa")
+    assert "-g" in calls[-1] and meta["source"] == "screen"
+    with pytest.raises(screenshot.ScreenshotError, match="not shown"):
+        screenshot.capture(window="0xb")
+
+
+def test_the_size_check_tolerates_grim_truncating(monkeypatch):
+    # 1906x1066 capped at a 1568 edge is 1567.9995x876.96; grim truncates
+    wide = {**HIDDEN, "size": [1906, 1066]}
+    _scene(monkeypatch, [SHOWN, wide], toplevel=lambda args: _png(1567, 876))
+    _, meta = screenshot.capture(window="0xb", max_edge=1568)
+    assert meta["image"] == [1567, 876]
