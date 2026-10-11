@@ -463,3 +463,41 @@ def test_another_monitors_scrolled_out_scratchpad_does_not_cover_this_one(monkey
     wide = dict(make_client(), size=[1700, 600])  # reaches x 1800 on monitor 0
     for focused in (False, True):
         _check(wide, x=1500, y=300, focused=focused)  # inside both rects, on monitor 0
+
+
+# Hyprland's own permission prompt (hyprland-dialog, Deny / Allow once /
+# Allow and remember) has priority focus: the pointer goes to it before
+# even the pinned pass. A click there can grant a permission.
+PERMISSION = {"address": "0xh", "class": "hyprland-dialog", "floating": True,
+              "at": [100, 50], "size": [500, 300], "workspace": {"id": 1}, "monitor": 0}
+
+
+@pytest.mark.parametrize("focused", [False, True])
+def test_the_permission_prompt_counts_even_over_a_pinned_target(monkeypatch, focused):
+    _scene(monkeypatch, [PERMISSION])
+    pinned = dict(make_client(), floating=True, pinned=True)
+    with pytest.raises(srv.trust.TrustError, match="authentication dialog"):
+        _check(pinned, focused=focused)
+    monkeypatch.setenv("HYPRUSE_AUTH_GUARD", "0")
+    monkeypatch.setenv("HYPRUSE_CONFINE", "class:gedit")
+    with pytest.raises(srv.trust.TrustError, match="confinement"):
+        _check(pinned, focused=focused)
+
+
+def test_click_ui_clicks_nothing_under_the_permission_prompt(wired, monkeypatch):
+    wired["client"]["pinned"] = wired["client"]["floating"] = True
+    _scene(monkeypatch, [PERMISSION])
+    with pytest.raises(srv.trust.TrustError):
+        srv.click_ui(name="Save")
+    assert wired["clicks"] == [] and wired["dispatch"] == []
+
+
+def test_click_ui_refuses_a_tiled_target_on_another_monitor(wired, monkeypatch):
+    wide = dict(wired["client"], at=[1500, 50], size=[960, 1000])
+    monkeypatch.setattr(srv, "_resolve_window", lambda w="": wide)
+    monkeypatch.setattr(srv, "_ui_read", lambda w="", name="", actionable=True: [
+        {"role": "push button", "name": "Save", "x": 2000, "y": 300, "clickable": True}])
+    _scene(monkeypatch, [])
+    with pytest.raises(srv.trust.TrustError, match="own monitor"):
+        srv.click_ui(name="Save")
+    assert wired["clicks"] == [] and wired["dispatch"] == []

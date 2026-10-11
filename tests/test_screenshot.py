@@ -526,3 +526,13 @@ def test_capture_stable_keeps_the_good_frame_through_one_last_failure(monkeypatc
     monkeypatch.setattr(screenshot, "capture", fake_capture)
     data, meta = screenshot.capture_stable(window="0xa", interval=0, timeout=3)
     assert (data, meta["stable"]) == (b"b", False)
+
+
+def test_a_hung_grim_is_a_screenshot_error(monkeypatch):
+    def hang(*a, **k):
+        raise screenshot.subprocess.TimeoutExpired(cmd="grim", timeout=10)
+
+    monkeypatch.setattr(screenshot.shutil, "which", lambda name: "/usr/bin/grim")
+    monkeypatch.setattr(screenshot.subprocess, "run", hang)
+    with pytest.raises(screenshot.ScreenshotError, match="timed out"):
+        screenshot._grim(["-g", "0,0 8x8"])

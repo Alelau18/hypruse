@@ -31,7 +31,11 @@ Fixes from a review of 0.12.0.
   target. It refuses a point off every monitor or outside the target, a
   point on another monitor for a tiled target (Hyprland gives a tiled
   window clicks only on its own monitor), a point on another monitor
-  whose scratchpad is up, and a mark taken before the window was resized. It refuses when an
+  whose scratchpad is up, and a mark taken before the window was resized.
+  Hyprland's own permission prompt (`hyprland-dialog`: Deny / Allow once
+  / Allow and remember) takes the pointer before any other window, even a
+  pinned one, so it counts over every target, and it is now treated as an
+  authentication dialog: clicking or typing into it needs `allow_auth`. It refuses when an
   authentication dialog will cover the control once the target is
   focused, or under confinement an out-of-scope window: Hyprland gives
   the click to pinned and floating windows first and focusing does not

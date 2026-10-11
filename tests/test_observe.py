@@ -394,3 +394,12 @@ def test_then_screenshot_never_masks_the_action_success(monkeypatch):
     out = srv._acted("click ok", "screenshot")
     texts = " ".join(getattr(b, "text", str(b)) for b in out)
     assert "click ok" in texts and "screenshot failed" in texts
+
+
+def test_then_screenshot_keeps_the_action_line_on_any_capture_error(monkeypatch):
+    def boom(**k):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(srv, "_deliver_capture", boom)
+    texts = " ".join(getattr(b, "text", str(b)) for b in srv._acted("click ok", "screenshot"))
+    assert "click ok" in texts and "screenshot failed" in texts

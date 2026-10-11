@@ -99,7 +99,10 @@ def zoom_region(x: float, y: float, size: str = "", window: str = "") -> tuple[i
 def _grim(args: list[str]) -> bytes:
     if shutil.which("grim") is None:
         raise ScreenshotError("grim not found, install grim for screenshots")
-    proc = subprocess.run(["grim", *args, "-"], capture_output=True, timeout=10)
+    try:
+        proc = subprocess.run(["grim", *args, "-"], capture_output=True, timeout=10)
+    except subprocess.TimeoutExpired as exc:
+        raise ScreenshotError("grim timed out after 10s") from exc
     if proc.returncode != 0 or not proc.stdout:
         raise ScreenshotError(f"grim failed: {proc.stderr.decode(errors='replace').strip()}")
     return proc.stdout

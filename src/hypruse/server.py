@@ -593,7 +593,7 @@ def _acted(msg: str, then: str, window: str = "") -> list[Any] | str:
     if then == "screenshot":
         try:
             return [head, *_deliver_capture(stable=True)]
-        except shot.ScreenshotError as exc:  # never mask the action's success
+        except Exception as exc:  # the observation must never mask the action's success
             return [head, _text(f"screenshot failed: {exc}")]
     if then == "ui":
         try:

@@ -339,12 +339,17 @@ def check_click_point(
     up there must not take the click first.
 
     While a guard is on: what covers the point once the target is
-    focused. Hyprland's hit test takes pinned windows first, then floating
-    ones, then tiled, and focusing a window does not raise it, so these
-    count: any pinned window; a floating or fullscreen window on the
+    focused. Hyprland's hit test on the monitor under the point takes its
+    own priority dialog (the permission prompt) first, then pinned
+    windows, then that monitor's scratchpad, then floating windows (from
+    any monitor), then that monitor's tiled ones, and focusing a window
+    does not raise it, so these count: the permission prompt over any
+    target; for a pinned target, only other pinned windows besides; for
+    any other target, any pinned window; a floating or fullscreen window on the
     target's workspace, whether or not the target floats; a floating
-    window from another monitor (it can hang across the edge); and a
-    scratchpad on the target's monitor, unless focusing will hide it
+    window from another monitor (it can hang across the edge); the point
+    monitor's scratchpad windows; and a scratchpad on the target's
+    monitor, unless focusing will hide it
     (input:special_fallthrough 0, the default, and a target on a regular
     workspace; unreadable counts as not hidden). After focusing (`focused`)
     a scratchpad still up counts. These do not: the target and its group
@@ -450,12 +455,18 @@ def _would_cover(
         return False
     if c.get("visible") is False:  # an inactive tab: not drawn
         return False
+    ws = c.get("workspace") or {}
+    if (
+        (c.get("class") or "").lower() == _PRIORITY_DIALOG
+        and c.get("floating")
+        and hyprctl.workspace_ref(ws) in hyprctl.visible_workspaces(monitors)
+    ):
+        return True  # priority focus: it takes the pointer before even pinned windows
     if target.get("pinned"):
         # the pinned pass runs first: only another pinned window can be above
         return bool(c.get("pinned"))
     if c.get("pinned"):
         return True
-    ws = c.get("workspace") or {}
     ref = hyprctl.workspace_ref(ws)
     if ref == hyprctl.workspace_ref(target.get("workspace")):
         return bool(c.get("floating") or c.get("fullscreen"))
@@ -816,8 +827,15 @@ def guard_covering_layer(x: float, y: float, allow_auth: bool = False) -> None:
 # Desktop authentication agents: their windows own a separate trust domain
 # (they gate sudo, PolicyKit, credential prompts). The agent must not click
 # or type into them without explicit human consent.
+# Hyprland's own permission prompt (screencopy, plugins, keyboard grabs:
+# Deny / Allow once / Allow and remember) is a floating hyprland-dialog
+# window with priority focus, so it takes the pointer before even pinned
+# windows, and a click there can grant a permission.
+_PRIORITY_DIALOG = "hyprland-dialog"
+
 _AUTH_CLASSES = frozenset(
     {
+        _PRIORITY_DIALOG,
         "hyprpolkitagent",
         "polkit-gnome-authentication-agent-1",
         "org.kde.polkit-kde-authentication-agent-1",
