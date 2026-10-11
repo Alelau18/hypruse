@@ -21,6 +21,8 @@ import shutil
 import subprocess
 from typing import Any
 
+from hypruse import journal
+
 
 class A11yError(RuntimeError):
     """The accessibility bus is unreachable or a busctl call failed."""
@@ -530,6 +532,7 @@ def has_action(bus: Bus, svc: str, path: str) -> bool:
 def grab_focus(bus: Bus, svc: str, path: str) -> bool:
     """Move the app's OWN keyboard focus to this element. Not the
     compositor's: the human's focus is untouched."""
+    journal.refuse_if_dry("grab_focus")
     try:
         return bool(bus.call(svc, path, _COMPONENT, "GrabFocus")[0])
     except (A11yError, IndexError):
@@ -558,6 +561,7 @@ def toolkit(bus: Bus, svc: str) -> tuple[str, str]:
 
 def insert_text(bus: Bus, svc: str, path: str, text: str) -> bool:
     """Insert `text` at the caret, as typing would, with no keyboard."""
+    journal.refuse_if_dry("insert_text")
     try:
         caret = int(bus.prop(svc, path, _TEXT, "CaretOffset"))  # a property, not a method
         # The length is read differently per toolkit: GTK and the other ATK
@@ -615,6 +619,7 @@ def editable_fields(
 def do_action(bus: Bus, svc: str, path: str, index: int = 0) -> bool:
     """Invoke an accessible's action (default index 0, usually the click),
     with no pointer, so it works even when the window is not visible."""
+    journal.refuse_if_dry("do_action")
     try:
         return bool(bus.call(svc, path, _ACTION, "DoAction", "i", str(index))[0])
     except (A11yError, IndexError):

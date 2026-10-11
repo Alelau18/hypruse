@@ -304,7 +304,8 @@ checks and every `trust.guard_*` call, then returns the plan it was about
 to execute; a rehearsal whose refusals differ from the real run would be
 worth nothing, so the guards stay exactly where they are. Underneath,
 `journal.refuse_if_dry` raises at the effect boundary itself (`input`'s
-six delivery functions, `hyprctl.dispatch`, `clipboard.write`), so a path
+six delivery functions, `hyprctl.dispatch`, `clipboard.write`, and the
+accessibility effects `a11y.do_action`, `grab_focus` and `insert_text`), so a path
 nobody thought of fails loudly with nothing delivered instead of quietly
 acting during what the caller was told was a simulation.
 

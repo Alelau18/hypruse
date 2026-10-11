@@ -626,3 +626,16 @@ def test_a_field_record_says_it_is_a_field():
     }
     els, _ = a11y.find_elements(FakeBus(nodes), *root)
     assert els[0]["field"] is True
+
+
+def test_the_effect_calls_refuse_in_a_dry_run(monkeypatch):
+    # the second barrier, at the effect boundary, like input and dispatch
+    monkeypatch.setenv("HYPRUSE_DRYRUN", "1")
+    entry = ("app", "/entry")
+    bus = FakeBus({entry: {"role": 79, "name": "", "children": [], "text": "", "caret": 0}})
+    for call in (lambda: a11y.do_action(bus, *entry),
+                 lambda: a11y.grab_focus(bus, *entry),
+                 lambda: a11y.insert_text(bus, *entry, "x")):
+        with pytest.raises(Exception, match="(?i)dry"):
+            call()
+    assert a11y.text_of(bus, *entry) == ""
