@@ -1114,7 +1114,8 @@ def _keyboard_in_background(
                 seen = f"now {after[:80]!r}" if after != before else "no change seen"
                 return _acted(
                     f"typed {len(text)} characters into the text field in {cls} through the "
-                    f"accessibility interface (your focus untouched); {seen}", then, window=addr)
+                    f"accessibility interface (the human's focus untouched); {seen}",
+                    then, window=addr)
         why = ("its text field did not accept accessibility text" if field is not None
                else f"{cls} has no accessibility text field to put it in")
         chords = []
@@ -1143,8 +1144,9 @@ def _keyboard_in_background(
         return _acted(f"{_DRY} send {what} to {addr} with sendshortcut", then, window=addr)
     for mods_, key_ in chords:
         hyprctl.send_shortcut(mods_, key_, addr)
-    return _acted(f"sent {what} to {addr} ({cls}) with sendshortcut (your focus untouched)",
-                  then, window=addr)
+    return _acted(
+        f"sent {what} to {addr} ({cls}) with sendshortcut (the human's focus untouched)",
+        then, window=addr)
 
 
 # roles whose "click" is taking keyboard focus, which GrabFocus does inside
@@ -1178,7 +1180,7 @@ def _click_in_background(
         bg.refuse("the app did not accept the accessibility action")
     time.sleep(0.05)  # let the app apply it before reading back
     verb = "focused" if is_text else "pressed"
-    msg = (f"{verb} {desc} through its accessibility action (no pointer, your focus "
+    msg = (f"{verb} {desc} through its accessibility action (no pointer, the human's focus "
            f"untouched) in {cls}")
     if not any(c.get("address") == client["address"] for c in hyprctl.query("clients")):
         msg += "; the window closed"
