@@ -466,3 +466,13 @@ def test_accessibility_text_does_not_care_about_the_layout(wired_bg, monkeypatch
     wired_bg["fields"] = [("svc", "/name", 61)]
     srv.keyboard("type", text="a", window="0xa")
     assert wired_bg["inserted"] == [("svc", "/name", "a")]
+
+
+def test_a_right_or_double_click_is_refused_in_the_background(wired_bg):
+    # a control's accessibility action is its primary one: running it for a
+    # right-click would do something the caller did not ask for
+    with pytest.raises(srv.trust.TrustError, match="right click"):
+        srv.click_ui(name="Save", window="0xa", button="right")
+    with pytest.raises(srv.trust.TrustError, match="double click"):
+        srv.click_ui(name="Save", window="0xa", double=True)
+    assert wired_bg["actions"] == [] and wired_bg["clicks"] == []

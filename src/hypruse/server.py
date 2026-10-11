@@ -1027,6 +1027,10 @@ def click_ui(
         desc = f"{e['role']} {e['name']!r}"
         control = e
     if bg.decide(client["address"] == _active_address(), background):
+        if button != "left" or double:
+            # the accessibility action is the control's primary one
+            kind = "double click" if double else f"{button} click"
+            bg.refuse(f"a {kind} has no accessibility action, only a left click does")
         return _click_in_background(client, control, desc, then, allow_auth)
     trust.guard_client(client)  # confinement
     trust.guard_auth_client(client, allow_auth)
