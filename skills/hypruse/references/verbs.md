@@ -241,7 +241,7 @@ hypruse wait_for EVENT [--match TEXT] [--timeout S]        (alias: wait-for)
 notification popups; match on the namespace, for example `wofi`), `urgent`
 (a window demands attention), `screencast` (screen sharing started or
 stopped). `--match` is a case-insensitive substring over the event's fields
-(class, title, workspace name, address, namespace). `--timeout` 1-60,
+(class, title, workspace name or number, address, namespace). `--timeout` 1-60,
 default 10.
 
 Output, one line, the event name then its fields:

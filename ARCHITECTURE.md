@@ -139,7 +139,7 @@ beacon pid, releases the button, clears the beacon) and the blunter
 
 1. `desktop` → find `firefox` at `0x…`, workspace 3, geometry.
 2. `hypr focus_window 0x…` (IPC, ~ms), no vision spent.
-3. `screenshot window=0x…` → the window's own pixels + `geometry`/`scale` (or `ui` to read
+3. `screenshot window=0x…` → the window's own pixels (grim 1.5+; otherwise a crop of the screen) + `geometry`/`scale` (or `ui` to read
    the accessibility tree by name, no pixels).
 4. `pointer click x y`, computed from image pixel via the contract (or
    `click_ui name="Save"` to resolve and click in one call).

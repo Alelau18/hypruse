@@ -277,10 +277,11 @@ def screenshot(
     address from desktop, cheapest for reading one app), or a `region`
     "x,y,WxH". Returns the image (or a file path to read) + JSON metadata
     with geometry/scale for pixel→global mapping. A window on a hidden
-    workspace or under another window is still captured as itself; its
-    metadata `visible` says whether it is on screen, and a hidden one may
-    show how it last looked (many apps stop drawing while hidden). Window
-    captures are refused while the session is locked. `scale` 0.1-1.0:
+    workspace or under another window is still captured as itself
+    (metadata `source` "window", or "screen" when it had to be cropped
+    from the screen); `visible` says whether the compositor draws it, and
+    a hidden one may show how it last looked (many apps stop drawing while
+    hidden). Window captures are refused while the session is locked. `scale` 0.1-1.0:
     optional deliberate downscale, usually leave unset. `stable=true`
     waits (up to 2s) until two consecutive frames match, so a capture
     right after an action is not taken mid-animation; metadata gains
@@ -1642,10 +1643,11 @@ _READONLY_DOCS = {
     address from desktop, cheapest for reading one app), or a `region`
     "x,y,WxH". Returns the image (or a file path to read) + JSON metadata
     with geometry/scale for pixel→global mapping. A window on a hidden
-    workspace or under another window is still captured as itself; its
-    metadata `visible` says whether it is on screen, and a hidden one may
-    show how it last looked (many apps stop drawing while hidden). Window
-    captures are refused while the session is locked. `scale` 0.1-1.0:
+    workspace or under another window is still captured as itself
+    (metadata `source` "window", or "screen" when it had to be cropped
+    from the screen); `visible` says whether the compositor draws it, and
+    a hidden one may show how it last looked (many apps stop drawing while
+    hidden). Window captures are refused while the session is locked. `scale` 0.1-1.0:
     optional deliberate downscale, usually leave unset. `stable=true`
     waits (up to 2s) until two consecutive frames match, so a capture
     right after a change is not taken mid-animation; metadata gains
