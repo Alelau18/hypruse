@@ -499,3 +499,16 @@ def test_an_unnamed_editable_field_is_listed_under_its_label():
     # a name search finds it through the label (LABEL_FOR, type 1)
     found, _ = a11y.find_elements(FakeBus(nodes), *root, name="name")
     assert [(e["name"], e["path"]) for e in found] == [("Name", "/field")]
+
+
+
+def test_editable_fields_lists_only_editable_text():
+    root, a, b, ro = ("app", "/root"), ("app", "/a"), ("app", "/b"), ("app", "/ro")
+    ed = ALL_STATES | {a11y._STATE_EDITABLE}
+    nodes = {
+        root: {"role": 23, "name": "w", "children": [a, ro, b], "states": set()},
+        a: {"role": 61, "name": "", "children": [], "states": ed},
+        ro: {"role": 61, "name": "", "children": [], "states": ALL_STATES},
+        b: {"role": 79, "name": "", "children": [], "states": ed},
+    }
+    assert a11y.editable_fields(FakeBus(nodes), *root) == [("app", "/a", 61), ("app", "/b", 79)]

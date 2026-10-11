@@ -64,6 +64,8 @@ def wired_bg(monkeypatch):
     monkeypatch.setattr(srv.a11y, "window_frame",
                         lambda bus, svc, path, title="", size=None: (svc, path))
     monkeypatch.setattr(srv.a11y, "focused_text", lambda bus, svc, path: s["focused_text"])
+    s["fields"] = []
+    monkeypatch.setattr(srv.a11y, "editable_fields", lambda bus, svc, path: s["fields"])
     texts = {"field": ""}
 
     def insert(bus, svc, path, text):
@@ -214,3 +216,18 @@ def test_the_guarantee_requires_a_window(wired_bg, monkeypatch):
     monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
     with pytest.raises(srv.trust.TrustError, match="window="):
         srv.keyboard("type", text="x")
+
+
+
+def test_a_hidden_window_with_one_field_gets_accessibility_text(wired_bg):
+    # GTK reports no focus in a window that is not active, so the one
+    # editable field is where the text goes
+    wired_bg["fields"] = [("svc", "/name", 61)]
+    srv.keyboard("type", text="hello", window="0xa")
+    assert wired_bg["inserted"] == [("svc", "/name", "hello")] and wired_bg["shortcuts"] == []
+
+
+def test_several_fields_and_no_focus_report_fall_back_to_keys(wired_bg):
+    wired_bg["fields"] = [("svc", "/a", 61), ("svc", "/b", 61)]
+    srv.keyboard("type", text="hi", window="0xa")
+    assert wired_bg["inserted"] == [] and len(wired_bg["shortcuts"]) == 2

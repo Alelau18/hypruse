@@ -987,6 +987,9 @@ def _keyboard_in_background(
             frame = a11y.window_frame(bus, app[0], app[1], client.get("title", ""),
                                       tuple(client["size"]))
             field = a11y.focused_text(bus, *frame)
+            if field is None:  # GTK reports no focus inside an inactive window
+                fields = a11y.editable_fields(bus, *frame)
+                field = fields[0] if len(fields) == 1 else None
         if field is not None and field[2] == a11y.PASSWORD_ROLE and not allow_auth:
             raise trust.TrustError(
                 f"the focused field in {cls} is a password field; refusing to type into it. "

@@ -534,6 +534,26 @@ def focused_text(
     return None
 
 
+def editable_fields(
+    bus: Bus, app_svc: str, app_path: str, max_nodes: int = 200
+) -> list[tuple[str, str, int]]:
+    """(svc, path, role) of every editable text field in this window, in
+    document order. GTK reports no keyboard focus inside a window that is
+    not active, so a background caller uses this when focused_text finds
+    nothing: a window with exactly one field has one place for text."""
+    out: list[tuple[str, str, int]] = []
+    stack: list[tuple[str, str]] = [(app_svc, app_path)]
+    visited = 0
+    while stack and visited < max_nodes:
+        svc, path = stack.pop()
+        visited += 1
+        role = _role_num(bus, svc, path)
+        if role in _TEXT_ROLES | {PASSWORD_ROLE} and _STATE_EDITABLE in _states(bus, svc, path):
+            out.append((svc, path, role))
+        stack.extend(reversed(_children(bus, svc, path)))
+    return out
+
+
 def do_action(bus: Bus, svc: str, path: str, index: int = 0) -> bool:
     """Invoke an accessible's action (default index 0, usually the click),
     with no pointer, so it works even when the window is not visible."""
