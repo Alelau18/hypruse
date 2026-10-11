@@ -135,3 +135,21 @@ def test_every_tool_declares_a_title_and_whether_it_acts(reloaded, monkeypatch):
             assert a.readOnlyHint is True and a.openWorldHint is False, t.name
         else:
             assert a.readOnlyHint is False and a.destructiveHint is True, t.name
+
+
+def test_the_acting_tools_explain_background_mode(reloaded, monkeypatch):
+    monkeypatch.delenv("HYPRUSE_BACKGROUND", raising=False)
+    module = reloaded(None)
+    tools = {t.name: t.description for t in asyncio.run(module.mcp.list_tools())}
+    for name in ("click_ui", "keyboard", "pointer", "launch", "sequence", "hypr", "use_bind"):
+        assert "background" in tools[name].lower(), name
+    assert "agent's own workspaces" in module.mcp.instructions
+
+
+def test_the_instructions_follow_the_background_setting(reloaded, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    assert "GUARANTEED" in reloaded(None).mcp.instructions
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "0")
+    assert "off for this session" in reloaded(None).mcp.instructions
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    assert "GUARANTEED" not in reloaded("1").mcp.instructions  # read-only acts on nothing

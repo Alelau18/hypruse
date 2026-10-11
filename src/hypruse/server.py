@@ -77,9 +77,56 @@ guessing, and after a click that should change something, screenshot again
 to confirm before continuing (stable=true waits out animations).
 
 The cursor and keyboard focus are SHARED with the human at the desk:
-finish what you start, and expect every action to be visible. Before
-typing, pass `keyboard(window=<address>)` to focus the intended app first,
-so keystrokes never land in the wrong window."""
+finish what you start, and expect every action on their screen to be
+visible. Before typing, pass `keyboard(window=<address>)` so keystrokes
+never land in the wrong window."""
+
+BACKGROUND_AUTO = """
+Background mode is automatic. An action on the window the human is in
+runs on their screen, as above. An action on any other window runs in the
+background, and the human's cursor, keyboard focus and workspace stay
+where they are: `click_ui` presses the control through its accessibility
+action, `keyboard(window=...)` types through the accessibility interface
+or sends the keys to that window alone, and `launch` with no workspace
+opens the app on one of the agent's own workspaces ({workspaces}), out of
+the human's sight. Each result says which method it used and what the
+accessibility tree read back. The pointer cannot work in the background,
+so it is refused over any window but the human's: press controls there
+with `click_ui`. A hidden window's screenshot can be stale (many apps stop
+drawing while hidden), so read its state with `ui`. When something cannot
+be done in the background, the refusal says why. `background=false` does
+it on the human's screen instead and takes it over, so pass that only
+when the human expects it."""
+
+BACKGROUND_GUARANTEE = """
+Background mode is GUARANTEED for this session (HYPRUSE_BACKGROUND=1).
+You work only on windows on the agent's own workspaces ({workspaces}),
+and nothing you do may move the human's cursor, take their keyboard focus
+or switch their workspace. `launch` opens apps there, `click_ui` presses
+controls through the accessibility tree, and `keyboard` needs window= and
+types into that window in the background. The pointer, workspace
+switches, focus_window, fullscreen and use_bind are refused, and
+background=false cannot override that. A hidden window's screenshot can
+be stale (many apps stop drawing while hidden), so read its state with
+`ui`. When something cannot be done, ask the human."""
+
+BACKGROUND_OFF = """
+Background mode is off for this session (HYPRUSE_BACKGROUND=0): every
+action runs on the human's screen unless you pass background=true."""
+
+
+def _background_instructions() -> str:
+    """The background paragraph for this session's HYPRUSE_BACKGROUND."""
+    try:
+        mode = bg.mode()
+    except trust.TrustError:
+        return ""  # every action refuses with the reason until it is fixed
+    if mode == bg.OFF:
+        return BACKGROUND_OFF
+    raw = os.environ.get("HYPRUSE_AGENT_WORKSPACES", "").strip()
+    workspaces = f"HYPRUSE_AGENT_WORKSPACES={raw}" if raw else "workspaces 99 down to 90"
+    text = BACKGROUND_GUARANTEE if mode == bg.GUARANTEE else BACKGROUND_AUTO
+    return text.format(workspaces=workspaces)
 
 READONLY_INSTRUCTIONS = """\
 hypruse is attached to a live Hyprland desktop in READ-ONLY MODE: the
@@ -126,7 +173,7 @@ report the plan; the human replays it when they are satisfied with it."""
 READONLY = os.environ.get("HYPRUSE_READONLY", "").lower() in ("1", "true", "yes", "on")
 CLIPBOARD = os.environ.get("HYPRUSE_CLIPBOARD", "").lower() in ("1", "true", "yes", "on")
 
-_instructions = READONLY_INSTRUCTIONS if READONLY else INSTRUCTIONS
+_instructions = READONLY_INSTRUCTIONS if READONLY else INSTRUCTIONS + _background_instructions()
 if journal.dry_run() and not READONLY:  # read-only has nothing to simulate
     _instructions += DRYRUN_NOTE
 
@@ -727,7 +774,11 @@ def pointer(
     call so you skip a round-trip: 'desktop' a fresh snapshot, 'screenshot'
     a stable capture, 'ui' the focused window's elements with current
     values, 'none' (default) nothing. `allow_auth=true` overrides the
-    refusal to click over a system authentication dialog."""
+    refusal to click over a system authentication dialog. The pointer is
+    the human's own cursor, so it never runs in the background: it is
+    refused where the input would land on a window other than the one the
+    human is in (press controls there with click_ui), unless
+    `background=false`."""
     safety.touch(f"pointer:{action}")
     trust.guard_seat()
     if action in ("move", "click", "drag", "scroll"):  # else the ValueError below
@@ -802,12 +853,18 @@ def keyboard(
     allow_auth: bool = False,
     background: bool | None = None,
 ) -> list[Any] | str:
-    """Keyboard to the focused app. action='type' (text, unicode-safe) |
+    """Keyboard to an app. action='type' (text, unicode-safe) |
     'key' (keys combo: 'ctrl+shift+t', 'esc', 'F5'; aliases
     enter/esc/tab/backspace/pgup/pgdn/arrows, else XKB keysyms). Pass
-    `window` (an address from desktop) to focus that window first, so
-    keystrokes land in the intended app rather than whatever currently
-    holds focus. This drives shortcuts the focused application handles
+    `window` (an address from desktop) so keystrokes land in the intended
+    app rather than whatever currently holds focus. The window the human
+    is in is focused and typed into on their screen. Any other window gets
+    the keys in the background, with the human's focus left alone: text
+    goes into its text field through the accessibility interface, or key
+    by key through Hyprland's sendshortcut (a character the keyboard layout
+    has no key for is refused on that path). Without `window`, keys go to
+    the focused window. `background` true or false forces one way. This
+    drives shortcuts the focused application handles
     (ctrl+t, ctrl+l). It does NOT trigger Hyprland's own keybinds
     (super+...): those go through `use_bind`, and workspace/window actions
     through `hypr`. `then` ('desktop'|'screenshot'|'ui'|'none') appends the
@@ -894,10 +951,16 @@ def click_ui(
     background: bool | None = None,
 ) -> list[Any] | str:
     """Click a control by its accessible NAME, or by a `mark` number from
-    the last `marks` capture, in ONE call: the exact coordinate comes from
-    the accessibility tree, the window is focused first, and the click goes
-    through the real pointer (visible cursor, same panic-kill guarantees),
-    so no screenshot and no pixel estimation is spent. Pass exactly one of
+    the last `marks` capture, in ONE call: the control comes from the
+    accessibility tree, so no screenshot and no pixel estimation is spent.
+    On the window the human is in, the window is focused and the click
+    goes through the real pointer (visible cursor, same panic-kill
+    guarantees). On any other window it runs in the background: the
+    control's accessibility action presses it (a text field gets the app's
+    own focus), the human's cursor and focus stay put, and the result reads
+    the control back; a control with no action is refused there.
+    `background` true or false forces one way (false takes over the human's
+    screen). Pass exactly one of
     `name` (matched against `window`'s controls, exact accessible name
     preferred, substring otherwise) or `mark`. An ambiguous name returns
     the candidates instead of guessing: disambiguate with `index` (0-based
@@ -1225,7 +1288,10 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
     'focus_window' (target: address) | 'move_window' (target + workspace,
     silent) | 'close_window' (target) | 'fullscreen' (target?) |
     'toggle_floating' (target?). `then` ('desktop'|'screenshot'|'ui'|'none')
-    appends the result to this call."""
+    appends the result to this call. While the background guarantee is on
+    (HYPRUSE_BACKGROUND=1), workspace, focus_window and fullscreen are
+    refused because they change the human's view, and move_window moves
+    only to the agent's own workspaces."""
     safety.touch(f"hypr:{action}")
     # every argument is checked before any guard runs and before anything
     # is dispatched, so a bad call cannot half-run and a dry run raises
@@ -1345,7 +1411,11 @@ def launch(
     """Open an app: run `command` via Hyprland exec. Optional `workspace` placement
     (silent, works even for single-instance apps like browsers, whose
     window gets moved after it appears) and `wait_s` (1-30, default 8;
-    raise for slow apps). Returns the new window's
+    raise for slow apps). Without `workspace`, the app opens silently on
+    the next of the agent's own workspaces (HYPRUSE_AGENT_WORKSPACES, 99
+    down to 90 by default), out of the human's sight, so the agent can
+    work on it in the background; `background=false` opens it on the
+    human's workspace instead. Returns the new window's
     address/class/title/workspace, or a timeout note."""
     safety.touch("launch")
     wait_s = min(max(wait_s, 1.0), 30.0)
@@ -1475,7 +1545,8 @@ def use_bind(combo: str, then: str = "none") -> list[Any] | str:
     binds). Use it to drive the owner's configured workflows: launchers,
     layout shortcuts, scratchpads. `then` ('desktop'|'screenshot'|'ui'|'none')
     appends the result to this call (handy after a launcher bind). Refused
-    while HYPRUSE_CONFINE is set: a bind runs an arbitrary compositor action
+    while HYPRUSE_CONFINE is set or the background guarantee is on
+    (HYPRUSE_BACKGROUND=1): a bind runs an arbitrary compositor action
     that cannot be scoped to a window."""
     safety.touch("use_bind")
     trust.guard_seat()
@@ -1818,7 +1889,8 @@ def sequence(
     a bare focus change, so to type into a specific window reliably give
     that keyboard step a window= address (it focuses first). Bounded to 20
     steps and ~30s total. `then` observes the final state ('desktop'
-    default, 'screenshot', 'ui', 'none')."""
+    default, 'screenshot', 'ui', 'none'). `background` applies to every
+    pointer, keyboard and click_ui step that does not set its own."""
     safety.touch("sequence")
     if not steps:
         raise ValueError("sequence needs at least one step")
