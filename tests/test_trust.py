@@ -1061,3 +1061,59 @@ def test_under_the_guarantee_an_explicit_confinement_narrows_never_widens(monkey
         trust.guard_client(client(addr="0xb", cls="kitty", ws=5))
     with pytest.raises(trust.TrustError, match="class"):
         trust.guard_client(client(addr="0xc", cls="firefox", ws=99))
+
+
+# --- where pointer input lands, for background mode ---------------------------
+
+
+def _w(addr, at, size, ws=1, **kw):
+    return {"address": addr, "class": addr[2:], "at": at, "size": size,
+            "workspace": {"id": ws}, "monitor": 0, "mapped": True, **kw}
+
+
+def test_a_point_on_the_active_window_lands_on_it(monkeypatch):
+    _batch(monkeypatch, MON, [_w("0xme", [0, 0], [960, 1080]), _w("0xb", [960, 0], [960, 1080])])
+    assert trust.other_window_at(100, 100, "0xme") is None
+
+
+def test_a_point_on_another_window_lands_on_that_window(monkeypatch):
+    _batch(monkeypatch, MON, [_w("0xme", [0, 0], [960, 1080]), _w("0xb", [960, 0], [960, 1080])])
+    assert trust.other_window_at(1000, 100, "0xme")["address"] == "0xb"
+
+
+def test_a_floating_window_over_the_active_one_takes_the_point(monkeypatch):
+    _batch(monkeypatch, MON, [_w("0xme", [0, 0], [1920, 1080]),
+                              _w("0xf", [50, 50], [200, 200], floating=True)])
+    assert trust.other_window_at(100, 100, "0xme")["address"] == "0xf"
+    assert trust.other_window_at(500, 500, "0xme") is None
+
+
+def test_a_point_on_no_window_lands_on_no_window(monkeypatch):
+    _batch(monkeypatch, MON, [_w("0xme", [0, 0], [100, 100])])
+    assert trust.other_window_at(500, 500, "0xme") is None
+
+
+def test_a_window_on_a_hidden_workspace_does_not_count(monkeypatch):
+    _batch(monkeypatch, MON, [_w("0xme", [0, 0], [100, 100]), _w("0xb", [0, 0], [900, 900], ws=99)])
+    assert trust.other_window_at(500, 500, "0xme") is None
+
+
+def test_with_no_active_window_any_window_at_the_point_is_another(monkeypatch):
+    _batch(monkeypatch, MON, [_w("0xb", [0, 0], [900, 900])])
+    assert trust.other_window_at(10, 10, "")["address"] == "0xb"
+
+
+def test_an_unreadable_desktop_does_not_block_the_pointer(monkeypatch):
+    # automatic mode is a courtesy, not a guard: the guarantee refuses the
+    # pointer outright before this is asked
+    def boom(cmds):
+        raise RuntimeError("no socket")
+
+    monkeypatch.setattr(trust.hyprctl, "batch_query", boom)
+    assert trust.other_window_at(10, 10, "0xme") is None
+
+
+def test_use_bind_under_the_guarantee_names_it(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    with pytest.raises(trust.TrustError, match="HYPRUSE_BACKGROUND"):
+        trust.guard_use_bind()

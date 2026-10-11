@@ -122,3 +122,10 @@ def test_on_agent_workspace(monkeypatch):
     assert bg.on_agent_workspace(_c("0xa", 98))
     assert bg.on_agent_workspace({"workspace": {"name": "research"}})
     assert not bg.on_agent_workspace(_c("0xa", 5))
+
+
+def test_a_workspace_name_is_an_agent_workspace_only_when_listed(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-97,name:research")
+    assert bg.is_agent_workspace("98") and bg.is_agent_workspace("name:research")
+    assert not bg.is_agent_workspace("3") and not bg.is_agent_workspace("+1")
+    assert not bg.is_agent_workspace("special:magic")

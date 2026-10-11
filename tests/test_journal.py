@@ -285,7 +285,7 @@ def test_the_decorator_preserves_the_signature():
     # FastMCP builds each tool's JSON schema from this
     assert list(inspect.signature(srv.pointer).parameters) == [
         "action", "x", "y", "button", "to_x", "to_y",
-        "scroll_dy", "scroll_dx", "double", "then", "allow_auth",
+        "scroll_dy", "scroll_dx", "double", "then", "allow_auth", "background",
     ]
     assert srv.pointer.__doc__ and "Mouse in global coordinates" in srv.pointer.__doc__
 

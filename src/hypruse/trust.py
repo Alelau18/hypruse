@@ -224,6 +224,13 @@ def guard_use_bind() -> None:
     is an escape hatch out of any confinement. Denied wholesale rather than
     guessed at."""
     scope = _confine_scope()
+    if scope is not None and scope[0] == "agent":
+        from hypruse import background
+
+        background.refuse(
+            "use_bind runs whatever the bind does, which can switch the human's "
+            "workspace or take their focus"
+        )
     if scope is not None:
         raise TrustError(
             f"use_bind runs an arbitrary compositor action and cannot be confined "
@@ -458,6 +465,38 @@ def check_click_point(
                 f"({x:.0f}, {y:.0f}) is covered by a window outside the confinement scope "
                 f"({classes}; {_describe(scope)}), which would take the click; refusing"
             )
+
+
+def other_window_at(x: float, y: float, active: str | None) -> dict[str, Any] | None:
+    """The window other than `active` that pointer input at (x, y) lands on,
+    or None when it lands on `active` or on no window (a bar, a launcher,
+    the wallpaper). Background mode's automatic rule, which keeps the
+    pointer on the window the human is in: a window over `active` by
+    check_click_point's hit-test order counts, and z-order among floating
+    windows is unknown, so an overlap counts as covering. An unreadable
+    desktop gives None, because this is a courtesy, not a guard: the
+    guarantee refuses the pointer before asking."""
+    try:
+        monitors, clients = _click_scene()
+    except Exception:
+        return None
+    visible = hyprctl.visible_workspaces(monitors)
+    under = [
+        c
+        for c in clients
+        if c.get("mapped", True)
+        and c.get("visible") is not False
+        and hyprctl.workspace_ref(c.get("workspace")) in visible
+        and _covers(c, x, y)
+    ]
+    me = next((c for c in under if c.get("address") == active), None) if active else None
+    if me is None:
+        return under[0] if under else None
+    m = hyprctl.monitor_at(monitors, x, y)
+    point_monitor = m.get("id") if m is not None else None
+    return next(
+        (c for c in under if _would_cover(c, me, monitors, True, point_monitor)), None
+    )
 
 
 def _would_cover(

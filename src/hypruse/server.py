@@ -662,6 +662,49 @@ def _layer_note(x: float | None, y: float | None) -> str:
     )
 
 
+_POINTER_INSTEAD = (
+    "to press a named control in another window, use click_ui with window= (it "
+    "works there through the accessibility tree, without the pointer)"
+)
+
+
+def _pointer_policy(
+    action: str,
+    x: float | None,
+    y: float | None,
+    to_x: float | None,
+    to_y: float | None,
+    background: bool | None,
+) -> None:
+    """Background mode for the pointer. It moves the human's real cursor,
+    so it never runs in the background: the guarantee and background=true
+    refuse it, and automatic mode allows it only where the input lands on
+    the window the human is in or on no window at all (a bar, a launcher).
+    A move counts too, since focus follows the mouse by default."""
+    if background is None and bg.mode() == bg.AUTO:
+        points = [(x, y)] + ([(to_x, to_y)] if action == "drag" else [])
+        active = _active_address()
+        for px, py in points:
+            if px is None or py is None:
+                if action in ("move", "drag"):
+                    continue  # the argument check below refuses this
+                try:  # a click or scroll in place lands at the cursor
+                    px, py = hyprctl.cursor_pos()
+                except Exception:
+                    continue
+            other = trust.other_window_at(px, py, active)
+            if other is not None:
+                bg.refuse(
+                    f"({px:.0f}, {py:.0f}) is on {other.get('class') or '?'} "
+                    f"({other.get('address')}), not the window the human is in, and the "
+                    "pointer would move their cursor and take their focus",
+                    _POINTER_INSTEAD,
+                )
+        return
+    if bg.decide(True, background):
+        bg.refuse("the pointer moves the human's real cursor", _POINTER_INSTEAD)
+
+
 @journal.journaled("act")
 def pointer(
     action: str,
@@ -675,6 +718,7 @@ def pointer(
     double: bool = False,
     then: str = "none",
     allow_auth: bool = False,
+    background: bool | None = None,
 ) -> list[Any] | str:
     """Mouse in global coordinates. action='move' (x,y) | 'click' (optional
     x,y first; button left/right/middle; double=true) | 'drag' (x,y →
@@ -686,6 +730,8 @@ def pointer(
     refusal to click over a system authentication dialog."""
     safety.touch(f"pointer:{action}")
     trust.guard_seat()
+    if action in ("move", "click", "drag", "scroll"):  # else the ValueError below
+        _pointer_policy(action, x, y, to_x, to_y, background)
     # HYPRUSE_DRYRUN runs every check below and then delivers nothing, so
     # `plan` describes what each branch was about to do. The guards stay
     # exactly where they are: a dry run whose refusals differ from the
@@ -1165,6 +1211,13 @@ _HYPR_PLANS = {
 }
 
 
+_HYPR_TAKES_VIEW = {
+    "workspace": "switching the workspace changes what the human sees",
+    "focus_window": "focusing a window takes the human's keyboard focus",
+    "fullscreen": "fullscreen works on the focused window, so it takes the human's focus first",
+}
+
+
 @journal.journaled("act")
 def hypr(action: str, target: str = "", workspace: str = "", then: str = "none") -> list[Any] | str:
     """Window/workspace ops over IPC (instant, no vision).
@@ -1192,6 +1245,16 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
         target and action in ("fullscreen", "toggle_floating")
     ):
         _addr(target)  # the branches below re-derive it; this is the check
+    if bg.mode() == bg.GUARANTEE:
+        # what changes the human's view; the rest is confined to the agent's
+        # windows by the guarantee's scope
+        if action in _HYPR_TAKES_VIEW:
+            bg.refuse(_HYPR_TAKES_VIEW[action])
+        if action == "move_window" and not bg.is_agent_workspace(workspace):
+            bg.refuse(
+                f"workspace {workspace} is not one of the agent's workspaces "
+                f"({', '.join(bg.agent_workspaces())}), and the agent's windows stay on those"
+            )
     # confinement: any action naming a specific window must stay in scope;
     # fullscreen/toggle_floating with no target hit the ACTIVE window, so
     # resolve and guard that too, and check the seat has not moved under us

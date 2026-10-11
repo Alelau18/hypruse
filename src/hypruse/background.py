@@ -52,8 +52,9 @@ def decide(target_is_active: bool, explicit: bool | None) -> bool:
     return not target_is_active
 
 
-def refuse(what: str) -> NoReturn:
-    """Refuse an action the background cannot do, saying what to do instead."""
+def refuse(what: str, instead: str = "") -> NoReturn:
+    """Refuse an action the background cannot do, saying what to do instead
+    (`instead`, a way that works in the background, comes first)."""
     if mode() == GUARANTEE:
         hint = "ask the human; HYPRUSE_BACKGROUND is set"
     else:
@@ -61,6 +62,8 @@ def refuse(what: str) -> NoReturn:
             "pass background=false to do it in the foreground (that takes over the "
             "human's screen), or ask the human"
         )
+    if instead:
+        hint = f"{instead}, or {hint}"
     raise trust.TrustError(f"{what}, so it cannot be done in the background: {hint}")
 
 
@@ -103,6 +106,12 @@ def _matches(selector: str, ws: dict[str, Any]) -> bool:
     if selector.startswith("name:"):
         return ws.get("name") == selector[5:]
     return hyprctl.workspace_ref(ws) == int(selector) or ws.get("name") == selector
+
+
+def is_agent_workspace(name: str) -> bool:
+    """Whether a workspace argument (as hypr and launch take it) names one of
+    the agent's workspaces. Relative ones (+1, e+1, previous) do not."""
+    return name.strip() in agent_workspaces()
 
 
 def on_agent_workspace(client: dict[str, Any]) -> bool:

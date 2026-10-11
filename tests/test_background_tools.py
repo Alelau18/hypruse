@@ -77,6 +77,20 @@ def wired_bg(monkeypatch):
     monkeypatch.setattr(srv.a11y, "text_of", lambda bus, svc, path: texts["field"])
     monkeypatch.setattr(srv.trust, "_click_scene", lambda: (MONS, []))
     monkeypatch.setattr(srv.trust, "_read_layers", lambda: [])
+    monkeypatch.setattr(srv.trust, "guard_pointer", lambda *a, **k: None)
+    monkeypatch.setattr(srv.trust, "session_locked", lambda: None)
+    monkeypatch.setattr(srv.hyprctl, "cursor_pos", lambda: (5, 5))
+    s["at_points"] = []
+
+    def other_at(x, y, active):
+        s["at_points"].append((x, y))
+        hit = s["window_at_point"]
+        return None if hit in (None, active) else dict(CLIENT, address=hit)
+
+    monkeypatch.setattr(srv.trust, "other_window_at", other_at)
+    monkeypatch.setattr(srv.hinput, "move", lambda x, y: s["clicks"].append(("move", x, y)))
+    monkeypatch.setattr(srv.hinput, "drag", lambda *a, **k: s["clicks"].append(("drag",) + a))
+    monkeypatch.setattr(srv.hinput, "scroll", lambda **k: s["clicks"].append(("scroll", k)))
     return s
 
 
@@ -231,3 +245,96 @@ def test_several_fields_and_no_focus_report_fall_back_to_keys(wired_bg):
     wired_bg["fields"] = [("svc", "/a", 61), ("svc", "/b", 61)]
     srv.keyboard("type", text="hi", window="0xa")
     assert wired_bg["inserted"] == [] and len(wired_bg["shortcuts"]) == 2
+
+
+# --- pointer, hypr, use_bind --------------------------------------------------
+
+
+def test_pointer_over_another_window_is_refused_in_automatic_mode(wired_bg):
+    wired_bg["window_at_point"] = "0xa"  # not the active window
+    with pytest.raises(srv.trust.TrustError, match="background=false"):
+        srv.pointer("click", x=100, y=100)
+    assert wired_bg["clicks"] == []
+
+
+def test_the_refusal_points_at_click_ui(wired_bg):
+    wired_bg["window_at_point"] = "0xa"
+    with pytest.raises(srv.trust.TrustError, match="click_ui"):
+        srv.pointer("click", x=100, y=100)
+
+
+def test_pointer_over_the_active_window_works(wired_bg):
+    wired_bg["window_at_point"] = wired_bg["active"]
+    srv.pointer("click", x=100, y=100)
+    assert wired_bg["clicks"] == [(100, 100)]
+
+
+def test_pointer_over_no_window_works(wired_bg):
+    wired_bg["window_at_point"] = None  # the bar, a launcher, the wallpaper
+    srv.pointer("click", x=100, y=100)
+    assert wired_bg["clicks"] == [(100, 100)]
+
+
+def test_a_click_in_place_checks_the_cursor(wired_bg):
+    wired_bg["window_at_point"] = "0xa"
+    with pytest.raises(srv.trust.TrustError):
+        srv.pointer("click")
+    assert wired_bg["at_points"] == [(5, 5)]
+
+
+def test_a_move_onto_another_window_is_refused(wired_bg):
+    # focus follows the mouse by default, so a move alone can take focus
+    wired_bg["window_at_point"] = "0xa"
+    with pytest.raises(srv.trust.TrustError):
+        srv.pointer("move", x=100, y=100)
+
+
+def test_a_drag_checks_both_ends(wired_bg):
+    srv.pointer("drag", x=1, y=2, to_x=3, to_y=4)
+    assert wired_bg["at_points"] == [(1, 2), (3, 4)]
+
+
+def test_pointer_background_false_skips_the_check(wired_bg):
+    wired_bg["window_at_point"] = "0xa"
+    srv.pointer("click", x=100, y=100, background=False)
+    assert wired_bg["clicks"] == [(100, 100)] and wired_bg["at_points"] == []
+
+
+def test_pointer_background_true_is_refused(wired_bg):
+    with pytest.raises(srv.trust.TrustError, match="cursor"):
+        srv.pointer("click", x=100, y=100, background=True)
+
+
+def test_pointer_with_background_off_is_unchanged(wired_bg, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "0")
+    wired_bg["window_at_point"] = "0xa"
+    srv.pointer("click", x=100, y=100)
+    assert wired_bg["clicks"] == [(100, 100)] and wired_bg["at_points"] == []
+
+
+def test_the_guarantee_refuses_pointer_workspace_focus_fullscreen_and_binds(
+    wired_bg, monkeypatch
+):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    for call in (lambda: srv.pointer("click", x=1, y=1),
+                 lambda: srv.pointer("move", x=1, y=1),
+                 lambda: srv.hypr("workspace", workspace="3"),
+                 lambda: srv.hypr("focus_window", target="0xa"),
+                 lambda: srv.hypr("fullscreen", target="0xa"),
+                 lambda: srv.use_bind("SUPER+F")):
+        with pytest.raises(srv.trust.TrustError, match="HYPRUSE_BACKGROUND"):
+            call()
+    assert wired_bg["clicks"] == [] and wired_bg["dispatch"] == []
+
+
+def test_the_guarantee_keeps_agent_windows_on_agent_workspaces(wired_bg, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    with pytest.raises(srv.trust.TrustError, match="agent's workspaces"):
+        srv.hypr("move_window", target="0xa", workspace="3")
+    srv.hypr("move_window", target="0xa", workspace="98")
+    assert wired_bg["dispatch"] == [("movetoworkspacesilent", "98,address:0xa")]
+
+
+def test_automatic_mode_still_switches_workspaces_on_request(wired_bg):
+    srv.hypr("workspace", workspace="3")
+    assert wired_bg["dispatch"] == [("workspace", "3")]
