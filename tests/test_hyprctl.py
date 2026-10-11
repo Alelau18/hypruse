@@ -482,7 +482,7 @@ def test_dispatch_does_not_retry_on_a_probe_it_could_not_run(monkeypatch):
 # appears (monitors, clients, workspaces). Special and named workspaces are
 # known by name alone, and "no special workspace up" is all empty strings.
 NUMBERED_057 = {"address": "1", "id": 1, "type": "normal", "name": "1"}
-NAMED_057 = {"address": "name:notes", "type": "normal", "name": "notes"}
+NAMED_057 = {"address": "notes", "type": "normal", "name": "notes"}  # address: the bare name
 SPECIAL_057 = {"address": "special:vault", "type": "special", "name": "special:vault"}
 NO_SPECIAL_057 = {"address": "", "type": "", "name": ""}
 
@@ -521,3 +521,9 @@ def test_snapshot_without_workspace_ids():
     assert shown == {1: False, "notes": True, "special:vault": True}
     assert s["windows"][0]["workspace"] == "special:vault"
     assert s["monitors"][0]["active_workspace"] == "notes"
+
+
+def test_numbered_workspaces_sort_as_numbers():
+    ws = [{"id": i, "name": str(i)} for i in (10, 2, 1)]
+    s = hyprctl.snapshot_from([], ws, [], None, None)
+    assert [w["id"] for w in s["workspaces"]] == [1, 2, 10]

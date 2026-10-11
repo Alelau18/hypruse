@@ -427,6 +427,14 @@ def _q(value: Any) -> str:
     return json.dumps(_safe(value), ensure_ascii=False)
 
 
+def _ws(value: Any) -> str:
+    """A workspace ref for a space-separated line: a number as is, a name
+    (Hyprland 0.57 names special and named workspaces by name) quoted."""
+    if value is None or isinstance(value, int) or str(value).lstrip("-").isdigit():
+        return str(value)
+    return _q(value)
+
+
 def _is_block(x: Any) -> bool:
     return hasattr(x, "type") and (hasattr(x, "text") or hasattr(x, "data"))
 
@@ -567,7 +575,7 @@ def _render_dict(tool: str, d: dict[str, Any]) -> str:
         return ("already: " if already else "") + f"{head} {pairs}".rstrip()
     if tool == "launch" and "address" in d:
         line = (f"{d['address']} {_safe(d.get('class', ''))} {_q(d.get('title', ''))} "
-                f"workspace {d.get('workspace')}")
+                f"workspace {_ws(d.get('workspace'))}")
         if d.get("note"):
             line += f"\nnote {_safe(d['note'])}"
         return line
@@ -621,21 +629,21 @@ def _render_desktop(snap: dict[str, Any]) -> str:
     for m in snap.get("monitors", []):
         g = m.get("geometry") or [None] * 4
         line = (f"monitor {_safe(m.get('name'))} at {g[0]},{g[1]} {g[2]}x{g[3]} "
-                f"scale {m.get('scale')} ws {m.get('active_workspace')}")
+                f"scale {m.get('scale')} ws {_ws(m.get('active_workspace'))}")
         if m.get("focused"):
             line += " focused"
         if m.get("transform"):
             line += f" transform {m['transform']}"
         lines.append(line)
     for w in snap.get("workspaces", []):
-        line = (f"ws {w.get('id')} {_q(w.get('name', ''))} on {_safe(w.get('monitor'))} "
+        line = (f"ws {_ws(w.get('id'))} {_q(w.get('name', ''))} on {_safe(w.get('monitor'))} "
                 f"windows {w.get('windows')}")
         if w.get("visible"):
             line += " visible"
         lines.append(line)
     for c in snap.get("windows", []):
         at, size = c.get("at") or [None, None], c.get("size") or [None, None]
-        line = (f"win {c.get('address')} ws {c.get('workspace')} {_safe(c.get('class', ''))} "
+        line = (f"win {c.get('address')} ws {_ws(c.get('workspace'))} {_safe(c.get('class', ''))} "
                 f"{_q(c.get('title', ''))} at {at[0]},{at[1]} {size[0]}x{size[1]}")
         for flag in ("floating", "fullscreen", "hidden"):
             if c.get(flag):

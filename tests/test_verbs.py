@@ -677,3 +677,23 @@ def test_control_characters_never_reach_the_terminal(stub, capsys):
     stub("keyboard", ValueError("bad \x1b[31mcombo"))
     verbs.main(["keyboard", "key", "x"])
     assert capsys.readouterr().err == "hypruse: error: bad .[31mcombo\n"
+
+
+def test_desktop_quotes_workspace_names_that_are_not_numbers(stub, capsys):
+    # Hyprland 0.57 names special and named workspaces by name; a name can
+    # hold a space, which would shift every field after it
+    snap = {
+        "monitors": [{"name": "eDP-1", "geometry": [0, 0, 1920, 1080], "scale": 1.0,
+                      "focused": True, "active_workspace": "my notes"}],
+        "workspaces": [{"id": "my notes", "name": "my notes", "monitor": "eDP-1",
+                        "windows": 1, "visible": True}],
+        "windows": [{"address": "0x1", "workspace": "special:vault", "class": "kitty",
+                     "title": "t", "at": [0, 0], "size": [10, 10]}],
+        "active_window": "0x1", "cursor": [1, 2],
+    }
+    stub("desktop", snap)
+    assert verbs.main(["desktop"]) == 0
+    out = capsys.readouterr().out
+    assert 'ws "my notes" focused' in out
+    assert out.count('ws "my notes" "my notes" on eDP-1') == 1
+    assert 'win 0x1 ws "special:vault" kitty' in out

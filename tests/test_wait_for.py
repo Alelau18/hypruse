@@ -150,3 +150,30 @@ def test_layer_open_wait_listens_only_for_openlayer(monkeypatch):
     monkeypatch.setattr(srv.events, "EventStream", lambda: stream)
     srv.wait_for("layer_open", match="rofi")
     assert stream.calls[0][0] == {"openlayer"}
+
+
+# Hyprland 0.57 (hyprwm/Hyprland#16234): workspace events name a workspace
+# by its address, which is its number for a numbered workspace, while
+# hyprctl JSON's "name" is its display name ("web" after a rename)
+WEB_057 = {"address": "2", "id": 2, "type": "normal", "name": "web"}
+
+
+def test_a_renamed_workspace_matches_by_its_display_name_in_events(monkeypatch):
+    monkeypatch.setattr(srv.hyprctl, "query",
+                        lambda what: [WEB_057] if what == "workspaces" else {})
+    matches = srv._event_matcher("web")
+    assert matches("workspace", {"name": "2"})
+    opened = {"address": "0xa", "workspace": "2", "class": "foot", "title": "t"}
+    assert matches("openwindow", opened)
+    assert not matches("workspace", {"name": "3"})
+
+
+def test_the_already_active_check_knows_both_names(monkeypatch):
+    monkeypatch.setattr(srv.hyprctl, "query", lambda what: WEB_057)
+    assert srv._already_satisfied("workspace", "web")["already"] is True
+    assert srv._already_satisfied("workspace", "2")["already"] is True
+
+
+def test_a_sequence_excuses_its_own_switch_under_either_name():
+    assert srv._workspace_signatures(WEB_057) == {"workspace:web", "workspace:2"}
+    assert srv._workspace_signatures({"id": 2, "name": "2"}) == {"workspace:2"}  # 0.56

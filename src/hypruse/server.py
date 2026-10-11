@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -1242,6 +1243,46 @@ _WAIT_EVENTS = {
 }
 
 
+def _event_matcher(needle: str) -> Callable[[str, dict[str, Any]], bool]:
+    """Whether an event matches a wait's `match` text (lowercased). Hyprland
+    0.57 events name a workspace by its address, its number for a numbered
+    workspace (hyprwm/Hyprland#16234), while `match` may be the display name
+    a rename gave it; when the event text misses, its workspace is looked
+    up and its display name tried too."""
+
+    def matches(_name: str, payload: dict[str, Any]) -> bool:
+        if not needle:
+            return True
+        if needle in " ".join(str(v) for v in payload.values()).lower():
+            return True
+        ref = payload.get("workspace") if "workspace" in payload else (
+            payload.get("name") if _name == "workspace" else None
+        )
+        return ref is not None and needle in _workspace_aliases(str(ref)).lower()
+
+    return matches
+
+
+def _workspace_aliases(ref: str) -> str:
+    """Every name hyprctl knows a workspace by, given the one an event used."""
+    try:
+        for w in hyprctl.query("workspaces") or []:
+            if ref in (str(w.get("address", "")), str(w.get("id", "")), str(w.get("name", ""))):
+                return " ".join(str(w.get(k, "")) for k in ("name", "address", "id"))
+    except Exception:
+        pass
+    return ""
+
+
+def _workspace_signatures(ws: dict[str, Any]) -> set[str]:
+    """The event signatures a switch to this workspace can carry: its
+    display name, and on Hyprland 0.57 its address, which events use."""
+    sigs = {f"workspace:{ws.get('name', '')}"}
+    if ws.get("address"):
+        sigs.add(f"workspace:{ws['address']}")
+    return sigs
+
+
 def _already_satisfied(event: str, needle: str) -> dict[str, Any] | None:
     """Level-triggered pre-check: has the awaited condition already
     happened? A trigger tool call returns before the agent can call
@@ -1260,7 +1301,8 @@ def _already_satisfied(event: str, needle: str) -> dict[str, Any] | None:
     if event == "workspace" and needle:
         ws = hyprctl.query("activeworkspace") or {}
         name = str(ws.get("name", ""))
-        if needle in name.lower():
+        # Hyprland 0.57 names it by display name and by address (its number)
+        if any(needle in str(ws.get(k, "")).lower() for k in ("name", "address")):
             return {"event": "workspace", "name": name, "already": True}
     # layer_open is the classic late-subscribe case: use_bind returns, the
     # launcher maps instantly, and only then does the agent call
@@ -1314,11 +1356,7 @@ def wait_for(event: str, match: str = "", timeout_s: float = 10) -> dict[str, An
     if already is not None:
         return already
 
-    def matcher(_name: str, payload: dict[str, Any]) -> bool:
-        if not needle:
-            return True
-        return needle in " ".join(str(v) for v in payload.values()).lower()
-
+    matcher = _event_matcher(needle)
     try:
         with events.EventStream() as stream:
             hit = stream.wait_for(names, matcher, timeout_s)
@@ -1463,11 +1501,7 @@ def _seq_wait_for(
     if already is not None:
         return already
 
-    def matcher(_name: str, payload: dict[str, Any]) -> bool:
-        if not needle:
-            return True
-        return needle in " ".join(str(v) for v in payload.values()).lower()
-
+    matcher = _event_matcher(needle)
     for i, (n, p) in enumerate(backlog):
         if n in names and matcher(n, p):
             del backlog[i]
@@ -1562,7 +1596,7 @@ def sequence(
                 # human takeover.
                 with contextlib.suppress(Exception):
                     ws = hyprctl.query("activeworkspace") or {}
-                    prev_expected.add(f"workspace:{ws.get('name', '')}")
+                    prev_expected |= _workspace_signatures(ws)
     finally:
         if stream is not None:
             # the last step can change the desktop too; a `then` observation

@@ -192,3 +192,17 @@ def test_launch_refuses_a_bad_workspace_before_spawning(monkeypatch):
     with pytest.raises(ValueError, match="is not a workspace"):
         server.launch("foot", workspace="2] tag pwned [")
     assert dispatched == []
+
+
+@pytest.mark.parametrize(
+    "ws, expect",
+    [({"address": "special:scratch", "type": "special", "name": "special:scratch"},
+      "special:scratch"),
+     ({"address": "notes", "type": "normal", "name": "notes"}, "notes")],
+)
+def test_launch_reports_an_id_less_057_workspace_by_name(monkeypatch, no_sleep, ws, expect):
+    # Hyprland 0.57 gives special and named workspaces no id
+    fake = FakeHyprctl([[EXISTING], [EXISTING, dict(CHROME, workspace=ws)]])
+    _patch(monkeypatch, fake)
+    out = server.launch("google-chrome")
+    assert out["workspace"] == expect
