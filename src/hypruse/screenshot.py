@@ -253,15 +253,17 @@ def _hidden_reason(
     if c.get("hidden") is True or c.get("visible") is False:
         return "it is an inactive tab in a group"
     at, size = c.get("at"), c.get("size")
-    if at and size and monitors and all(
-        "width" in m for m in monitors
-    ) and not any(
-        _rect_intersects(hyprctl.logical_rect(m), (at[0], at[1], size[0], size[1]))
-        for m in monitors
-    ):
-        # a scrolling-layout column moved out of view, or a floating window
-        # dragged off screen: its workspace is shown, the window is not
-        return "it is outside every monitor, scrolled out of view or moved off screen"
+    if at and size and monitors and all("width" in m for m in monitors):
+        rect = (at[0], at[1], size[0], size[1])
+        # Hyprland draws a tiled window only on its own monitor, a floating
+        # one wherever it reaches
+        own = [m for m in monitors if m.get("id") == c.get("monitor")]
+        tiled = not c.get("floating") and not c.get("pinned")
+        where = own if (tiled and own) else monitors
+        if not any(_rect_intersects(hyprctl.logical_rect(m), rect) for m in where):
+            if tiled:
+                return "it is scrolled out of view of its monitor"
+            return "it sits off every monitor, and focusing does not move it"
     if c.get("acceptsInput") is False and not c.get("fullscreen") and any(
         o.get("address") != c.get("address")
         and o.get("fullscreen")
@@ -284,9 +286,17 @@ def _readonly() -> bool:
     return os.environ.get("HYPRUSE_READONLY", "").lower() in ("1", "true", "yes", "on")
 
 
-def _bring_forward(c: dict[str, Any]) -> str:
+def _bring_forward(c: dict[str, Any], reason: str = "") -> str:
     """How to get a window on screen, naming only tools that exist: read-only
-    mode registers no `hypr`."""
+    mode registers no `hypr`. A floating window off every monitor has to be
+    moved; focusing it does not."""
+    if reason.startswith("it sits off every monitor"):
+        if _readonly():
+            return "it has to be moved on screen, so ask the human to move it"
+        return (
+            "it has to be moved on screen: hypr(action='toggle_floating', "
+            f"target='{c['address']}') tiles it, or ask the human to move it"
+        )
     if _readonly():
         return "ask the human to bring it on screen"
     return f"bring it on screen with hypr(action='focus_window', target='{c['address']}')"
@@ -300,7 +310,7 @@ def _not_shown(
     cls = CaptureRefused if final else ScreenshotError
     return cls(
         f"window {c['address']} is not shown ({reason}), and {why}. To see it, "
-        f"{_bring_forward(c)}."
+        f"{_bring_forward(c, reason)}."
     )
 
 
@@ -493,7 +503,7 @@ def capture(
     meta["coords"] = "click a target at global = geometry[:2] + image_pixel / scale"
     if meta.get("visible") is False:
         meta["coords"] += (
-            f"; but the window is not on screen ({hidden}), so {_bring_forward(c)} "
+            f"; but the window is not on screen ({hidden}), so {_bring_forward(c, hidden)} "
             "and capture again before clicking: these coordinates now point at "
             "whatever is shown there, and bringing it forward can move it"
         )
@@ -542,7 +552,10 @@ def capture_stable(
     screenshot taken right after an action does not land mid-animation.
     Returns the settled frame with meta['stable'] = True, or the last
     frame with False when the content never settles within `timeout`
-    (blinking cursors, video). The byte-compare relies on the encoder being
+    (blinking cursors, video). One failed capture is skipped and the last
+    good frame kept; captures that keep failing raise the failure at the
+    timeout, and a refusal (window gone, session locked) raises at once.
+    The byte-compare relies on the encoder being
     deterministic: both grim JPEG and PNG map identical pixels to identical
     bytes, so the default JPEG format is safe here.
 
@@ -555,6 +568,7 @@ def capture_stable(
         return data, meta
     deadline = time.monotonic() + timeout
     failed: ScreenshotError | None = None
+    streak = 0
     while time.monotonic() < deadline:
         time.sleep(interval)
         try:
@@ -562,9 +576,9 @@ def capture_stable(
         except CaptureRefused:
             raise  # gone or locked: an older frame would hide that
         except ScreenshotError as exc:
-            failed = exc  # e.g. mid-animation: keep the last good frame and try again
+            failed, streak = exc, streak + 1  # e.g. mid-animation: try again
             continue
-        failed = None
+        failed, streak = None, 0
         if nmeta.get("visible") is False:
             nmeta["stable"] = None  # it left the screen: see the note above
             return nxt, nmeta
@@ -572,7 +586,7 @@ def capture_stable(
             nmeta["stable"] = True
             return nxt, nmeta
         data, meta = nxt, nmeta
-    if failed is not None:
-        raise failed  # every capture since the last good one failed: it is stale
+    if failed is not None and streak >= 2:
+        raise failed  # it kept failing since the last good frame: that frame is stale
     meta["stable"] = False
     return data, meta

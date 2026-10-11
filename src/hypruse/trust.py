@@ -334,7 +334,9 @@ def check_click_point(
     Always: the point must be on a monitor (Hyprland moves an off-monitor
     point to the nearest edge, onto something else) and inside the target
     window (a mark's offset can fall outside a window resized since
-    marks()).
+    marks()); on another monitor than the target's, the target must float
+    (a tiled window takes clicks only on its own monitor), and a scratchpad
+    up there must not take the click first.
 
     While a guard is on: what covers the point once the target is
     focused. Hyprland's hit test takes pinned windows first, then floating
@@ -374,31 +376,46 @@ def check_click_point(
             f"{client.get('size')}), so the click would land on something else; refusing. "
             "A mark taken before the window changed needs marks() again."
         )
-    # a control hanging over onto another monitor: with a scratchpad up
-    # there, Hyprland's hit test on that monitor considers only the
-    # scratchpad (and pinned windows) at special_fallthrough 0, so the click
-    # cannot reach the target; at 1 the scratchpad's windows come first
-    # (counted below). Focusing the target hides only its own monitor's.
+    # A control hanging over onto another monitor. Hyprland's hit test on
+    # the monitor under the point runs pinned windows, then that monitor's
+    # scratchpad, then floating windows (no monitor test), then only that
+    # monitor's own tiled windows. So a tiled target never gets the click
+    # there, and with a scratchpad up there at special_fallthrough 0 only a
+    # pinned target or one on an open scratchpad of its own gets past it (at
+    # 1 the scratchpad's windows come first, counted below). Focusing the
+    # target hides only its own monitor's scratchpad.
     m = hyprctl.monitor_at(monitors, x, y) if monitors is not None else None
-    if (
-        m is not None
-        and m.get("id") != client.get("monitor")
-        and hyprctl.workspace_ref(m.get("specialWorkspace")) is not None
-        and _special_fallthrough() != 1
-    ):
-        raise TrustError(
-            f"({x:.0f}, {y:.0f}) is on {m.get('name')}, which has a scratchpad up: the "
-            "click would go to the scratchpad, not to the window; refusing. Hide the "
-            "scratchpad first."
-        )
+    if m is not None and m.get("id") != client.get("monitor"):
+        if not client.get("floating") and not client.get("pinned"):
+            raise TrustError(
+                f"({x:.0f}, {y:.0f}) is on {m.get('name')}, not the window's own monitor: "
+                "Hyprland gives a tiled window clicks only on its own monitor, so the click "
+                "would land on something else; refusing."
+            )
+        own_ws = client.get("workspace") or {}
+        on_open_special = _is_special(own_ws) and hyprctl.workspace_ref(
+            own_ws
+        ) in hyprctl.visible_workspaces(monitors)
+        if (
+            not client.get("pinned")
+            and not on_open_special
+            and hyprctl.workspace_ref(m.get("specialWorkspace")) is not None
+            and _special_fallthrough() != 1
+        ):
+            raise TrustError(
+                f"({x:.0f}, {y:.0f}) is on {m.get('name')}, which has a scratchpad up: the "
+                "click would go to the scratchpad, not to the window; refusing. Hide the "
+                "scratchpad first."
+            )
     if scope is None and not auth:
         return
+    point_monitor = m.get("id") if m is not None else None
     over = [
         c
         for c in clients
         if c.get("mapped", True)
         and _covers(c, x, y)
-        and _would_cover(c, client, monitors or [], focused)
+        and _would_cover(c, client, monitors or [], focused, point_monitor)
     ]
     if auth:
         hit = next((c for c in over if (c.get("class") or "").lower() in _AUTH_CLASSES), None)
@@ -423,6 +440,7 @@ def _would_cover(
     target: dict[str, Any],
     monitors: list[dict[str, Any]],
     focused: bool,
+    point_monitor: Any = None,
 ) -> bool:
     """Whether `c`, whose rect holds the point, would take a click aimed
     at `target` once the target is focused (see check_click_point)."""
@@ -432,6 +450,9 @@ def _would_cover(
         return False
     if c.get("visible") is False:  # an inactive tab: not drawn
         return False
+    if target.get("pinned"):
+        # the pinned pass runs first: only another pinned window can be above
+        return bool(c.get("pinned"))
     if c.get("pinned"):
         return True
     ws = c.get("workspace") or {}
@@ -442,8 +463,11 @@ def _would_cover(
         return False
     if c.get("monitor") != target.get("monitor"):
         # a floating window can hang across the monitor edge; a scratchpad
-        # up on the point's monitor takes clicks there first
-        return bool(c.get("floating")) or _is_special(ws)
+        # takes clicks first only on its own monitor, when that is the
+        # point's
+        return bool(c.get("floating")) or (
+            _is_special(ws) and c.get("monitor") == point_monitor
+        )
     if not _is_special(ws):
         return False  # focusing the target replaces this workspace
     if focused:

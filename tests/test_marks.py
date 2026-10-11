@@ -419,3 +419,47 @@ def test_special_fallthrough_reads_both_config_managers(monkeypatch, reply, expe
 
     monkeypatch.setattr(srv.trust.hyprctl, "query", lambda what: reply)
     assert real() == expect
+
+
+# Hyprland's hit test on the monitor under the point: pinned windows, then
+# that monitor's scratchpad, then floating windows (no monitor test), then
+# only that monitor's own tiled windows.
+def test_a_tiled_target_takes_no_clicks_on_another_monitor(monkeypatch):
+    target = dict(make_client(), at=[1500, 50], size=[960, 1000], monitor=0)
+    _scene(monkeypatch, [])
+    for focused in (False, True):
+        with pytest.raises(srv.trust.TrustError, match="own monitor"):
+            _check(target, x=2000, y=300, focused=focused)  # (2000, 300) is on DP-1
+
+
+def test_a_pinned_target_reaches_past_another_monitors_scratchpad(monkeypatch):
+    target = _overhang(monkeypatch, 0)
+    target["pinned"] = True
+    _check(target, x=1800, y=300)
+
+
+def test_a_target_on_its_own_open_scratchpad_reaches_past_another(monkeypatch):
+    target = _overhang(monkeypatch, 0)
+    notes = {"id": -97, "name": "special:notes"}
+    target["workspace"] = notes
+    mons = [dict(MONS[0], specialWorkspace={"id": -98, "name": "special:term"}),
+            dict(MONS[1], specialWorkspace=notes)]
+    pad = {"address": "0xk", "class": "kitty", "floating": False, "at": [0, 600],
+           "size": [1920, 480], "workspace": {"id": -98, "name": "special:term"}, "monitor": 0}
+    monkeypatch.setattr(srv.trust, "_click_scene", lambda: (mons, [pad]))
+    _check(target, x=1800, y=300)
+
+
+def test_another_monitors_scrolled_out_scratchpad_does_not_cover_this_one(monkeypatch):
+    # its rect lies over monitor 0, but Hyprland's scratchpad pass on monitor
+    # 0 takes only monitor 0's scratchpad
+    monkeypatch.setenv("HYPRUSE_CONFINE", "class:gedit")
+    column = {"address": "0xc", "class": "kitty", "floating": False, "at": [1000, 0],
+              "size": [1200, 1080], "workspace": {"id": -98, "name": "special:term"},
+              "monitor": 1}
+    mons = [MONS[0], dict(MONS[1], specialWorkspace={"id": -98, "name": "special:term"})]
+    monkeypatch.setattr(srv.trust, "_click_scene", lambda: (mons, [column]))
+    monkeypatch.setattr(srv.trust, "_special_fallthrough", lambda: 1)
+    wide = dict(make_client(), size=[1700, 600])  # reaches x 1800 on monitor 0
+    for focused in (False, True):
+        _check(wide, x=1500, y=300, focused=focused)  # inside both rects, on monitor 0

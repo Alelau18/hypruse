@@ -383,3 +383,14 @@ def test_pointer_single_note_under_lock(monkeypatch):
     out = srv.pointer("click", x=10, y=10, allow_auth=True)
     assert out.count("NOTE") == 1  # not two
     assert "session is locked" in out and "rofi" not in out
+
+
+def test_then_screenshot_never_masks_the_action_success(monkeypatch):
+    # the action was delivered; a capture error must not read as its failure
+    def boom(**k):
+        raise srv.shot.ScreenshotError("grim failed: no output")
+
+    monkeypatch.setattr(srv, "_deliver_capture", boom)
+    out = srv._acted("click ok", "screenshot")
+    texts = " ".join(getattr(b, "text", str(b)) for b in out)
+    assert "click ok" in texts and "screenshot failed" in texts

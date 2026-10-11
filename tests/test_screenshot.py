@@ -459,9 +459,9 @@ def test_a_window_outside_every_monitor_is_not_shown(monkeypatch):
     # dragged off screen: its workspace is shown, its rect is not
     gone = {**SHOWN, "address": "0xo", "at": [3000, 20], "stableId": "180000ad"}
     _scene(monkeypatch, [SHOWN, gone], toplevel=_no_toplevel_capture)
-    with pytest.raises(screenshot.CaptureRefused, match="outside every monitor"):
+    with pytest.raises(screenshot.CaptureRefused, match="scrolled out of view"):
         screenshot.capture(window="0xo")
-    with pytest.raises(screenshot.ScreenshotError, match="outside every monitor"):
+    with pytest.raises(screenshot.ScreenshotError, match="scrolled out of view"):
         screenshot.zoom_region(3100, 100, window="0xo")
 
 
@@ -482,3 +482,47 @@ def test_capture_stable_raises_when_the_last_captures_all_failed(monkeypatch):
     monkeypatch.setattr(screenshot, "capture", fake_capture)
     with pytest.raises(screenshot.ScreenshotError, match="no output"):
         screenshot.capture_stable(window="0xa", interval=0, timeout=3)
+
+
+TWO_MONITORS = [
+    {"id": 0, "name": "eDP-1", "x": 0, "y": 0, "width": 1920, "height": 1080, "scale": 1.0,
+     "activeWorkspace": {"id": 1}, "specialWorkspace": {"id": 0}},
+    {"id": 1, "name": "DP-1", "x": 1920, "y": 0, "width": 1920, "height": 1080, "scale": 1.0,
+     "activeWorkspace": {"id": 3}, "specialWorkspace": {"id": 0}},
+]
+
+
+def test_a_tiled_window_scrolled_onto_a_neighbour_monitor_is_not_shown():
+    # Hyprland draws a tiled window only on its own monitor
+    column = {**SHOWN, "at": [1927, 7], "size": [900, 1066], "monitor": 0,
+              "floating": False}
+    assert "scrolled out of view" in screenshot._hidden_reason(column, TWO_MONITORS, [column])
+    floating = {**column, "floating": True}
+    assert screenshot._hidden_reason(floating, TWO_MONITORS, [floating]) is None
+
+
+def test_a_floating_window_off_every_monitor_needs_moving_not_focus(monkeypatch):
+    stray = {**SHOWN, "address": "0xo", "at": [4000, 100], "floating": True,
+             "stableId": "180000ad"}
+    _scene(monkeypatch, [SHOWN, stray], toplevel=_no_toplevel_capture)
+    with pytest.raises(screenshot.CaptureRefused) as e:
+        screenshot.capture(window="0xo")
+    assert "moved" in str(e.value) and "focus_window" not in str(e.value)
+
+
+def test_capture_stable_keeps_the_good_frame_through_one_last_failure(monkeypatch):
+    clock = iter(range(100))
+    monkeypatch.setattr(screenshot.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(screenshot.time, "sleep", lambda s: None)
+    frames = iter([(b"a", {"visible": True}), (b"b", {"visible": True}),
+                   screenshot.ScreenshotError("grim failed: once")])
+
+    def fake_capture(*a, **k):
+        f = next(frames)
+        if isinstance(f, Exception):
+            raise f
+        return f[0], dict(f[1])
+
+    monkeypatch.setattr(screenshot, "capture", fake_capture)
+    data, meta = screenshot.capture_stable(window="0xa", interval=0, timeout=3)
+    assert (data, meta["stable"]) == (b"b", False)

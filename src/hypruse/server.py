@@ -591,7 +591,10 @@ def _acted(msg: str, then: str, window: str = "") -> list[Any] | str:
     if then == "desktop":
         return [head, _text(json.dumps(hyprctl.snapshot()))]
     if then == "screenshot":
-        return [head, *_deliver_capture(stable=True)]
+        try:
+            return [head, *_deliver_capture(stable=True)]
+        except shot.ScreenshotError as exc:  # never mask the action's success
+            return [head, _text(f"screenshot failed: {exc}")]
     if then == "ui":
         try:
             view = _ui_read(window)

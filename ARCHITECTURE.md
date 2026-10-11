@@ -193,8 +193,10 @@ focused: pinned windows, floating or fullscreen windows on the target's
 workspace, floating windows that can hang over from another monitor, and
 a scratchpad focusing will not hide (tiled windows do not overlap its
 target, and focusing a floating window does not raise it). A point on
-another monitor whose scratchpad is up is refused outright unless
-input:special_fallthrough is 1, since that scratchpad takes the click. It re-reads
+another monitor is refused for a tiled target, which Hyprland gives
+clicks only on its own monitor, and when that monitor has a scratchpad
+up, unless input:special_fallthrough is 1 or the target is pinned or on
+an open scratchpad of its own. It re-reads
 the target after focusing it, refuses if focusing moved it, and checks
 the point again before clicking.
 

@@ -21,12 +21,17 @@ Fixes from a review of 0.12.0.
   of promising the old coordinates still hold, and in read-only mode it
   says to ask the human rather than naming the `hypr` tool. A missing grim
   or the byte budget is reported as itself. A hidden window caught
-  mid-animation is retried for up to about a second, and `stable=true`
-  keeps its last good frame when one capture fails.
+  mid-animation is retried for up to about a second. A window whose
+  workspace is shown but which is scrolled out of view of its monitor, or
+  floating off every monitor, counts as not shown. `stable=true` keeps its
+  last good frame through a single failed capture, raises when captures
+  keep failing, and with `then="screenshot"` a failed capture no longer
+  hides that the action itself went through.
 - **Trust guards.** `click_ui` checks the point it clicks, not only its
   target. It refuses a point off every monitor or outside the target, a
-  point on another monitor whose scratchpad is up, and a mark taken
-  before the window was resized. It refuses when an
+  point on another monitor for a tiled target (Hyprland gives a tiled
+  window clicks only on its own monitor), a point on another monitor
+  whose scratchpad is up, and a mark taken before the window was resized. It refuses when an
   authentication dialog will cover the control once the target is
   focused, or under confinement an out-of-scope window: Hyprland gives
   the click to pinned and floating windows first and focusing does not
