@@ -312,11 +312,14 @@ def _click_scene() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
 
 
 def _special_fallthrough() -> int | None:
-    """Hyprland's input:special_fallthrough, or None when it cannot be read."""
+    """Hyprland's input:special_fallthrough, or None when it cannot be read.
+    hyprland.conf reports it as "int", the Lua config manager as "bool"."""
     try:
-        return int(hyprctl.query("getoption input:special_fallthrough")["int"])
+        reply = hyprctl.query("getoption input:special_fallthrough")
     except Exception:
         return None
+    value = reply.get("int", reply.get("bool")) if isinstance(reply, dict) else None
+    return int(value) if isinstance(value, int | bool) else None
 
 
 def check_click_point(
@@ -371,6 +374,23 @@ def check_click_point(
             f"{client.get('size')}), so the click would land on something else; refusing. "
             "A mark taken before the window changed needs marks() again."
         )
+    # a control hanging over onto another monitor: with a scratchpad up
+    # there, Hyprland's hit test on that monitor considers only the
+    # scratchpad (and pinned windows) at special_fallthrough 0, so the click
+    # cannot reach the target; at 1 the scratchpad's windows come first
+    # (counted below). Focusing the target hides only its own monitor's.
+    m = hyprctl.monitor_at(monitors, x, y) if monitors is not None else None
+    if (
+        m is not None
+        and m.get("id") != client.get("monitor")
+        and hyprctl.workspace_ref(m.get("specialWorkspace")) is not None
+        and _special_fallthrough() != 1
+    ):
+        raise TrustError(
+            f"({x:.0f}, {y:.0f}) is on {m.get('name')}, which has a scratchpad up: the "
+            "click would go to the scratchpad, not to the window; refusing. Hide the "
+            "scratchpad first."
+        )
     if scope is None and not auth:
         return
     over = [
@@ -421,7 +441,9 @@ def _would_cover(
     if ref not in hyprctl.visible_workspaces(monitors):
         return False
     if c.get("monitor") != target.get("monitor"):
-        return bool(c.get("floating"))  # it can hang across the monitor edge
+        # a floating window can hang across the monitor edge; a scratchpad
+        # up on the point's monitor takes clicks there first
+        return bool(c.get("floating")) or _is_special(ws)
     if not _is_special(ws):
         return False  # focusing the target replaces this workspace
     if focused:

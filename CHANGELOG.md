@@ -24,8 +24,9 @@ Fixes from a review of 0.12.0.
   mid-animation is retried for up to about a second, and `stable=true`
   keeps its last good frame when one capture fails.
 - **Trust guards.** `click_ui` checks the point it clicks, not only its
-  target. It refuses a point off every monitor or outside the target, and
-  a mark taken before the window was resized. It refuses when an
+  target. It refuses a point off every monitor or outside the target, a
+  point on another monitor whose scratchpad is up, and a mark taken
+  before the window was resized. It refuses when an
   authentication dialog will cover the control once the target is
   focused, or under confinement an out-of-scope window: Hyprland gives
   the click to pinned and floating windows first and focusing does not

@@ -252,6 +252,16 @@ def _hidden_reason(
     # older releases hidden true
     if c.get("hidden") is True or c.get("visible") is False:
         return "it is an inactive tab in a group"
+    at, size = c.get("at"), c.get("size")
+    if at and size and monitors and all(
+        "width" in m for m in monitors
+    ) and not any(
+        _rect_intersects(hyprctl.logical_rect(m), (at[0], at[1], size[0], size[1]))
+        for m in monitors
+    ):
+        # a scrolling-layout column moved out of view, or a floating window
+        # dragged off screen: its workspace is shown, the window is not
+        return "it is outside every monitor, scrolled out of view or moved off screen"
     if c.get("acceptsInput") is False and not c.get("fullscreen") and any(
         o.get("address") != c.get("address")
         and o.get("fullscreen")
@@ -544,14 +554,17 @@ def capture_stable(
         meta["stable"] = None
         return data, meta
     deadline = time.monotonic() + timeout
+    failed: ScreenshotError | None = None
     while time.monotonic() < deadline:
         time.sleep(interval)
         try:
             nxt, nmeta = capture(window, region, scale, max_bytes, max_edge, lossless)
         except CaptureRefused:
             raise  # gone or locked: an older frame would hide that
-        except ScreenshotError:
-            continue  # e.g. mid-animation: keep the last good frame and try again
+        except ScreenshotError as exc:
+            failed = exc  # e.g. mid-animation: keep the last good frame and try again
+            continue
+        failed = None
         if nmeta.get("visible") is False:
             nmeta["stable"] = None  # it left the screen: see the note above
             return nxt, nmeta
@@ -559,5 +572,7 @@ def capture_stable(
             nmeta["stable"] = True
             return nxt, nmeta
         data, meta = nxt, nmeta
+    if failed is not None:
+        raise failed  # every capture since the last good one failed: it is stale
     meta["stable"] = False
     return data, meta

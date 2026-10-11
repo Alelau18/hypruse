@@ -452,3 +452,33 @@ def test_a_hidden_window_grim_cannot_capture_is_a_hard_refusal(monkeypatch):
     _scene(monkeypatch, [SHOWN, HIDDEN], toplevel=_no_toplevel_capture)
     with pytest.raises(screenshot.CaptureRefused, match="not shown"):
         screenshot.capture(window="0xb")
+
+
+def test_a_window_outside_every_monitor_is_not_shown(monkeypatch):
+    # a scrolling-layout column moved out of view, or a floating window
+    # dragged off screen: its workspace is shown, its rect is not
+    gone = {**SHOWN, "address": "0xo", "at": [3000, 20], "stableId": "180000ad"}
+    _scene(monkeypatch, [SHOWN, gone], toplevel=_no_toplevel_capture)
+    with pytest.raises(screenshot.CaptureRefused, match="outside every monitor"):
+        screenshot.capture(window="0xo")
+    with pytest.raises(screenshot.ScreenshotError, match="outside every monitor"):
+        screenshot.zoom_region(3100, 100, window="0xo")
+
+
+def test_capture_stable_raises_when_the_last_captures_all_failed(monkeypatch):
+    # a persistent failure after a good first frame must not come back as
+    # that frame once the timeout runs out
+    clock = iter(range(100))
+    monkeypatch.setattr(screenshot.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(screenshot.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def fake_capture(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return b"a", {"visible": True}
+        raise screenshot.ScreenshotError("grim failed: no output")
+
+    monkeypatch.setattr(screenshot, "capture", fake_capture)
+    with pytest.raises(screenshot.ScreenshotError, match="no output"):
+        screenshot.capture_stable(window="0xa", interval=0, timeout=3)

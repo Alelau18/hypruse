@@ -374,3 +374,48 @@ def test_click_ui_refuses_when_focusing_moved_the_window(wired, monkeypatch):
     with pytest.raises(srv.trust.TrustError, match="moved"):
         srv.click_ui(name="Save")
     assert wired["clicks"] == []
+
+
+# A control can hang over onto another monitor. With a scratchpad up there,
+# Hyprland's hit test on that monitor considers only the scratchpad (and
+# pinned windows) at special_fallthrough 0, so the click cannot reach the
+# target; at 1 the scratchpad's windows come first.
+def _overhang(monkeypatch, fallthrough, pad_covers=True):
+    monkeypatch.setenv("HYPRUSE_CONFINE", "class:gedit")
+    target = dict(make_client(), floating=True, at=[1700, 200], size=[800, 500],
+                  workspace={"id": 5}, monitor=1)
+    mons = [dict(MONS[0], specialWorkspace={"id": -98, "name": "special:term"}), MONS[1]]
+    pad = {"address": "0xk", "class": "kitty", "floating": False,
+           "at": [0, 0] if pad_covers else [0, 600], "size": [1920, 1080 if pad_covers else 480],
+           "workspace": {"id": -98, "name": "special:term"}, "monitor": 0}
+    monkeypatch.setattr(srv.trust, "_click_scene", lambda: (mons, [pad]))
+    monkeypatch.setattr(srv.trust, "_special_fallthrough", lambda: fallthrough)
+    return target
+
+
+@pytest.mark.parametrize("fallthrough", [0, None])
+def test_a_scratchpad_on_the_points_monitor_refuses_at_fallthrough_0(monkeypatch, fallthrough):
+    target = _overhang(monkeypatch, fallthrough)
+    for focused in (False, True):
+        with pytest.raises(srv.trust.TrustError, match="scratchpad"):
+            _check(target, x=1800, y=300, focused=focused)
+
+
+def test_at_fallthrough_1_the_scratchpads_own_windows_count(monkeypatch):
+    target = _overhang(monkeypatch, 1)
+    with pytest.raises(srv.trust.TrustError, match="confinement"):
+        _check(target, x=1800, y=300)
+    target = _overhang(monkeypatch, 1, pad_covers=False)
+    _check(target, x=1800, y=300)  # the scratchpad window is not at the point
+
+
+@pytest.mark.parametrize("reply, expect", [
+    ({"option": "input:special_fallthrough", "int": 0, "set": False}, 0),  # hyprland.conf
+    ({"option": "input:special_fallthrough", "bool": True, "set": True}, 1),  # hyprland.lua
+    ({"option": "input:special_fallthrough"}, None),
+])
+def test_special_fallthrough_reads_both_config_managers(monkeypatch, reply, expect):
+    from hypruse.trust import _special_fallthrough as real
+
+    monkeypatch.setattr(srv.trust.hyprctl, "query", lambda what: reply)
+    assert real() == expect
