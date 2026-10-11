@@ -1250,11 +1250,8 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
         # windows by the guarantee's scope
         if action in _HYPR_TAKES_VIEW:
             bg.refuse(_HYPR_TAKES_VIEW[action])
-        if action == "move_window" and not bg.is_agent_workspace(workspace):
-            bg.refuse(
-                f"workspace {workspace} is not one of the agent's workspaces "
-                f"({', '.join(bg.agent_workspaces())}), and the agent's windows stay on those"
-            )
+        if action == "move_window":
+            bg.require_agent_workspace(workspace)
     # confinement: any action naming a specific window must stay in scope;
     # fullscreen/toggle_floating with no target hit the ACTIVE window, so
     # resolve and guard that too, and check the seat has not moved under us
@@ -1342,7 +1339,9 @@ def _launch_and_wait(rule_command: str, wait_s: float) -> dict[str, Any] | None:
 
 
 @journal.journaled("act")
-def launch(command: str, workspace: str = "", wait_s: float = 8.0) -> dict[str, Any] | str:
+def launch(
+    command: str, workspace: str = "", wait_s: float = 8.0, background: bool | None = None
+) -> dict[str, Any] | str:
     """Open an app: run `command` via Hyprland exec. Optional `workspace` placement
     (silent, works even for single-instance apps like browsers, whose
     window gets moved after it appears) and `wait_s` (1-30, default 8;
@@ -1350,9 +1349,26 @@ def launch(command: str, workspace: str = "", wait_s: float = 8.0) -> dict[str, 
     address/class/title/workspace, or a timeout note."""
     safety.touch("launch")
     wait_s = min(max(wait_s, 1.0), 30.0)
+    # Background mode: with no workspace, automatic mode and the guarantee
+    # open the app on the next agent workspace (background=false refuses
+    # under the guarantee, here); the guarantee takes no other workspace
+    to_agent = bg.decide(False, background)
+    note = ""
+    if workspace:
+        bg.require_agent_workspace(
+            _workspace(workspace), "leave workspace out to use the next free agent workspace"
+        )
+    elif to_agent:
+        workspace = bg.next_workspace(hyprctl.query("clients"), trust.owned())
+        note = (
+            f"opened on workspace {workspace}, one of the agent's "
+            "(HYPRUSE_AGENT_WORKSPACES), out of the human's sight; pass "
+            "background=false to open it on the human's workspace"
+        )
     rule = f"[workspace {_workspace(workspace)} silent] " if workspace else ""
     if journal.dry_run():
         return f"{_DRY} run {rule + command} and wait up to {wait_s:.0f}s for its window"
+    active_before = _active_address() if rule else None
     win = _launch_and_wait(rule + command, wait_s)
     if win is None:
         return (
@@ -1362,7 +1378,6 @@ def launch(command: str, workspace: str = "", wait_s: float = 8.0) -> dict[str, 
         )
     # owned-set for `launched` confinement; tag + notify when HYPRUSE_MARK
     trust.note_launched(win["address"], win.get("class", ""))
-    trust.remember_seat()  # the new window took focus; re-baseline for the seat guard
     ws = win.get("workspace", {})
     result: dict[str, Any] = {
         "address": win["address"],
@@ -1370,14 +1385,27 @@ def launch(command: str, workspace: str = "", wait_s: float = 8.0) -> dict[str, 
         "title": win.get("title", ""),
         "workspace": hyprctl.workspace_ref(ws),
     }
+    if note:
+        result["note"] = note
     landed = {str(ws.get("id")), str(ws.get("name", ""))}
-    if workspace and workspace not in landed:
+    moved = bool(workspace) and workspace not in landed
+    if moved:
         hyprctl.dispatch("movetoworkspacesilent", f"{workspace},address:{win['address']}")
         result["workspace"] = workspace
-        result["note"] = (
+        result["note"] = (f"{note}; " if note else "") + (
             "window opened elsewhere (single-instance app behavior); "
             "moved to the requested workspace"
         )
+        active_now = _active_address()
+        if active_now != active_before:
+            result["note"] += (
+                f"; the human's focused window changed while it opened (now {active_now})"
+            )
+    if not rule or moved:
+        # the new window took focus, or ours moved it: re-baseline the seat
+        # guard. A silent launch leaves the human's seat as it was, so a
+        # change since the last action is still theirs for the guard to see.
+        trust.remember_seat()
     return result
 
 

@@ -338,3 +338,99 @@ def test_the_guarantee_keeps_agent_windows_on_agent_workspaces(wired_bg, monkeyp
 def test_automatic_mode_still_switches_workspaces_on_request(wired_bg):
     srv.hypr("workspace", workspace="3")
     assert wired_bg["dispatch"] == [("workspace", "3")]
+
+
+# --- launch -------------------------------------------------------------------
+
+
+@pytest.fixture
+def launch_fake(monkeypatch):
+    s = {"rule": None, "clients": [], "seat": 0, "active": ["0xhuman"],
+         "lands": None, "dispatch": []}
+    monkeypatch.delenv("HYPRUSE_BACKGROUND", raising=False)
+    monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
+
+    def launch_and_wait(rule_command, wait_s):
+        s["rule"] = rule_command.removesuffix("foot").strip()
+        ws = s["lands"] or (rule_command.split()[1] if rule_command.startswith("[") else "1")
+        return {"address": "0xnew", "class": "foot", "title": "~",
+                "workspace": {"id": int(ws) if ws.isdigit() else -1, "name": ws}}
+
+    monkeypatch.setattr(srv, "_launch_and_wait", launch_and_wait)
+    monkeypatch.setattr(srv.hyprctl, "query", lambda what: s["clients"])
+    monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: s["dispatch"].append(a))
+    monkeypatch.setattr(srv, "_active_address",
+                        lambda: s["active"].pop(0) if len(s["active"]) > 1 else s["active"][0])
+    monkeypatch.setattr(srv.trust, "note_launched", lambda *a: None)
+    monkeypatch.setattr(srv.trust, "owned", lambda: {"0xmine"})
+
+    def seat():
+        s["seat"] += 1
+
+    monkeypatch.setattr(srv.trust, "remember_seat", seat)
+    return s
+
+
+def test_launch_without_a_workspace_goes_to_the_next_agent_workspace(launch_fake):
+    out = srv.launch("foot")
+    assert launch_fake["rule"] == "[workspace 99 silent]"
+    assert "agent" in out["note"] and "background=false" in out["note"]
+
+
+def test_the_next_launch_takes_the_next_workspace(launch_fake):
+    launch_fake["clients"] = [{"address": "0xmine", "workspace": {"id": 99, "name": "99"}}]
+    srv.launch("foot")
+    assert launch_fake["rule"] == "[workspace 98 silent]"
+
+
+def test_launch_background_false_opens_on_the_humans_workspace(launch_fake):
+    out = srv.launch("foot", background=False)
+    assert launch_fake["rule"] == "" and "note" not in out
+
+
+def test_launch_with_a_workspace_keeps_it(launch_fake):
+    srv.launch("foot", workspace="3")
+    assert launch_fake["rule"] == "[workspace 3 silent]"
+
+
+def test_launch_with_background_off_is_unchanged(launch_fake, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "0")
+    srv.launch("foot")
+    assert launch_fake["rule"] == ""
+
+
+def test_the_guarantee_launches_only_onto_agent_workspaces(launch_fake, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    with pytest.raises(srv.trust.TrustError, match="agent's workspaces"):
+        srv.launch("foot", workspace="3")
+    with pytest.raises(srv.trust.TrustError, match="HYPRUSE_BACKGROUND"):
+        srv.launch("foot", background=False)
+    assert launch_fake["rule"] is None
+    srv.launch("foot", workspace="98")
+    assert launch_fake["rule"] == "[workspace 98 silent]"
+
+
+def test_a_silent_launch_leaves_the_seat_baseline_alone(launch_fake):
+    # the human's seat did not change, so a change since the last action is
+    # still theirs for the strict seat guard to see
+    srv.launch("foot")
+    assert launch_fake["seat"] == 0
+    srv.launch("foot", background=False)
+    assert launch_fake["seat"] == 1
+
+
+def test_an_app_that_opened_elsewhere_says_whether_focus_moved(launch_fake):
+    # a single-instance app opens from its running process, on the human's
+    # workspace, and is moved after
+    launch_fake["lands"] = "1"
+    launch_fake["active"][:] = ["0xhuman", "0xother"]
+    out = srv.launch("foot")
+    assert ("movetoworkspacesilent", "99,address:0xnew") in launch_fake["dispatch"]
+    assert "focus" in out["note"] and "0xother" in out["note"] and "agent" in out["note"]
+    assert launch_fake["seat"] == 1  # our launch moved the seat
+
+
+def test_a_dry_run_names_the_agent_workspace(launch_fake, monkeypatch):
+    monkeypatch.setattr(srv.journal, "dry_run", lambda: True)
+    out = srv.launch("foot")
+    assert "[workspace 99 silent]" in out and launch_fake["rule"] is None

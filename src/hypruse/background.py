@@ -114,6 +114,17 @@ def is_agent_workspace(name: str) -> bool:
     return name.strip() in agent_workspaces()
 
 
+def require_agent_workspace(name: str, instead: str = "") -> None:
+    """Under the guarantee, refuse a workspace that is not the agent's: its
+    windows stay off the human's screen."""
+    if mode() == GUARANTEE and not is_agent_workspace(name):
+        refuse(
+            f"workspace {name} is not one of the agent's workspaces "
+            f"({', '.join(agent_workspaces())}), and the agent's windows stay on those",
+            instead,
+        )
+
+
 def on_agent_workspace(client: dict[str, Any]) -> bool:
     ws = client.get("workspace") or {}
     return any(_matches(s, ws) for s in agent_workspaces())
