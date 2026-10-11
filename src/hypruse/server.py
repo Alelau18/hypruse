@@ -363,7 +363,7 @@ def _ui_read(window: str = "", name: str = "", actionable: bool = True) -> list[
     cls = client.get("class", "the window")
     try:
         bus = a11y.connect()
-        app = a11y.app_for_pid(bus, client.get("pid"), title)
+        app = a11y.app_for_pid(bus, client.get("pid"), title, tuple(client["size"]))
         if app is None:
             return f"{cls} exposes no accessibility tree; use screenshot + zoom instead"
         frame = a11y.window_frame(bus, app[0], app[1], title, tuple(client["size"]))

@@ -28,7 +28,7 @@ def wired(monkeypatch):
 
 
 def test_ui_maps_window_extent_to_global(wired):
-    wired.setattr(srv.a11y, "app_for_pid", lambda bus, pid, title: ("a", "/root"))
+    wired.setattr(srv.a11y, "app_for_pid", lambda bus, pid, title, size=None: ("a", "/root"))
     wired.setattr(
         srv.a11y,
         "find_elements",
@@ -45,7 +45,8 @@ def test_ui_maps_window_extent_to_global(wired):
 def test_ui_defaults_to_active_window(wired):
     seen = {}
     wired.setattr(
-        srv.a11y, "app_for_pid", lambda bus, pid, title: seen.update(pid=pid) or ("a", "/root")
+        srv.a11y, "app_for_pid",
+        lambda bus, pid, title, size=None: seen.update(pid=pid) or ("a", "/root"),
     )
     wired.setattr(srv.a11y, "find_elements", lambda *a, **k: ([], False))
     srv.ui()  # no window -> active

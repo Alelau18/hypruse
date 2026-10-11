@@ -142,34 +142,62 @@ def apps(bus: Bus) -> list[tuple[str, str]]:
     return [(svc, path) for svc, path in children]
 
 
-def app_for_pid(bus: Bus, pid: int, title: str = "") -> tuple[str, str] | None:
+def app_for_pid(
+    bus: Bus, pid: int, title: str = "", size: tuple[int, int] | None = None
+) -> tuple[str, str] | None:
     """The application accessible whose connection PID matches the window
     (exact for single-process apps). A process can register several roots
     under one PID (Qt with QT_QPA_PLATFORMTHEME=gtk3 bridges through GTK and
     registers a second, toolkit-native root), and registration order says
     nothing about which one carries the window: the GTK bridge root comes
-    first and exposes no children. So the first same-PID root WITH children
-    wins, and the scan stops there: each PID lookup is a busctl call, and
-    the usual one-root app should not pay one per registered root. When
-    every same-PID root is empty the first is kept. Falls back to matching
-    a frame's name to the window title across all roots, which covers
-    multi-process apps (e.g. Electron/Qt whose a11y connection PID differs
-    from the window PID)."""
+    first and exposes no children, until the app opens a native GTK file,
+    color or font dialog, whose frame then hangs off it. So the first
+    same-PID root holding THIS window (a frame named like `title`, or of
+    the window's `size`) wins, and the scan stops there: each PID lookup is
+    a busctl call, and the usual one-root app should not pay one per
+    registered root. Without a match, the first same-PID root with
+    children, then the first empty one. Falls back to matching a frame's
+    name to the window title across all roots, which covers multi-process
+    apps (e.g. Electron/Qt whose a11y connection PID differs from the
+    window PID)."""
     registered = apps(bus)
-    first = None
+    nonempty = empty = None
     for svc, path in registered:
         if bus.conn_pid(svc) != pid:
             continue
-        if _children(bus, svc, path):  # an empty root cannot hold the window
+        frames = _children(bus, svc, path)
+        if not frames:  # an empty root cannot hold the window
+            empty = empty or (svc, path)
+            continue
+        if not (title or size) or _holds_window(bus, frames, title, size):
             return (svc, path)
-        first = first or (svc, path)
-    if first:
-        return first
+        nonempty = nonempty or (svc, path)
+    if nonempty or empty:
+        return nonempty or empty
     if title:
         for svc, path in registered:
             if _has_frame_named(bus, svc, path, title):
                 return (svc, path)
     return None
+
+
+def _holds_window(
+    bus: Bus,
+    frames: list[tuple[str, str]],
+    title: str,
+    size: tuple[int, int] | None,
+) -> bool:
+    """Whether one of these toplevel frames is the window, by window_frame's
+    own criteria: its name is the title, or its extent is the window's size
+    (Chrome's frame names never equal its titles)."""
+    if title and any(_name(bus, fs, fp) == title for fs, fp in frames):
+        return True
+    if size:
+        for fs, fp in frames:
+            ext = _window_extents(bus, fs, fp)
+            if ext and (ext[2], ext[3]) == tuple(size):
+                return True
+    return False
 
 
 def _has_frame_named(bus: Bus, svc: str, path: str, title: str) -> bool:

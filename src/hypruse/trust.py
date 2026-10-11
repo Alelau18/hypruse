@@ -671,7 +671,9 @@ def guard_password_field(client: dict[str, Any], allow_auth: bool) -> None:
         return
     try:
         bus = a11y.connect()
-        app = a11y.app_for_pid(bus, client.get("pid"), client.get("title", ""))
+        app = a11y.app_for_pid(
+            bus, client.get("pid"), client.get("title", ""), tuple(client.get("size") or ()) or None
+        )
         role = a11y.focused_role(bus, app[0], app[1]) if app else None
     except Exception:
         return  # unreadable tree: the class check is the real guarantee

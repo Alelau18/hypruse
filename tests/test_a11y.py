@@ -415,3 +415,26 @@ def test_state_decoding_two_words():
     bus = FakeBus({("a", "/n"): {"role": 43, "name": "b", "extent": (0, 0, 1, 1),
                                  "states": {30, 32}, "children": []}})
     assert a11y._states(bus, "a", "/n") == {30, 32}
+
+
+# A Qt app under QT_QPA_PLATFORMTHEME=gtk3 shows NATIVE GTK file, color and
+# font dialogs: while one is open the GTK bridge root has children too,
+# but they are the dialog, not the window being asked about.
+@pytest.mark.parametrize("order", ["gtk-first", "qt-first"])
+def test_app_for_pid_takes_the_root_that_holds_this_window(monkeypatch, order):
+    gtk, qt = ("gtk", "/root"), ("qt", "/root")
+    nodes = {
+        gtk: {"role": 75, "name": "qml6", "children": [("gtk", "/dialog")]},
+        ("gtk", "/dialog"): {"role": 23, "name": "Open File", "extent": (0, 0, 600, 400),
+                             "children": []},
+        qt: {"role": 75, "name": "Qml Runtime", "children": [("qt", "/main")]},
+        ("qt", "/main"): {"role": 23, "name": "Editor", "extent": (0, 0, 1200, 800),
+                          "children": []},
+    }
+    bus = FakeBus(nodes, pids={"gtk": 42, "qt": 42})
+    roots = [gtk, qt] if order == "gtk-first" else [qt, gtk]
+    monkeypatch.setattr(a11y, "apps", lambda _: roots)
+    assert a11y.app_for_pid(bus, 42, title="Editor") == qt
+    assert a11y.app_for_pid(bus, 42, title="Open File") == gtk
+    # by size when the title does not match (Chrome's frame names never do)
+    assert a11y.app_for_pid(bus, 42, title="x", size=(1200, 800)) == qt
