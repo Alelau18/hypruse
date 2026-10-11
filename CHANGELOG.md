@@ -4,6 +4,52 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.12.1] - 2026-10-11
+
+Fixes from a review of 0.12.0.
+
+### Fixed
+- **Screenshots.** `visible` is false for an inactive tab in a group and
+  for a window behind a fullscreen sibling, not just for a window on a
+  hidden workspace; `zoom` refuses those, and refusals say which case it
+  is. Window captures report `source`: `"window"` when grim captured the
+  window itself, `"screen"` when it fell back to cropping the screen, with
+  a note that anything over the window shows in its place. An XWayland app
+  with its own menu, combo list or tooltip open is cropped from the
+  screen, since a window capture would leave the menu out. The hint for a
+  hidden window says to capture again after bringing it forward, instead
+  of promising the old coordinates still hold, and in read-only mode it
+  says to ask the human rather than naming the `hypr` tool. A missing grim
+  or the byte budget is reported as itself. A hidden window caught
+  mid-animation is retried for up to about a second, and `stable=true`
+  keeps its last good frame when one capture fails.
+- **Trust guards.** A layer whose namespace contains "polkit" counts as an
+  authentication prompt, so the prompts end-4's dots (`quickshell:polkit`)
+  and DankMaterialShell draw are covered as well as Omarchy 4's. When the
+  layer list cannot be read, `pointer`, `click_ui` and `keyboard` refuse
+  instead of letting input through to a prompt they cannot rule out,
+  unless `allow_auth` is passed or `HYPRUSE_AUTH_GUARD=0`. That setting now
+  lifts the typing refusal for a polkit layer too, as the README says. A
+  click is refused when any polkit layer covers the point, even one under
+  an on-screen keyboard. Omarchy's lock preview is no longer treated as a
+  lock screen (refusals say a click dismisses it), and its reminders,
+  Wi-Fi QR and speed test overlays count as launchers. A process name the
+  kernel cut mid-character no longer crashes the lock check.
+- **Hyprland 0.57 workspaces.** Events name a renamed workspace by its
+  number, so `wait_for(match="web")` never matched it and a `sequence`
+  stopped on its own switch there. Both now know the display name. CLI
+  output quotes workspace names.
+- **Qt apps with a native GTK dialog open.** `ui`, `marks` and `click_ui`
+  on the main window read the main window, not the dialog.
+- The live lock test checks the real `hyprctl -j locked` reply.
+
+### Added
+- `hypruse doctor` says whether grim can capture a window itself (`-T`,
+  grim 1.5+).
+
+### Changed
+- Requires `mcp` 1.14 or newer; older versions failed at startup.
+
 ## [0.12.0] - 2026-10-08
 
 ### Fixed
