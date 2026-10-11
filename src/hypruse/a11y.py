@@ -424,6 +424,15 @@ def focused_role(bus: Bus, app_svc: str, app_path: str, max_nodes: int = 200) ->
 _EDITABLE = "org.a11y.atspi.EditableText"
 
 
+def current_value(bus: Bus, svc: str, path: str) -> dict[str, Any]:
+    """The element's reading as `ui` reports it (checked, value, percent),
+    for reading a background action back; {} when it carries none."""
+    try:
+        return element_value(bus, svc, path, _role_num(bus, svc, path), _states(bus, svc, path))
+    except A11yError:
+        return {}
+
+
 def has_action(bus: Bus, svc: str, path: str) -> bool:
     """Whether the element has an action to invoke (a button, a check box),
     which is what a background press needs."""

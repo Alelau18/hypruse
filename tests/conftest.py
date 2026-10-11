@@ -67,3 +67,13 @@ def compositor_lock_unknown(monkeypatch):
     to be running the suite.
     """
     monkeypatch.setattr(trust, "_compositor_locked", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def foreground_by_default(monkeypatch):
+    """HYPRUSE_BACKGROUND=0 (0.12 behaviour) unless a test says otherwise.
+
+    The tests written before background mode assert foreground behaviour;
+    background tests unset it to get the automatic default.
+    """
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "0")

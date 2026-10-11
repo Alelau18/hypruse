@@ -97,7 +97,7 @@ def test_readonly_marks_hint_does_not_advertise_click_ui(reloaded, monkeypatch):
     )
     monkeypatch.setattr(
         module, "_ui_read",
-        lambda w="", name="", actionable=True: [
+        lambda w="", name="", actionable=True, handles=False: [
             {"role": "button", "name": "Ok", "x": 5, "y": 5, "clickable": True}
         ],
     )

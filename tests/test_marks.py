@@ -44,7 +44,7 @@ def wired(monkeypatch):
     monkeypatch.setattr(srv, "_resolve_window", lambda w="": client)
     monkeypatch.setattr(
         srv, "_ui_read",
-        lambda w="", name="", actionable=True: [
+        lambda w="", name="", actionable=True, handles=False: [
             e for e in ELEMENTS if name.lower() in e["name"].lower()
         ],
     )
@@ -121,7 +121,8 @@ def test_marks_builds_legend_and_stores_relative_offsets(wired, monkeypatch):
     assert [x["mark"] for x in legend] == [1, 2, 3]
     assert legend[2]["value"] == "hi"
     # stored offsets are window-relative, re-anchored at click time
-    assert srv._last_marks["items"][1] == {"dx": 50, "dy": 30, "label": "push button 'Save'"}
+    assert srv._last_marks["items"][1] == {"dx": 50, "dy": 30, "label": "push button 'Save'",
+                                           "role": "push button"}
     assert out[0].text == "pkg:6"  # the MARKED image was packaged, not the original
 
 
@@ -184,7 +185,7 @@ def test_click_ui_then_ui_observes_the_clicked_window(wired, monkeypatch):
     # the window the agent clicked, not whatever holds focus afterwards
     reads = []
 
-    def ui_read(w="", name="", actionable=True):
+    def ui_read(w="", name="", actionable=True, handles=False):
         reads.append(w)
         return [e for e in ELEMENTS if name.lower() in e["name"].lower()]
 
@@ -495,7 +496,7 @@ def test_click_ui_clicks_nothing_under_the_permission_prompt(wired, monkeypatch)
 def test_click_ui_refuses_a_tiled_target_on_another_monitor(wired, monkeypatch):
     wide = dict(wired["client"], at=[1500, 50], size=[960, 1000])
     monkeypatch.setattr(srv, "_resolve_window", lambda w="": wide)
-    monkeypatch.setattr(srv, "_ui_read", lambda w="", name="", actionable=True: [
+    monkeypatch.setattr(srv, "_ui_read", lambda w="", name="", actionable=True, handles=False: [
         {"role": "push button", "name": "Save", "x": 2000, "y": 300, "clickable": True}])
     _scene(monkeypatch, [])
     with pytest.raises(srv.trust.TrustError, match="own monitor"):

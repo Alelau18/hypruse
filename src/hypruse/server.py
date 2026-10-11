@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from hypruse import __version__, a11y, events, hyprctl, journal, safety, session, trust
+from hypruse import background as bg
 from hypruse import clipboard as clip
 from hypruse import input as hinput
 from hypruse import screenshot as shot
@@ -334,6 +335,13 @@ def _resolve_window(window: str) -> dict[str, Any]:
     return client
 
 
+def _active_address() -> str | None:
+    """The address of the window the human is in, or None."""
+    with contextlib.suppress(Exception):
+        return (hyprctl.query("activewindow") or {}).get("address")
+    return None
+
+
 def _active_client() -> dict[str, Any] | None:
     """The focused window's client, or None when nothing is focused (a bare
     key press must still work). Used by the trust guards."""
@@ -356,7 +364,9 @@ def _guarded_active_client() -> dict[str, Any] | None:
     # HyprctlError (IPC down/timeout) propagates: the guard fails closed
 
 
-def _ui_read(window: str = "", name: str = "", actionable: bool = True) -> list[Any] | str:
+def _ui_read(
+    window: str = "", name: str = "", actionable: bool = True, handles: bool = False
+) -> list[Any] | str:
     """Shared body of the `ui` tool: a window's accessible elements with
     global click points and current values, or a fall-back-to-vision
     message. Reused by `then='ui'` fusion and click-by-name resolution."""
@@ -395,6 +405,8 @@ def _ui_read(window: str = "", name: str = "", actionable: bool = True) -> list[
         for key in ("value", "percent", "checked"):  # present only where it applies
             if key in e:
                 item[key] = e[key]
+        if handles:  # for click_ui and marks: what a background press needs
+            item["_svc"], item["_path"] = e["svc"], e["path"]
         out.append(item)
     if not out:
         what = f"matching {name!r}" if name else "actionable"
@@ -526,7 +538,7 @@ def marks(window: str = "", name: str = "") -> list[Any] | str:
     safety.touch("marks")
     client = _resolve_window(window)
     addr = client["address"]
-    elements = _ui_read(addr, name=name)
+    elements = _ui_read(addr, name=name, handles=True)
     if isinstance(elements, str):
         return elements
     data, meta = _grab_env(window=addr, stable=True)
@@ -540,9 +552,11 @@ def marks(window: str = "", name: str = "") -> list[Any] | str:
     stored: dict[int, dict[str, Any]] = {}
     for i, e in enumerate(elements, start=1):
         points.append((i, round((e["x"] - ox) * scale), round((e["y"] - oy) * scale)))
-        legend.append({"mark": i, **e})
+        legend.append({"mark": i, **{k: v for k, v in e.items() if not k.startswith("_")}})
         stored[i] = {"dx": e["x"] - ax, "dy": e["y"] - ay,
-                     "label": f"{e['role']} {e['name']!r}"}
+                     "label": f"{e['role']} {e['name']!r}", "role": e["role"]}
+        if "_svc" in e:  # a background press needs the control itself, not its point
+            stored[i]["svc"], stored[i]["path"] = e["_svc"], e["_path"]
     global _last_marks
     # class and time travel with the numbering: a later click_ui(mark=N)
     # checks both, since the CLI carries this record across processes and an
@@ -824,6 +838,7 @@ def click_ui(
     double: bool = False,
     then: str = "none",
     allow_auth: bool = False,
+    background: bool | None = None,
 ) -> list[Any] | str:
     """Click a control by its accessible NAME, or by a `mark` number from
     the last `marks` capture, in ONE call: the exact coordinate comes from
@@ -870,9 +885,11 @@ def click_ui(
         item = _last_marks["items"][mark]
         x, y = client["at"][0] + item["dx"], client["at"][1] + item["dy"]
         desc = f"mark {mark} ({item['label']})"
+        control = {"_svc": item.get("svc"), "_path": item.get("path"),
+                   "role": item.get("role", "")}
     else:
         client = _resolve_window(window)
-        elements = _ui_read(client["address"], name=name)
+        elements = _ui_read(client["address"], name=name, handles=True)
         if isinstance(elements, str):
             return elements
         exact = [e for e in elements if e["name"].lower() == name.lower()]
@@ -882,15 +899,19 @@ def click_ui(
                 raise ValueError(f"index {index} out of range: {len(pool)} candidates")
             pool = [pool[index]]
         if len(pool) > 1:
+            public = [{k: v for k, v in c.items() if not k.startswith("_")} for c in pool]
             return [
                 _text(f"{name!r} is ambiguous ({len(pool)} candidates); call again "
                     "with index=N (0-based) or a more specific name:",
                 ),
-                _text(json.dumps(pool)),
+                _text(json.dumps(public)),
             ]
         e = pool[0]
         x, y = e["x"], e["y"]
         desc = f"{e['role']} {e['name']!r}"
+        control = e
+    if bg.decide(client["address"] == _active_address(), background):
+        return _click_in_background(client, control, desc, then, allow_auth)
     trust.guard_client(client)  # confinement
     trust.guard_auth_client(client, allow_auth)
     # a locked session, or a layer over the point, would swallow the click
@@ -932,6 +953,53 @@ def click_ui(
         then,
         window=client["address"],
     )
+
+
+# roles whose "click" is taking keyboard focus, which GrabFocus does inside
+# the app without touching the human's focus
+_TEXT_ROLE_NAMES = frozenset({"text", "entry", "password text", "terminal"})
+
+
+def _click_in_background(
+    client: dict[str, Any], control: dict[str, Any], desc: str, then: str, allow_auth: bool
+) -> list[Any] | str:
+    """click_ui with no pointer and no focus change: the control's own
+    accessibility action (GrabFocus for a text field), read back after."""
+    trust.guard_client(client)  # confinement (the agent's workspaces under the guarantee)
+    trust.guard_auth_client(client, allow_auth)
+    trust.guard_session_lock(True, allow_auth)
+    svc, path = control.get("_svc"), control.get("_path")
+    if not isinstance(svc, str) or not isinstance(path, str):
+        bg.refuse("this control was not resolved through the accessibility tree")
+    cls = client.get("class", "")
+    is_text = control.get("role", "") in _TEXT_ROLE_NAMES
+    how = "gave it the app's own focus" if is_text else "pressed it"
+    if journal.dry_run():
+        return _acted(f"{_DRY} {desc} in {cls}: would be {how} through its "
+                      "accessibility action", then, window=client["address"])
+    bus = a11y.connect()
+    if not is_text and not a11y.has_action(bus, svc, path):
+        bg.refuse("this control has no accessibility action")
+    before = a11y.current_value(bus, svc, path)
+    ok = a11y.grab_focus(bus, svc, path) if is_text else a11y.do_action(bus, svc, path)
+    if not ok:
+        bg.refuse("the app did not accept the accessibility action")
+    time.sleep(0.05)  # let the app apply it before reading back
+    verb = "focused" if is_text else "pressed"
+    msg = (f"{verb} {desc} through its accessibility action (no pointer, your focus "
+           f"untouched) in {cls}")
+    if not any(c.get("address") == client["address"] for c in hyprctl.query("clients")):
+        msg += "; the window closed"
+    else:
+        after = a11y.current_value(bus, svc, path)
+        if after != before:
+            msg += "; now: " + ", ".join(
+                f"{k}={str(v).lower() if isinstance(v, bool) else repr(v)}"
+                for k, v in after.items()
+            )
+        elif before:
+            msg += "; no change seen"
+    return _acted(msg, then, window=client["address"])
 
 
 _ADDR = re.compile(r"^0x[0-9a-fA-F]+$")

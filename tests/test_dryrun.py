@@ -112,7 +112,7 @@ def test_keyboard_does_not_focus_the_target_window(dry):
 def test_click_ui(dry, monkeypatch):
     monkeypatch.setattr(
         srv, "_ui_read",
-        lambda window="", name="", actionable=True: [
+        lambda window="", name="", actionable=True, handles=False: [
             {"role": "push button", "name": "OK", "x": 40, "y": 50, "clickable": True}
         ],
     )

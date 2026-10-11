@@ -304,7 +304,7 @@ def test_marks_rearms_the_strict_seat_guard(monkeypatch):
     )
     monkeypatch.setattr(
         srv, "_ui_read",
-        lambda w="", name="", actionable=True: [
+        lambda w="", name="", actionable=True, handles=False: [
             {"role": "button", "name": "Ok", "x": 5, "y": 5, "clickable": True}
         ],
     )
