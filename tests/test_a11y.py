@@ -83,11 +83,12 @@ def test_busctl_timeout_becomes_a11yerror(monkeypatch):
 class FakeBus:
     """A canned AT-SPI tree. `nodes` maps (svc, path) -> dict with role
     (int), name, extent, states (set of bit indices), children [(svc,path)].
-    `pids` maps svc -> connection pid."""
+    `pids` maps svc -> connection pid, `toolkits` svc -> ToolkitName."""
 
-    def __init__(self, nodes, pids=None):
+    def __init__(self, nodes, pids=None, toolkits=None):
         self.nodes = nodes
         self.pids = pids or {}
+        self.toolkits = toolkits or {}
 
     def call(self, svc, path, iface, method, *sig):
         node = self.nodes[(svc, path)]
@@ -116,21 +117,29 @@ class FakeBus:
         if method == "GrabFocus":
             node["grabbed"] = True
             return [True]
-        if method == "GetCaretOffset":
-            return [node.get("caret", 0)]
         if method == "InsertText":
             pos, text = int(sig[1]), sig[2]  # sig = (signature, position, text, length)
+            n = int(sig[3])
+            if self.toolkits.get(svc) == "Qt":  # QString::resize: UTF-16 units, padded
+                units = text.encode("utf-16-le")[:2 * n].decode("utf-16-le", errors="ignore")
+                text = units + "\0" * (n - len(text.encode("utf-16-le")) // 2)
+            else:  # GTK (ATK) reads the length in BYTES, as UTF-8
+                text = text.encode()[:n].decode(errors="ignore")
             old = node.get("text", "")
             node["text"] = old[:pos] + text + old[pos:]
             return [True]
         raise AssertionError(method)
 
     def prop(self, svc, path, iface, name):
+        if name == "ToolkitName":
+            return self.toolkits.get(svc, "GTK")
         node = self.nodes[(svc, path)]
         if name == "CharacterCount":
             return len(node.get("text", ""))
         if name == "NActions":  # a property in AT-SPI, not a method
             return node.get("n_actions", 1)
+        if name == "CaretOffset":  # likewise a property
+            return node.get("caret", 0)
         if name in ("CurrentValue", "MinimumValue", "MaximumValue"):
             return node[{"CurrentValue": "cur", "MinimumValue": "min", "MaximumValue": "max"}[name]]
         return node.get("name", "")
@@ -512,3 +521,21 @@ def test_editable_fields_lists_only_editable_text():
         b: {"role": 79, "name": "", "children": [], "states": ed},
     }
     assert a11y.editable_fields(FakeBus(nodes), *root) == [("app", "/a", 61), ("app", "/b", 79)]
+
+
+
+def test_insert_text_passes_its_length_in_bytes():
+    entry = ("app", "/entry")
+    bus = FakeBus({entry: {"role": 79, "name": "", "children": [], "text": "", "caret": 0}})
+    assert a11y.insert_text(bus, *entry, " \u2713 ok")
+    assert a11y.text_of(bus, *entry) == " \u2713 ok"  # all of it, not cut at 5 bytes
+
+
+def test_insert_text_counts_the_length_in_utf16_for_qt():
+    # Qt resizes the text to the length in UTF-16 units: a byte count
+    # would pad it with garbage characters
+    entry = ("qtapp", "/entry")
+    bus = FakeBus({entry: {"role": 79, "name": "", "children": [], "text": "", "caret": 0}},
+                  toolkits={"qtapp": "Qt"})
+    assert a11y.insert_text(bus, *entry, " \u2713 \U0001f600 ok")
+    assert a11y.text_of(bus, *entry) == " \u2713 \U0001f600 ok"

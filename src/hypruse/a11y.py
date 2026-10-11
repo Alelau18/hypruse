@@ -506,10 +506,19 @@ def text_of(bus: Bus, svc: str, path: str) -> str:
 def insert_text(bus: Bus, svc: str, path: str, text: str) -> bool:
     """Insert `text` at the caret, as typing would, with no keyboard."""
     try:
-        caret = int(bus.call(svc, path, _TEXT, "GetCaretOffset")[0])
+        caret = int(bus.prop(svc, path, _TEXT, "CaretOffset"))  # a property, not a method
+        # The length is read differently per toolkit: GTK and the other ATK
+        # apps take UTF-8 bytes (a character count cuts the text short), Qt
+        # resizes the text to that many UTF-16 units (a byte count pads it)
+        try:
+            kit = bus.prop(svc, _ROOT, "org.a11y.atspi.Application", "ToolkitName")
+            qt = str(kit).lower() == "qt"
+        except A11yError:
+            qt = False
+        length = len(text.encode("utf-16-le")) // 2 if qt else len(text.encode())
         return bool(
             bus.call(svc, path, _EDITABLE, "InsertText", "isi",
-                     str(max(caret, 0)), text, str(len(text)))[0]
+                     str(max(caret, 0)), text, str(length))[0]
         )
     except (A11yError, IndexError, ValueError):
         return False

@@ -1006,12 +1006,13 @@ def _keyboard_in_background(
                 return _acted(
                     f"typed {len(text)} characters into the text field in {cls} through the "
                     f"accessibility interface (your focus untouched); {seen}", then, window=addr)
+        why = ("its text field did not accept accessibility text" if field is not None
+               else f"{cls} has no accessibility text field to put it in")
         chords = []
         for ch in text:
             chord = kmap.chord(ch)
             if chord is None:
-                bg.refuse(f"{ch!r} has no key on the {layout[0]} keyboard layout, and {cls} "
-                          "has no accessibility text field to put it in")
+                bg.refuse(f"{ch!r} has no key on the {layout[0]} keyboard layout, and {why}")
             chords.append(chord)
     else:
         mods, key = hinput.parse_combo(keys)
