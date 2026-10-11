@@ -111,6 +111,18 @@ class FakeBus:
         if method == "DoAction":
             node["done"] = True
             return [True]
+        if method == "GetNActions":
+            return [node.get("n_actions", 1)]
+        if method == "GrabFocus":
+            node["grabbed"] = True
+            return [True]
+        if method == "GetCaretOffset":
+            return [node.get("caret", 0)]
+        if method == "InsertText":
+            pos, text = int(sig[1]), sig[2]  # sig = (signature, position, text, length)
+            old = node.get("text", "")
+            node["text"] = old[:pos] + text + old[pos:]
+            return [True]
         raise AssertionError(method)
 
     def prop(self, svc, path, iface, name):
@@ -438,3 +450,27 @@ def test_app_for_pid_takes_the_root_that_holds_this_window(monkeypatch, order):
     assert a11y.app_for_pid(bus, 42, title="Open File") == gtk
     # by size when the title does not match (Chrome's frame names never do)
     assert a11y.app_for_pid(bus, 42, title="x", size=(1200, 800)) == qt
+
+
+
+def test_has_action_and_text_primitives():
+    entry = ("app", "/entry")
+    nodes = {entry: {"role": 79, "name": "", "children": [], "text": "ab", "caret": 1,
+                     "n_actions": 0, "states": {a11y._STATE_FOCUSED}}}
+    bus = FakeBus(nodes)
+    assert a11y.has_action(bus, *entry) is False
+    assert a11y.grab_focus(bus, *entry) is True
+    assert a11y.insert_text(bus, *entry, "XY") is True
+    assert a11y.text_of(bus, *entry) == "aXYb"  # inserted at the caret
+
+
+def test_focused_text_finds_the_focused_field_in_a_hidden_window():
+    # a hidden window's subtree may not report SHOWING, so the walk must not
+    # depend on it
+    root, frame, entry = ("app", "/root"), ("app", "/frame"), ("app", "/entry")
+    nodes = {
+        root: {"role": 75, "name": "app", "children": [frame], "states": set()},
+        frame: {"role": 23, "name": "w", "children": [entry], "states": set()},
+        entry: {"role": 79, "name": "", "children": [], "states": {a11y._STATE_FOCUSED}},
+    }
+    assert a11y.focused_text(FakeBus(nodes), *root) == ("app", "/entry", 79)

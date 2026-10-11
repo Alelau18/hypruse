@@ -421,6 +421,67 @@ def focused_role(bus: Bus, app_svc: str, app_path: str, max_nodes: int = 200) ->
     return None
 
 
+_EDITABLE = "org.a11y.atspi.EditableText"
+
+
+def has_action(bus: Bus, svc: str, path: str) -> bool:
+    """Whether the element has an action to invoke (a button, a check box),
+    which is what a background press needs."""
+    try:
+        return int(bus.call(svc, path, _ACTION, "GetNActions")[0]) > 0
+    except (A11yError, IndexError, ValueError):
+        return False
+
+
+def grab_focus(bus: Bus, svc: str, path: str) -> bool:
+    """Move the app's OWN keyboard focus to this element. Not the
+    compositor's: the human's focus is untouched."""
+    try:
+        return bool(bus.call(svc, path, _COMPONENT, "GrabFocus")[0])
+    except (A11yError, IndexError):
+        return False
+
+
+def text_of(bus: Bus, svc: str, path: str) -> str:
+    """A text element's full contents, or "" when it cannot be read."""
+    try:
+        n = int(bus.prop(svc, path, _TEXT, "CharacterCount"))
+        return str(bus.call(svc, path, _TEXT, "GetText", "ii", "0", str(n))[0])
+    except (A11yError, IndexError, ValueError):
+        return ""
+
+
+def insert_text(bus: Bus, svc: str, path: str, text: str) -> bool:
+    """Insert `text` at the caret, as typing would, with no keyboard."""
+    try:
+        caret = int(bus.call(svc, path, _TEXT, "GetCaretOffset")[0])
+        return bool(
+            bus.call(svc, path, _EDITABLE, "InsertText", "isi",
+                     str(max(caret, 0)), text, str(len(text)))[0]
+        )
+    except (A11yError, IndexError, ValueError):
+        return False
+
+
+def focused_text(
+    bus: Bus, app_svc: str, app_path: str, max_nodes: int = 200
+) -> tuple[str, str, int] | None:
+    """(svc, path, role) of the element holding the app's own keyboard focus
+    in this window when it is a text field (password fields included, so a
+    caller can refuse them), else None. Walks every child within the
+    budget: a hidden window's subtree may not report SHOWING."""
+    stack: list[tuple[str, str]] = [(app_svc, app_path)]
+    visited = 0
+    while stack and visited < max_nodes:
+        svc, path = stack.pop()
+        visited += 1
+        if _STATE_FOCUSED in _states(bus, svc, path):
+            role = _role_num(bus, svc, path)
+            return (svc, path, role) if role in _TEXT_ROLES | {PASSWORD_ROLE} else None
+        stack.extend(reversed(_children(bus, svc, path)))
+    return None
+
+
 def do_action(bus: Bus, svc: str, path: str, index: int = 0) -> bool:
     """Invoke an accessible's action (default index 0, usually the click),
     with no pointer, so it works even when the window is not visible."""
