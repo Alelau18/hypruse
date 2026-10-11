@@ -17,7 +17,8 @@ src/hypruse/
   server.py      the tools (clipboard is opt-in), docstrings = the
                  agent-facing API; the FastMCP app is built on first use
   hyprctl.py     all Hyprland IPC (queries + dispatchers), the config-manager
-                 probe and the Lua dialect, state trimming, keybind decoding
+                 probe and the Lua dialect, state trimming, keybind decoding,
+                 sendshortcut and the active keyboard layout
   events.py      socket2 event stream: parser + wait primitive
   wire.py        raw Wayland client for zwlr_virtual_pointer_v1
   input.py       pointer orchestration (movecursor + wire) and wtype keyboard
@@ -25,7 +26,13 @@ src/hypruse/
   a11y.py        AT-SPI accessibility-tree reader over D-Bus (busctl): named
                  controls, current values, exact coords, and focused-role
                  lookup; backs ui, marks, click_ui, then='ui', and the
-                 auth-guard password-field check
+                 auth-guard password-field check; also the background
+                 primitives (DoAction, GrabFocus, InsertText, read-back)
+  background.py  background mode: the policy (HYPRUSE_BACKGROUND, the
+                 background= argument, the automatic rule) and the agent's
+                 workspace range (HYPRUSE_AGENT_WORKSPACES / _FILL)
+  keymap.py      libxkbcommon over ctypes: which key and modifiers type a
+                 character on the active layout, for sendshortcut
   trust.py       opt-in confinement, auth interlock, seat-contention guard,
                  and ownership marking (HYPRUSE_CONFINE/AUTH_GUARD/STRICT/MARK)
   journal.py     NDJSON record of every tool call (HYPRUSE_JOURNAL) and the
@@ -147,6 +154,63 @@ beacon pid, releases the button, clears the beacon) and the blunter
 6. `desktop` again to verify the world changed as expected (or fuse it:
    most acting tools take `then='desktop'|'screenshot'|'ui'`).
 
+## Background mode
+
+The agent can work in a window the human is not in without the human's
+cursor, keyboard focus or workspace. Nothing here needs a compositor
+plugin: every path is either an AT-SPI call into the app or a stock
+Hyprland dispatcher.
+
+`background.decide(target_is_active, explicit)` is the whole policy. The
+guarantee (`HYPRUSE_BACKGROUND=1`) answers background always and refuses
+an explicit `background=false`; otherwise an explicit argument wins; off
+(`=0`) answers foreground; automatic answers background for any window
+but the active one. `background.refuse()` words every refusal the same
+way: the reason, then what to do instead, which under the guarantee is to
+ask the human.
+
+- `click_ui` resolves the control as before, with its AT-SPI service and
+  path kept (marks store them too, so a mark works in the background).
+  `_click_in_background` runs the guards, then calls the control's
+  `DoAction`, or `GrabFocus` for a text field, and reads the control back
+  through `current_value` so the result says what changed.
+- `keyboard` with `window=` goes through `_keyboard_in_background`. Text
+  goes into the focused text field with `EditableText.InsertText` at the
+  caret. GTK reports no FOCUSED state inside an inactive window, so a
+  window with exactly one editable field uses that one. InsertText's
+  length is in UTF-8 bytes for GTK and the other ATK toolkits and in
+  UTF-16 units for Qt, so it is computed per `ToolkitName`. Without a
+  field, every character is mapped to a key on the active layout
+  (`keymap.py`, from `hyprctl devices`) before anything is sent, so a
+  character with no key refuses without half-typing; then each chord goes
+  out as `sendshortcut`. Hyprland's sendshortcut (`Actions::pass`) moves
+  keyboard focus to the target, sends the key and restores focus inside
+  one event-loop step, so the human's own keys cannot interleave, but it
+  delivers to the focused window when both windows are XWayland, which is
+  why an XWayland target is refused. It also finds the keycode on the
+  layout in use but sends it with layout group 0, so the keys are mapped
+  on the first layout and refused while the keyboard is on another
+  (`hyprctl.layout_group()`).
+- `pointer` moves the real cursor and is never background.
+  `_pointer_policy` asks `trust.other_window_at` where the input lands,
+  with `check_click_point`'s hit-test order, and refuses it when that is a
+  window other than the active one. A move counts, since focus follows
+  the mouse.
+- `launch` with no workspace asks `background.next_workspace` for the
+  first workspace in the range with room and none of the human's windows,
+  and launches silently there. A silent launch leaves the seat baseline
+  alone, so a change the human made since the last action is still theirs
+  for `guard_seat` to see.
+- Under the guarantee, `trust._confine_scope()` is `("agent", explicit)`:
+  a window must be on an agent workspace and inside `HYPRUSE_CONFINE`
+  when that is set too, so an explicit scope narrows the guarantee and
+  never widens it. `hypr` refuses workspace, focus_window and fullscreen,
+  and `use_bind` is refused through `guard_use_bind`.
+
+Hidden windows' pixels can be stale (many apps stop drawing while hidden),
+so the accessibility tree is the source of truth in the background and
+results are read back from it, never from a screenshot.
+
 ## Trust layers
 
 Four opt-in env flags (`HYPRUSE_CONFINE`, `HYPRUSE_AUTH_GUARD`,
@@ -245,6 +309,12 @@ approves would not be the plan that runs.
    region parsing, state trimming against fixtures.
 2. **Live seat-safe** (`pytest -m e2e`): real session, zero input events,
    including a virtual-pointer create/destroy handshake.
-3. **Supervised** (`scripts/e2e_input.py`): the only tier that clicks and
-   types; countdown, self-verifying via kitty remote control, restores
-   focus. Never wire this into anything automatic.
+3. **Live background** (`pytest -m background`, hands-off): opens yad
+   forms on the agent's workspaces, presses and types in the background,
+   reads the results back from the accessibility tree, and asserts the
+   human's active window, workspace and cursor are unchanged after every
+   step, and that the compositor's events show no focus on its windows and
+   no switch to an agent workspace. It never uses the pointer.
+4. **Supervised** (`scripts/e2e_input.py`): the only tier that clicks and
+   types on the human's screen; countdown, self-verifying via kitty remote
+   control, restores focus. Never wire this into anything automatic.

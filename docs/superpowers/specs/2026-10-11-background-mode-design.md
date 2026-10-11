@@ -38,7 +38,8 @@ window instead of the target.
 
 ## Policy: who decides
 
-Three layers. The strictest one that applies wins.
+Three layers. The guarantee overrides everything; without it, a call's own
+`background` argument wins over the automatic rule.
 
 1. Session guarantee, `HYPRUSE_BACKGROUND=1`. Every acting tool works only
    on windows on the agent's workspaces, never focuses a window, never
@@ -80,20 +81,24 @@ cli-state).
 
 | Tool | Background behaviour |
 |---|---|
-| `click_ui` | Press the control with its AT-SPI action. No pointer, no focus. A text field gets the app's own focus through `GrabFocus`. A control with no action is refused. Marks also store each control's AT-SPI service and path, so `click_ui(mark=N)` works in the background. |
-| `keyboard`, type, with `window=` | Into a focused text field: AT-SPI `EditableText.InsertText` at the caret, any text. Otherwise `sendshortcut` key by key, with SHIFT for capitals and shifted symbols; a character with no key (emoji, CJK) is refused on that path. |
+| `click_ui` | Press the control with its AT-SPI action. No pointer, no focus. A text field gets the app's own focus through `GrabFocus`. A control with no action is refused, and so is a right or double click (the action is the control's primary one). Marks also store each control's AT-SPI service and path, so `click_ui(mark=N)` works in the background. |
+| `keyboard`, type, with `window=` | Into a focused text field, or the window's only one (GTK reports no focus inside an inactive window): AT-SPI `EditableText.InsertText` at the caret, any text. Otherwise `sendshortcut` key by key, mapped on the first keyboard layout with SHIFT and AltGr levels; a character with no key (emoji, CJK) is refused on that path before any key is sent, and so is a keyboard switched away from its first layout. |
 | `keyboard`, key combo, with `window=` | `sendshortcut` with the modifiers. |
 | `keyboard` without `window=` | Types into the window the human is in, as in 0.12. Refused under the guarantee, which requires `window=` on an agent workspace. |
-| `pointer` | Moves the real cursor, so it is foreground by nature. Automatic mode allows it over the window the human is in and refuses it over any other window. Refused under the guarantee. |
-| `launch` | Without a workspace, in automatic mode or under the guarantee: silently onto the next agent workspace. With a workspace: there, silently. With `background=false`: on the human's workspace, as in 0.12. |
-| `hypr` | Operations that do not move the human's view (close, move to a workspace, float, fullscreen) work on agent windows. `workspace` and `focus_window` change the human's view: allowed in automatic mode as an explicit request, refused under the guarantee. |
+| `pointer` | Moves the real cursor, so it is foreground by nature. Automatic mode allows it where its input lands on the window the human is in or on no window, and refuses it over any other window; a move counts, since focus follows the mouse. Refused under the guarantee. |
+| `launch` | Without a workspace, in automatic mode or under the guarantee: silently onto the next agent workspace. With a workspace: there, silently (under the guarantee, only an agent workspace). With `background=false`: on the human's workspace, as in 0.12. |
+| `hypr` | Operations that do not move the human's view (close, move to a workspace, float) work on agent windows; under the guarantee `move_window` takes only agent workspaces. `workspace`, `focus_window` and `fullscreen` (which acts on the focused window, so it focuses first) change the human's view: allowed in automatic mode as an explicit request, refused under the guarantee. |
 | `use_bind` | As in 0.12 in automatic mode. Refused under the guarantee, since a bind can do anything. |
 | `sequence` | Each step behaves like its tool. A `background` field on the sequence applies to every step. |
-| `screenshot`, `ui`, `marks`, `desktop`, `wait_for`, `zoom` | Unchanged. |
+| `screenshot`, `ui`, `marks`, `desktop`, `wait_for`, `zoom` | Unchanged, except that `ui` ends with a note for a window that is not on screen: its points are inside the window, and a pointer click at them would land on what the human sees. |
 
 `sendshortcut` is refused for an XWayland target, because Hyprland would
 deliver the key to the focused window when that window is XWayland too.
-AT-SPI text input does not have this problem.
+It also finds the keycode on the layout in use but sends it with layout
+group 0, so keys are mapped on the first layout and refused while the
+keyboard is on another. AT-SPI text input has neither problem. Its
+`InsertText` length is UTF-8 bytes for GTK and the other ATK toolkits and
+UTF-16 units for Qt, so it is computed per toolkit.
 
 ## Honest results
 

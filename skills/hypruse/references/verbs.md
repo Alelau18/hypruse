@@ -33,7 +33,7 @@ compact JSON.
 | 0 | delivered (acting verbs) or observed (observation verbs) |
 | 1 | runtime error: IPC down, window address gone, grim or wtype failed, no such bind, Lua bind |
 | 2 | usage: bad flag, missing argument, malformed JSON |
-| 3 | refused by a trust layer (confinement scope, authentication dialog, password field, locked session, launcher keyboard grab, strict-mode seat contention), or a mode gate (HYPRUSE_READONLY for acting verbs, HYPRUSE_CLIPBOARD unset for clipboard) |
+| 3 | refused by a trust layer (confinement scope, authentication dialog, password field, locked session, launcher keyboard grab, strict-mode seat contention), by background mode (something the background cannot do, with what works instead), or a mode gate (HYPRUSE_READONLY for acting verbs, HYPRUSE_CLIPBOARD unset for clipboard) |
 | 4 | ran but produced no result: wait_for timeout, launch saw no window, ui or marks found no accessibility tree or no elements, click_ui ambiguous or no tree, sequence stopped early |
 
 **Captures** (`screenshot`, `zoom`, `marks`) never print bytes. Line 1 is the
@@ -54,12 +54,29 @@ except `launch` and `clipboard` takes `--then none|desktop|ui|screenshot`
 except `sequence`, whose default is `desktop`). `--dry-run` means (run every
 argument check and every trust guard, deliver nothing; it can only turn dry
 run on). `pointer`, `keyboard` and `click_ui` take `--allow-auth`, the only
-per-call override of a trust guard. With `--then`, the observation follows the
-result line in its own default text form.
+per-call override of a trust guard. `pointer`, `keyboard`, `click_ui`,
+`launch` and `sequence` take `--background` or `--foreground` (see below).
+With `--then`, the observation follows the result line in its own default
+text form.
+
+**Background mode.** By default an action on the window the human is in
+runs on their screen, and an action on any other window runs in the
+background, without their cursor, keyboard focus or workspace: `click_ui`
+presses the control through its accessibility action, `keyboard` with
+`--window` types into the window's text field or sends the keys to that
+window alone with Hyprland's sendshortcut, and `launch` with no
+`--workspace` opens the app on one of the agent's own workspaces (99 down
+to 90 by default). `pointer` is the human's cursor and never runs in the
+background. `--background` forces the background and refuses what cannot be
+done there; `--foreground` does the action on the human's screen. Under
+HYPRUSE_BACKGROUND=1 (the guarantee) everything stays on the agent's
+workspaces and `--foreground` is refused. A refusal ends `so it cannot be
+done in the background: ...` and names what works instead.
 
 **Trust layers stay in the environment.** HYPRUSE_READONLY, HYPRUSE_CONFINE,
-HYPRUSE_AUTH_GUARD, HYPRUSE_STRICT, HYPRUSE_MARK, HYPRUSE_JOURNAL and
-HYPRUSE_DRYRUN are the owner's settings; no flag changes them.
+HYPRUSE_AUTH_GUARD, HYPRUSE_STRICT, HYPRUSE_MARK, HYPRUSE_JOURNAL,
+HYPRUSE_DRYRUN, HYPRUSE_BACKGROUND, HYPRUSE_AGENT_WORKSPACES and
+HYPRUSE_AGENT_FILL are the owner's settings; no flag changes them.
 
 **Bounds.** `wait_for --timeout` 1-60 s, `launch --wait` 1-30 s, `sequence`
 20 steps and 30 s total, so every verb returns well inside a 120 s shell
@@ -174,6 +191,11 @@ reason on stdout, for example
 `kitty exposes no accessibility tree; use screenshot + zoom instead` or
 `no elements matching 'Sav' in org.gnome.TextEditor`.
 
+A window that is not on screen (a hidden workspace, an inactive tab) ends
+with a `note 0x... is not on screen (...)` line: its points are inside the
+window, not on what the human sees, so press its controls with `click_ui`
+and never aim `pointer` at them.
+
 Notes: `@x,y` is the exact global click point. `value` is the typed text of
 an entry or a spinner's number, `percent` a slider's position, `checked` a
 box or toggle. Password fields never report contents and many dropdowns
@@ -280,7 +302,7 @@ hypruse pointer drag X Y TO_X TO_Y [--button B] [--allow-auth]
 hypruse pointer scroll DY [DX] [--at X Y] [--allow-auth]
 ```
 
-Plus `--then`, `--dry-run`, `--json`. Coordinates are global logical pixels.
+Plus `--background` / `--foreground`, `--then`, `--dry-run`, `--json`. Coordinates are global logical pixels.
 `click` and `scroll` without a point act at the current cursor. `DY > 0`
 scrolls content down (discrete wheel notches).
 
@@ -303,7 +325,11 @@ Notes: the last resort, after `click_ui` has nothing to offer and `zoom` has
 sharpened the estimate. `drag` guards both ends against confinement. A
 locked session refuses every action except `move`. `--allow-auth` overrides
 the refusal to click over a system authentication dialog, and only a human's
-explicit intent justifies it.
+explicit intent justifies it. The pointer is the human's own cursor: by
+default it is refused (exit 3) where its input would land on a window other
+than the one the human is in, a `move` included since focus follows the
+mouse, and it is refused outright under HYPRUSE_BACKGROUND=1 or with
+`--background`. Press a control in another window with `click_ui` instead.
 
 ## keyboard
 
@@ -312,17 +338,29 @@ hypruse keyboard type TEXT|- [--window ADDR] [--allow-auth]
 hypruse keyboard key COMBO [--window ADDR] [--allow-auth]
 ```
 
-Plus `--then`, `--dry-run`, `--json`. `TEXT` is literal and unicode-safe;
-`-` reads it from stdin. `COMBO` is `ctrl+shift+t`, `esc`, `F5`, `enter`,
-`tab`, `backspace`, `pgup`, `pgdn`, `up`/`down`/`left`/`right`, or any XKB
-keysym. `--window` focuses that window first (50 ms settle), so the keys
-land there.
+Plus `--background` / `--foreground`, `--then`, `--dry-run`, `--json`.
+`TEXT` is literal and unicode-safe; `-` reads it from stdin. `COMBO` is
+`ctrl+shift+t`, `esc`, `F5`, `enter`, `tab`, `backspace`, `pgup`, `pgdn`,
+`up`/`down`/`left`/`right`, or any XKB keysym. `--window` says where the
+keys go. The window the human is in is focused first (50 ms settle) and
+typed into. Any other window gets them in the background: text goes into
+its text field through the accessibility interface when the window has a
+focused field or only one, otherwise key by key through sendshortcut on the
+keyboard layout, and a combo always goes through sendshortcut.
 
-Output:
+Output, on the human's window:
 
 ```
 typed 5 characters into 0x55a447938f40
 pressed ctrl+l into 0x55a447938f40
+```
+
+In the background:
+
+```
+typed 12 characters into the text field in yad through the accessibility interface (the human's focus untouched); now 'Ada Lovelace'
+sent 5 keys to 0x564859226b80 (yad) with sendshortcut (the human's focus untouched)
+sent ctrl+a to 0x564859226b80 (yad) with sendshortcut (the human's focus untouched)
 ```
 
 Exit codes: 0, 1, 2, 3.
@@ -335,8 +373,13 @@ handles; compositor binds (`super+...`) go through `use_bind`, window and
 workspace actions through `hypr`. Refused (exit 3): a locked session, a
 launcher holding the grab while `--window` names a target, a window outside
 HYPRUSE_CONFINE, a system authentication dialog, a password field under
-HYPRUSE_AUTH_GUARD=strict. `type` of a secret is never right unless the user
-asked for it explicitly.
+HYPRUSE_AUTH_GUARD=strict (in the background, any password field without
+`--allow-auth`). Background refusals: a character the keyboard layout has
+no key for when the text cannot go through the accessibility interface
+(checked before any key is sent), an XWayland window on the sendshortcut
+path, a keyboard switched away from its first layout on that path, and no
+`--window` under HYPRUSE_BACKGROUND=1. `type` of a secret is never right
+unless the user asked for it explicitly.
 
 ## click_ui
 
@@ -345,7 +388,7 @@ hypruse click_ui NAME [--window ADDR] [--index I] [--button B] [--double] [--all
 hypruse click_ui --mark N [--button B] [--double] [--allow-auth]
 ```
 
-Plus `--then`, `--dry-run`, `--json`. Exactly one of `NAME` or `--mark`.
+Plus `--background` / `--foreground`, `--then`, `--dry-run`, `--json`. Exactly one of `NAME` or `--mark`.
 `NAME` is matched against the window's accessible names, exact match
 preferred, substring otherwise; `--index` is 0-based into the candidate list
 an ambiguous call printed. `--mark N` clicks a number from the last `marks`
@@ -356,6 +399,17 @@ Output:
 ```
 clicked push button 'Save' at (1204, 88) in org.gnome.TextEditor
 ```
+
+On a window the human is not in, the control is pressed in the background
+and read back:
+
+```
+pressed check box 'Agree' through its accessibility action (no pointer, the human's focus untouched) in yad; now: checked=true
+focused text 'City' through its accessibility action (no pointer, the human's focus untouched) in yad
+```
+
+A press the app ignored ends `; no change seen`, and one that closed the
+window ends `; the window closed`.
 
 An ambiguous name prints the tool's note and the candidates, and exits 4
 (`index=N` in the note is `--index N` on the CLI):
@@ -374,9 +428,12 @@ kitty exposes no accessibility tree; use screenshot + zoom instead
 
 Exit codes: 0, 1, 2, 3, 4.
 
-Notes: the coordinate comes from the tree, the window is focused first, and
-the click goes through the real pointer, so it is visible and journaled like
-any other. Refused (exit 3): a launcher or on-screen keyboard layer covering
+Notes: on the human's window the coordinate comes from the tree, the window
+is focused first, and the click goes through the real pointer, so it is
+visible and journaled like any other. In the background only a plain left
+click exists, as the control's own accessibility action: `--button
+right|middle`, `--double` and a control with no accessibility action are
+refused (exit 3). Refused (exit 3): a launcher or on-screen keyboard layer covering
 the point (the refusal ends `To click the layer deliberately, use `pointer`.`;
 or dismiss it first), a
 locked session, confinement, an authentication dialog. `--then ui` reads the
@@ -424,8 +481,11 @@ Notes: pure IPC, milliseconds, no image; the first choice for anything
 window- or workspace-shaped. `move_window` is silent (the workspace does not
 switch). `focus_window` on a window that lives on another workspace switches
 to that workspace, visibly. Window-targeted actions are refused outside
-HYPRUSE_CONFINE (exit 3); `workspace` is never confined. Closing a window can
-discard unsaved work: confirm first.
+HYPRUSE_CONFINE (exit 3); `workspace` is never confined. Under
+HYPRUSE_BACKGROUND=1, `workspace`, `focus_window` and `fullscreen` are
+refused because they change the human's view, `move_window` takes only the
+agent's workspaces, and window actions work only on windows there. Closing
+a window can discard unsaved work: confirm first.
 
 ## launch
 
@@ -433,20 +493,23 @@ discard unsaved work: confirm first.
 hypruse launch COMMAND... [--workspace WS] [--wait S]
 ```
 
-Plus `--dry-run`, `--json`. `COMMAND...` is the remaining positional words
-joined with spaces; put the app's own flags after `--`
-(`hypruse launch --workspace 2 -- firefox --new-window https://example.org`).
-`--workspace` places the window there silently; `--wait` 1-30 s (default 8)
-bounds the wait for the window.
+Plus `--background` / `--foreground`, `--dry-run`, `--json`. `COMMAND...` is
+the remaining positional words joined with spaces; put the app's own flags
+after `--` (`hypruse launch --workspace 2 -- firefox --new-window
+https://example.org`). `--workspace` places the window there silently;
+without it the window opens silently on the next of the agent's own
+workspaces, and `--foreground` opens it on the human's. `--wait` 1-30 s
+(default 8) bounds the wait for the window.
 
 Output:
 
 ```
-0x55a4479a1200 firefox "Mozilla Firefox" workspace 3
+0x564859226b80 yad "Signup" workspace 99
+note opened on workspace 99, one of the agent's (HYPRUSE_AGENT_WORKSPACES), out of the human's sight; pass background=false to open it on the human's workspace
 ```
 
-plus a `note ...` line when a single-instance app opened elsewhere and was
-moved to the requested workspace. No window within the wait prints the note
+The `note` line also appears when a single-instance app opened elsewhere and
+was moved to the requested workspace. No window within the wait prints the note
 and exits 4:
 
 ```
@@ -457,7 +520,10 @@ Exit codes: 0, 1, 2, 3, 4.
 
 Notes: the command runs via Hyprland `exec` and the verb blocks on the real
 `openwindow` event, so the address it prints is the new window, nothing to
-poll. Windows it opened join the `launched` confinement scope and are tagged
+poll. The agent's workspaces are HYPRUSE_AGENT_WORKSPACES (99 down to 90 by
+default), HYPRUSE_AGENT_FILL apps to each (default 1); one holding a window
+the agent did not open is skipped. Under HYPRUSE_BACKGROUND=1 a
+`--workspace` outside them is refused (exit 3). Windows it opened join the `launched` confinement scope and are tagged
 under HYPRUSE_MARK. Exit 4 does not mean the app failed: check `desktop`.
 
 ## use_bind
@@ -476,8 +542,9 @@ ran SUPER+SPACE: exec wofi --show drun
 ```
 
 Exit codes: 0; 1 (no such bind, or a `lua` bind, with the explanation); 3
-(refused outright while HYPRUSE_CONFINE is set, because a bind runs an
-arbitrary compositor action that cannot be scoped to a window).
+(refused outright while HYPRUSE_CONFINE or HYPRUSE_BACKGROUND=1 is set,
+because a bind runs an arbitrary compositor action that cannot be scoped to
+a window).
 
 Notes: the only reliable way to run the owner's launchers, scratchpads and
 layout shortcuts, because synthetic keypresses never reach Hyprland's bind
@@ -491,7 +558,9 @@ be run by anything: do the action with `hypr` or `launch`.
 hypruse sequence STEPS [--no-stop-on-change]
 ```
 
-Plus `--then` (default `desktop`), `--dry-run`, `--json`. `STEPS` is an
+Plus `--background` / `--foreground` (applied to every pointer, keyboard and
+click_ui step that does not set its own `background`), `--then` (default
+`desktop`), `--dry-run`, `--json`. `STEPS` is an
 inline JSON array, `@file.json`, or `-` for stdin. Each step is
 `{"op": "pointer"|"keyboard"|"click_ui"|"hypr"|"wait_for", ...that verb's
 MCP arguments}`:

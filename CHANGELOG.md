@@ -4,6 +4,61 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+Background mode: an agent works in apps on workspaces the human is not
+looking at while the human keeps working on their own, on stock Hyprland
+with no compositor plugin.
+
+### Added
+- **Background mode, on by default.** An action on the window the human
+  is in runs on their screen as before. An action on any other window
+  runs without their cursor, keyboard focus or workspace. `click_ui`
+  presses the control through its accessibility action (a text field gets
+  the app's own focus) and reads it back. `keyboard` with `window=` types
+  into the window's text field through the accessibility interface, or
+  sends the keys to that window alone with Hyprland's `sendshortcut`,
+  mapped to the keyboard layout (AZERTY and AltGr characters included).
+  Each result names the method and what the accessibility tree read back,
+  and a refusal gives the reason and what to do instead: a right or double
+  click, a control with no accessibility action, a character the layout
+  has no key for, an XWayland window, or a keyboard switched away from its
+  first layout on the sendshortcut path.
+- **The agent's workspaces.** `launch` with no workspace opens the app
+  silently on the next of the agent's own workspaces:
+  `HYPRUSE_AGENT_WORKSPACES`, 99 down to 90 by default (a range in either
+  direction, a comma list, or `name:` workspaces), `HYPRUSE_AGENT_FILL`
+  apps to a workspace (default 1), skipping any that hold the human's
+  windows.
+- **The guarantee, `HYPRUSE_BACKGROUND=1`.** Input is confined to the
+  windows on the agent's workspaces, and to `HYPRUSE_CONFINE`'s scope too
+  when both are set. The pointer, workspace switches, `focus_window`,
+  `fullscreen` and `use_bind` are refused, and `move_window` and `launch`
+  take only the agent's workspaces.
+- **`background=true|false`** on `click_ui`, `keyboard`, `pointer`,
+  `launch` and `sequence` (which passes it to its steps), and
+  `--background` / `--foreground` on the CLI verbs.
+- A live suite, `pytest -m background`, that drives yad forms on the
+  agent's workspaces and checks the human's active window, workspace and
+  cursor after every step.
+
+### Changed
+- In automatic mode, the default, some calls behave differently from
+  0.12. `launch` without a workspace opens on an agent workspace, not the
+  human's. `click_ui` and `keyboard(window=...)` on a window the human is
+  not in no longer focus it. `pointer` is refused where its input would
+  land on a window other than the active one, and a move counts, since
+  focus follows the mouse. `HYPRUSE_BACKGROUND=0` keeps 0.12's behaviour
+  for the session, and `background=false` does so for one call.
+- `ui` lists editable text fields among the actionable controls, and an
+  unnamed field takes the name of its label, so `click_ui Name` finds a
+  GTK form's field by the label next to it.
+- A silent launch no longer re-baselines the `HYPRUSE_STRICT` seat guard,
+  since the human's seat did not change.
+- `ui` and `then='ui'` end with a note when the window is not on screen:
+  its points are inside the window, and a `pointer` click at them would
+  land on whatever the human sees there.
+
 ## [0.12.1] - 2026-10-11
 
 Fixes from a review of 0.12.0.

@@ -4,11 +4,13 @@ Worked flows as shell sequences, with the lines each step prints (`#` lines
 are expected output). Addresses, paths and coordinates are examples: take
 yours from `hypruse desktop` and from the capture metadata. Every flow starts
 from `hypruse desktop` and ends with a verification that would fail if the
-action had not worked.
+action had not worked. Recipes 1 to 8 work in the window the human is in, on
+their screen; on any other window the same verbs run in the background and
+print how they did it (recipe 9).
 
 ## Contents
 
-1. [Launch an app and fill a GTK form by control name](#1-launch-an-app-and-fill-a-gtk-form-by-control-name)
+1. [Fill a GTK form by control name](#1-fill-a-gtk-form-by-control-name)
 2. [Click a small control with the zoom loop](#2-click-a-small-control-with-the-zoom-loop)
 3. [Drive the owner's launcher with binds, use_bind and wait_for](#3-drive-the-owners-launcher-with-binds-use_bind-and-wait_for)
 4. [A click, type, enter micro-plan with sequence](#4-a-click-type-enter-micro-plan-with-sequence)
@@ -16,15 +18,20 @@ action had not worked.
 6. [Handle a refusal (exit 3) correctly](#6-handle-a-refusal-exit-3-correctly)
 7. [Find a window on another workspace and focus it](#7-find-a-window-on-another-workspace-and-focus-it)
 8. [Troubleshooting](#8-troubleshooting)
+9. [Work in an app beside the human (background mode)](#9-work-in-an-app-beside-the-human-background-mode)
 
-## 1. Launch an app and fill a GTK form by control name
+## 1. Fill a GTK form by control name
 
-Goal: open GNOME Text Editor, write a line, and save it as `tomorrow.md`.
-Everything is by name; no pixel is estimated.
+Goal: the human has GNOME Text Editor in front of them and asked you to
+write a line in it and save it as `tomorrow.md`. It is the window they are
+in, so everything happens on their screen. Everything is by name; no pixel
+is estimated.
 
 ```bash
-hypruse launch gnome-text-editor --workspace 2
-# 0x55a4479a1200 org.gnome.TextEditor "New Document" workspace 2
+hypruse desktop
+# ...
+# win 0x55a4479a1200 ws 2 org.gnome.TextEditor "New Document" at 7,7 1906x1066
+# active 0x55a4479a1200
 W=0x55a4479a1200
 
 hypruse keyboard type "notes for tomorrow" --window $W
@@ -283,9 +290,19 @@ esac
 Exit 3 is also what every acting verb returns under HYPRUSE_READONLY: the
 owner chose observation only, so narrate what you see and what you would do.
 
+A background refusal is the exception that names its own way forward. Its
+text ends `so it cannot be done in the background:` and then what works:
+`click_ui` instead of `pointer` for a control in another window, or
+`--foreground`, which takes over the human's screen and is right only when
+the user asked for that. Under HYPRUSE_BACKGROUND=1 the way forward is to
+ask the user.
+
 ## 7. Find a window on another workspace and focus it
 
 Goal: bring up the Firefox window that is not on the current workspace.
+This switches the human's view, so do it only when they asked to see it;
+under HYPRUSE_BACKGROUND=1 `focus_window` is refused. To work in that window
+without showing it, skip the focus and use recipe 9.
 
 ```bash
 hypruse desktop
@@ -381,3 +398,49 @@ window. Re-read `desktop`; never reuse an address from an earlier task.
 **Dry run.** Results that open with `DRY RUN, nothing was delivered: would
 ...` mean the owner set HYPRUSE_DRYRUN (or you passed `--dry-run`). The
 screen will not change; report the plan instead of retrying.
+
+
+## 9. Work in an app beside the human (background mode)
+
+Goal: fill in a sign-up form while the human keeps working. Nothing below
+moves their cursor, takes their keyboard focus or switches their workspace.
+
+```bash
+hypruse launch -- yad --form --title=Signup --field=Agree:CHK --field=Name --button=OK:0
+# 0x564859226b80 yad "Signup" workspace 99
+# note opened on workspace 99, one of the agent's (HYPRUSE_AGENT_WORKSPACES), out of the human's sight; pass background=false to open it on the human's workspace
+W=0x564859226b80
+
+hypruse ui --window $W
+# [0] text "Name" @981,538 value=""
+# [1] check box "Agree" @960,501 checked=false
+# [2] button "OK" @1019,578
+# note 0x564859226b80 is not on screen (no monitor is showing its workspace 99): these points are inside it, not on what the human sees, so press its controls with click_ui; a pointer click at these points would land on whatever is on screen there
+
+hypruse click_ui Agree --window $W
+# pressed check box 'Agree' through its accessibility action (no pointer, the human's focus untouched) in yad; now: checked=true
+
+hypruse keyboard type "Ada Lovelace" --window $W --then ui
+# typed 12 characters into the text field in yad through the accessibility interface (the human's focus untouched); now 'Ada Lovelace'
+# [0] text "Name" @981,538 value="Ada Lovelace"
+# [1] check box "Agree" @960,501 checked=true
+# [2] button "OK" @1019,578
+# note 0x564859226b80 is not on screen (no monitor is showing its workspace 99): these points are inside it, not on what the human sees, so press its controls with click_ui; a pointer click at these points would land on whatever is on screen there
+```
+
+The `now:` part of each line and the `--then ui` values are the
+verification: they are read back from the accessibility tree. Do not
+screenshot a hidden window to check; many apps stop drawing while hidden,
+so the capture can show an old frame.
+
+Never use `pointer` on a hidden window. The `@x,y` points are where its
+controls sit inside it, and the screen at those points shows the human's
+own windows, so a click there would land on whatever they are looking at;
+the `note` line says so. A control without an accessibility action and a
+right or double click are refused in the background, since neither can
+happen without the human's cursor.
+
+In a form with several text fields, focus the one you want first with
+`click_ui NAME`; the keys then go to it through sendshortcut
+(`sent 5 keys to 0x... (yad) with sendshortcut ...`). Submitting is still
+the user's call: confirm before pressing OK.
