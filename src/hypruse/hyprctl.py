@@ -480,30 +480,40 @@ LAYER_LEVELS = ("background", "bottom", "top", "overlay")
 # itself 'lockscreen' should not be mistaken for an ordinary overlay.
 #
 # `auth` is a polkit prompt drawn as a layer rather than a window, which a
-# shell-integrated agent does (Omarchy 4's Quickshell agent), so the window
-# class interlock (trust._AUTH_CLASSES) never sees it. It is checked first.
+# shell-integrated agent does, so the window class interlock
+# (trust._AUTH_CLASSES) never sees it. Shells put their own name first
+# (omarchy-polkit, quickshell:polkit in end-4's dots, dms:polkit-auth-surface),
+# so "polkit" is matched anywhere in the namespace, before any other kind.
+#
 # The omarchy-* names are Omarchy 4's Quickshell surfaces (omacom/omarchy
-# shell/plugins): its menu, pickers and bar popups grab the keyboard over
-# the whole screen, which is a launcher's shape.
+# shell/plugins): its menu, pickers, bar popups, reminders and network
+# panels grab the keyboard over the whole screen, which is a launcher's
+# shape. Its lock preview grabs the keyboard too but takes no password,
+# and a click dismisses it, so it is its own kind rather than a lock: the
+# real lock is a session lock, which trust.session_locked() detects.
+_AUTH_MARK = "polkit"
 _LAYER_KINDS = (
-    ("auth", ("omarchy-polkit", "polkit")),
     (
         "launcher",
         (
             "wofi", "rofi", "fuzzel", "tofi", "anyrun", "walker", "launcher",
             "omarchy-menu", "omarchy-clipboard", "omarchy-emojis",
-            "omarchy-image-selector", "omarchy-keyboard-panel",
+            "omarchy-image-selector", "omarchy-keyboard-panel", "omarchy-reminders",
+            "omarchy-network-qr", "omarchy-network-speedtest", "omarchy-disk-speedtest",
         ),
     ),
     ("bar", ("waybar", "hyprpanel", "ags-", "bar", "omarchy-bar")),
     ("notifications", ("mako", "dunst", "swaync", "notification", "omarchy-notifications")),
-    ("lock", ("hyprlock", "swaylock", "lockscreen", "omarchy-lock")),
+    ("lock-preview", ("omarchy-lock-preview",)),
+    ("lock", ("hyprlock", "swaylock", "lockscreen")),
     ("osk", ("wvkbd", "squeekboard", "osk")),
 )
 
 
 def layer_kind(namespace: str) -> str:
     ns = namespace.lower()
+    if _AUTH_MARK in ns:
+        return "auth"
     for kind, prefixes in _LAYER_KINDS:
         if any(ns.startswith(p) for p in prefixes):
             return kind
@@ -517,11 +527,11 @@ def layer_kind(namespace: str) -> str:
 # POINTER input aimed at whatever its surface covers, and each is a seat
 # takeover a running `sequence` must notice. Bars and notification popups
 # are surfaces too, but not a takeover.
-FOCUS_STEALING_KINDS = frozenset({"auth", "launcher", "lock", "osk"})
+FOCUS_STEALING_KINDS = frozenset({"auth", "launcher", "lock", "lock-preview", "osk"})
 
 # the subset that actually holds a keyboard grab, so synthetic keys reach
 # the layer no matter which window was focused
-KEYBOARD_GRABBING_KINDS = frozenset({"auth", "launcher", "lock"})
+KEYBOARD_GRABBING_KINDS = frozenset({"auth", "launcher", "lock", "lock-preview"})
 
 
 def parse_layers(raw: dict[str, Any]) -> list[dict[str, Any]]:

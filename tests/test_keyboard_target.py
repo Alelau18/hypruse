@@ -196,7 +196,9 @@ def test_windowless_keyboard_fails_closed_when_compositor_unreadable(stub, monke
         raise srv.hyprctl.HyprctlError("hyprctl timed out")
 
     monkeypatch.setattr(srv.hyprctl, "query", boom)
-    with pytest.raises(srv.hyprctl.HyprctlError):
+    # refused either way: the layer guard cannot rule out an auth prompt, or
+    # the active window cannot be resolved
+    with pytest.raises((srv.hyprctl.HyprctlError, srv.trust.TrustError)):
         srv.keyboard("type", text="unconfined")
     assert stub["typed"] == []
 
@@ -225,7 +227,7 @@ def test_keyboard_confinement_wiring_refuses_out_of_scope_active_window(monkeypa
     typed = []
     monkeypatch.setattr(
         srv.hyprctl, "query",
-        lambda cmd: [active] if cmd == "clients" else active,
+        lambda cmd: {"clients": [active], "layers": {}}.get(cmd, active),
     )
     monkeypatch.setattr(srv.hinput, "type_text", lambda t: typed.append(t))
     with pytest.raises(srv.trust.TrustError, match="confinement scope"):

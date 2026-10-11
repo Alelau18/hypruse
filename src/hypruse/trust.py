@@ -266,9 +266,21 @@ def guard_pointer(x: float | None, y: float | None, allow_auth: bool = False) ->
                 "this credential action."
             )
         # a shell-integrated polkit agent draws its prompt as a layer, which
-        # `clients` never lists (Omarchy 4)
-        layer = covering_layer(px, py)
-        if layer is not None and layer["kind"] == "auth":
+        # `clients` never lists (Omarchy 4). ANY auth surface over the point
+        # counts, not just the topmost: an on-screen keyboard above one feeds
+        # its password field
+        surfaces = _read_layers()
+        if surfaces is None:
+            raise TrustError(
+                f"cannot read the layer list to rule out an authentication prompt at "
+                f"({px:.0f}, {py:.0f}); refusing the click. Retry, or pass allow_auth=true "
+                "only if a human intends a credential action."
+            )
+        layer = next(
+            (s for s in surfaces if s.get("kind") == "auth" and _surface_covers(s, px, py)),
+            None,
+        )
+        if layer is not None:
             raise TrustError(
                 f"({px:.0f}, {py:.0f}) is covered by {layer['namespace']!r}, a system "
                 "authentication prompt; refusing the click. Pass allow_auth=true only "
@@ -296,22 +308,35 @@ def covering_layer(x: float, y: float) -> dict[str, Any] | None:
     best-effort by design: this is a truthfulness aid, not a confinement
     boundary, so an unreadable layer list yields None rather than
     blocking every click."""
+    surfaces = _read_layers()
+    return None if surfaces is None else _topmost_covering(surfaces, x, y)
+
+
+def _read_layers() -> list[dict[str, Any]] | None:
+    """The parsed layer list, or None when it cannot be read."""
     try:
-        surfaces = hyprctl.parse_layers(hyprctl.query("layers"))
+        return hyprctl.parse_layers(hyprctl.query("layers"))
     except Exception:
         return None
+
+
+def _surface_covers(s: dict[str, Any], x: float, y: float) -> bool:
+    g = s.get("geometry") or []
+    return (
+        len(g) == 4
+        and None not in g
+        and g[0] <= x < g[0] + g[2]
+        and g[1] <= y < g[1] + g[3]
+    )
+
+
+def _topmost_covering(
+    surfaces: list[dict[str, Any]], x: float, y: float
+) -> dict[str, Any] | None:
     best: dict[str, Any] | None = None
     best_rank = -1
     for s in surfaces:
-        if s.get("kind") not in hyprctl.FOCUS_STEALING_KINDS:
-            continue
-        g = s.get("geometry") or []
-        if not (
-            len(g) == 4
-            and None not in g
-            and g[0] <= x < g[0] + g[2]
-            and g[1] <= y < g[1] + g[3]
-        ):
+        if s.get("kind") not in hyprctl.FOCUS_STEALING_KINDS or not _surface_covers(s, x, y):
             continue
         rank = _level_rank(s.get("level", ""))
         if rank >= best_rank:  # >= so a later surface on the same level wins
@@ -336,9 +361,10 @@ def _level_rank(level: str) -> int:
 # Quickshell shell) and a crashed locker, which ext-session-lock-v1 says
 # must leave the session LOCKED, not hand it back. The process scan below
 # names a running locker for the refusal message, and is the whole check
-# only when the compositor cannot be asked. Older swaylock/gtklock
-# releases drew their lock with layer-shell instead, which `layer_kind`
-# still catches.
+# only when the compositor cannot be asked. swaylock before 1.7 drew its
+# lock with layer-shell under the "lockscreen" namespace, which `layer_kind`
+# still classifies; a layer-shell locker with no recognisable namespace
+# (gtklock 2.x) that the compositor does not report as a lock goes unseen.
 #
 # Matched against /proc/PID/comm, which the kernel caps at TASK_COMM_LEN-1
 # = 15 characters, so every entry here MUST be <= 15 chars or it can never
@@ -408,8 +434,10 @@ def _locker_process() -> str | None:
         if not entry.name.isdigit():
             continue
         try:
-            with open(f"{_PROC}/{entry.name}/comm") as fh:
-                comm = fh.read().strip()
+            # bytes, decoded leniently: the kernel cuts comm at 15 bytes,
+            # which can split a multibyte character
+            with open(f"{_PROC}/{entry.name}/comm", "rb") as fh:
+                comm = fh.read().decode("utf-8", "replace").strip()
         except OSError:
             continue  # the process exited between listing and reading
         if comm in _LOCKER_COMMS:
@@ -484,11 +512,17 @@ def guard_keyboard_layer(window_given: bool, allow_auth: bool) -> str:
     launcher after use_bind is the documented flow) and the returned
     note, appended to the tool result, records where they went. The
     on-screen keyboard kind feeds keys rather than eating them, so it
-    does not count. Positive detection and best-effort like
-    covering_layer: unreadable layers yield ''."""
-    try:
-        surfaces = hyprctl.parse_layers(hyprctl.query("layers"))
-    except Exception:
+    does not count. Positive detection: an unreadable layer list yields
+    '', except that while the auth guard is on it refuses, since an
+    authentication prompt holding the keyboard cannot be ruled out."""
+    surfaces = _read_layers()
+    if surfaces is None:
+        if _auth_guard_on() and not allow_auth:
+            raise TrustError(
+                "cannot read the layer list to rule out an authentication prompt "
+                "holding the keyboard; refusing to type. Retry, or pass "
+                "allow_auth=true only if a human intends a credential entry."
+            )
         return ""
     grabbers = [s for s in surfaces if s.get("kind") in hyprctl.KEYBOARD_GRABBING_KINDS]
     if not grabbers:
@@ -518,7 +552,7 @@ def guard_keyboard_layer(window_given: bool, allow_auth: bool) -> str:
             "would feed a credential prompt. Pass allow_auth=true only if a "
             "human intends that credential entry."
         )
-    if kind == "auth" and not allow_auth:
+    if kind == "auth" and not allow_auth and _auth_guard_on():
         raise TrustError(
             f"the authentication prompt {ns!r} holds the keyboard: typing now "
             f"would feed a credential prompt. {_dismiss_advice(kind)} Pass "
@@ -539,6 +573,8 @@ def _dismiss_advice(kind: str) -> str:
         return "Unlock the session first."
     if kind == "auth":
         return "A human has to answer or cancel the authentication prompt first."
+    if kind == "lock-preview":
+        return "Click anywhere to dismiss it first."
     if kind == "osk":
         return "Dismiss the on-screen keyboard first."
     return (
@@ -553,14 +589,28 @@ def guard_covering_layer(x: float, y: float) -> None:
     never would, and reporting 'clicked' would be a lie. For click_ui,
     whose target is by definition a window control; a bare pointer click
     may legitimately aim at the layer itself, so it gets a warning in its
-    result instead of a refusal."""
-    s = covering_layer(x, y)
+    result instead of a refusal. An unreadable layer list refuses while
+    the auth guard is on, since an authentication prompt over the control
+    cannot be ruled out."""
+    surfaces = _read_layers()
+    if surfaces is None:
+        if _auth_guard_on():
+            raise TrustError(
+                "cannot read the layer list to rule out an authentication prompt "
+                f"over ({x:.0f}, {y:.0f}); refusing the click. Retry."
+            )
+        return
+    s = _topmost_covering(surfaces, x, y)
     if s is not None:
+        kind = s["kind"]
+        # a credential surface is not something to click deliberately
+        tail = "" if kind in ("auth", "lock") else (
+            " To click the layer deliberately, use `pointer`."
+        )
         raise TrustError(
-            f"({x:.0f}, {y:.0f}) is covered by the {s['kind']} layer surface "
+            f"({x:.0f}, {y:.0f}) is covered by the {kind} layer surface "
             f"{s['namespace']!r}: the click would land on that layer, not on "
-            f"the window's control. {_dismiss_advice(s['kind'])} To click the "
-            "layer deliberately, use `pointer`."
+            f"the window's control. {_dismiss_advice(kind)}{tail}"
         )
 
 

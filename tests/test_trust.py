@@ -463,11 +463,25 @@ def test_guard_keyboard_layer_lock_allow_auth_downgrades_to_note(monkeypatch):
     assert "hyprlock" in note
 
 
-def test_guard_keyboard_layer_fails_open_on_unreadable_layers(monkeypatch):
+def _layers_down(monkeypatch):
     def boom(cmd):
         raise trust.hyprctl.HyprctlError("hyprctl down")
 
     monkeypatch.setattr(trust.hyprctl, "query", boom)
+
+
+def test_guard_keyboard_layer_refuses_when_layers_unreadable(monkeypatch):
+    # an authentication prompt drawn as a layer cannot be ruled out, and the
+    # auth interlock fails toward less action
+    _layers_down(monkeypatch)
+    with pytest.raises(trust.TrustError, match="cannot read the layer list"):
+        trust.guard_keyboard_layer(True, False)
+
+
+def test_guard_keyboard_layer_unreadable_layers_pass_with_consent_or_guard_off(monkeypatch):
+    _layers_down(monkeypatch)
+    assert trust.guard_keyboard_layer(False, True) == ""  # a human intends it
+    monkeypatch.setenv("HYPRUSE_AUTH_GUARD", "0")
     assert trust.guard_keyboard_layer(True, False) == ""
 
 
@@ -854,7 +868,14 @@ def test_init_marking_warns_instead_of_dying_when_the_rule_will_not_install(
     [
         ("omarchy-polkit", "auth"),  # its polkit agent: a layer, not a window
         ("polkit-agent", "auth"),
-        ("omarchy-lock-preview", "lock"),
+        ("quickshell:polkit", "auth"),  # end-4's dots-hyprland
+        ("shell:polkit", "auth"),
+        ("dms:polkit-auth-surface", "auth"),  # DankMaterialShell
+        ("omarchy-lock-preview", "lock-preview"),  # not a lock: a click dismisses it
+        ("omarchy-reminders", "launcher"),
+        ("omarchy-network-qr", "launcher"),
+        ("omarchy-network-speedtest", "launcher"),
+        ("omarchy-disk-speedtest", "launcher"),
         ("omarchy-menu", "launcher"),
         ("omarchy-clipboard", "launcher"),
         ("omarchy-emojis", "launcher"),
@@ -886,10 +907,11 @@ def test_keyboard_refuses_to_type_into_a_polkit_layer(monkeypatch):
         trust.guard_keyboard_layer(True, True)
 
 
-def test_polkit_layer_outranks_a_launcher_for_the_keyboard(monkeypatch):
+@pytest.mark.parametrize("order", [("omarchy-polkit", "omarchy-menu"),
+                                   ("omarchy-menu", "omarchy-polkit")])
+def test_polkit_layer_outranks_a_launcher_for_the_keyboard(monkeypatch, order):
     raw = {"DP-1": {"levels": {"3": [
-        {"namespace": "omarchy-polkit", "x": 0, "y": 0, "w": 1920, "h": 1080},
-        {"namespace": "omarchy-menu", "x": 0, "y": 0, "w": 1920, "h": 1080},
+        {"namespace": ns, "x": 0, "y": 0, "w": 1920, "h": 1080} for ns in order
     ]}}}
     monkeypatch.setattr(trust.hyprctl, "query", lambda cmd: raw)
     with pytest.raises(trust.TrustError, match="authentication"):
@@ -907,5 +929,81 @@ def test_pointer_refuses_to_click_a_polkit_layer(monkeypatch):
 
 def test_click_ui_under_a_polkit_layer_says_a_human_must_answer(monkeypatch):
     monkeypatch.setattr(trust.hyprctl, "query", lambda cmd: POLKIT_RAW)
-    with pytest.raises(trust.TrustError, match="human"):
+    with pytest.raises(trust.TrustError, match="human") as e:
         trust.guard_covering_layer(500, 500)
+    assert "use `pointer`" not in str(e.value)  # it must not invite the click
+
+
+def test_pointer_refuses_a_polkit_prompt_under_an_on_screen_keyboard(monkeypatch):
+    # an OSK mapped after the prompt is the topmost surface, but its keys
+    # feed the prompt's password field
+    raw = {"DP-1": {"levels": {"3": [
+        {"namespace": "omarchy-polkit", "x": 0, "y": 0, "w": 1920, "h": 1080},
+        {"namespace": "wvkbd-mobintl", "x": 0, "y": 700, "w": 1920, "h": 380},
+    ]}}}
+    monkeypatch.delenv("HYPRUSE_CONFINE", raising=False)
+    monkeypatch.setattr(trust.hyprctl, "query", lambda cmd: raw)
+    _batch(monkeypatch, MON, [])
+    with pytest.raises(trust.TrustError, match="authentication"):
+        trust.guard_pointer(500, 800)
+
+
+@pytest.mark.parametrize("namespace", ["rofi", "omarchy-menu", "wvkbd-mobintl"])
+def test_pointer_still_clicks_into_launchers_and_on_screen_keyboards(monkeypatch, namespace):
+    raw = {"DP-1": {"levels": {"3": [
+        {"namespace": namespace, "x": 0, "y": 0, "w": 1920, "h": 1080}]}}}
+    monkeypatch.delenv("HYPRUSE_CONFINE", raising=False)
+    monkeypatch.setattr(trust.hyprctl, "query", lambda cmd: raw)
+    _batch(monkeypatch, MON, [])
+    trust.guard_pointer(500, 500)  # driving the layer itself is legitimate
+
+
+def test_pointer_refuses_when_layers_unreadable_under_the_auth_guard(monkeypatch):
+    monkeypatch.delenv("HYPRUSE_CONFINE", raising=False)
+    _layers_down(monkeypatch)
+    _batch(monkeypatch, MON, [])
+    with pytest.raises(trust.TrustError, match="cannot read the layer list"):
+        trust.guard_pointer(500, 500)
+    trust.guard_pointer(500, 500, allow_auth=True)
+
+
+def test_click_ui_refuses_when_layers_unreadable_under_the_auth_guard(monkeypatch):
+    _layers_down(monkeypatch)
+    with pytest.raises(trust.TrustError, match="cannot read the layer list"):
+        trust.guard_covering_layer(500, 500)
+    monkeypatch.setenv("HYPRUSE_AUTH_GUARD", "0")
+    trust.guard_covering_layer(500, 500)  # best-effort again
+
+
+def test_auth_guard_off_lets_typing_reach_a_polkit_layer_with_a_note(monkeypatch):
+    # README: HYPRUSE_AUTH_GUARD=0 disables the guard, for keys as for clicks
+    monkeypatch.setenv("HYPRUSE_AUTH_GUARD", "0")
+    monkeypatch.setattr(trust.hyprctl, "query", lambda cmd: POLKIT_RAW)
+    assert "omarchy-polkit" in trust.guard_keyboard_layer(False, False)
+
+
+LOCK_PREVIEW_RAW = {"DP-1": {"levels": {"3": [
+    {"namespace": "omarchy-lock-preview", "x": 0, "y": 0, "w": 1920, "h": 1080}]}}}
+
+
+def test_omarchy_lock_preview_is_not_a_credential_prompt(monkeypatch):
+    # it swallows keys (exclusive grab) but takes no password, and a click
+    # dismisses it, so refusals say that rather than "unlock the session"
+    monkeypatch.setattr(trust.hyprctl, "query", lambda cmd: LOCK_PREVIEW_RAW)
+    assert "omarchy-lock-preview" in trust.guard_keyboard_layer(False, False)
+    with pytest.raises(trust.TrustError, match="Click anywhere") as e:
+        trust.guard_keyboard_layer(True, False)
+    assert "credential" not in str(e.value) and "Unlock" not in str(e.value)
+    with pytest.raises(trust.TrustError, match="Click anywhere"):
+        trust.guard_covering_layer(500, 500)
+
+
+def test_session_locked_survives_a_non_utf8_process_name(monkeypatch, tmp_path):
+    # the kernel cuts comm at 15 bytes, mid-character for a CJK or Cyrillic name
+    d = tmp_path / "77"
+    d.mkdir()
+    (d / "comm").write_bytes("\u4e0a\u6d77".encode()[:5] + b"\n")
+    _fake_proc(tmp_path, {"101": "kitty"})  # no locker: the scan reads every entry
+    monkeypatch.setattr(trust, "_PROC", str(tmp_path))
+    monkeypatch.setattr(trust, "_compositor_locked", lambda: True)
+    assert real_session_locked() == "lock screen"
