@@ -66,12 +66,16 @@ presses the control through its accessibility action, `keyboard` with
 `--window` types into the window's text field or sends the keys to that
 window alone with Hyprland's sendshortcut, and `launch` with no
 `--workspace` opens the app on one of the agent's own workspaces (99 down
-to 90 by default). `pointer` is the human's cursor and never runs in the
-background. `--background` forces the background and refuses what cannot be
-done there; `--foreground` does the action on the human's screen. Under
-HYPRUSE_BACKGROUND=1 (the guarantee) everything stays on the agent's
-workspaces and `--foreground` is refused. A refusal ends `so it cannot be
-done in the background: ...` and names what works instead.
+to 90 by default, never one on screen). `pointer` is the human's cursor and
+never runs in the background. `--background` forces the background and
+refuses what cannot be done there; `--foreground` does the action on the
+human's screen. Under HYPRUSE_BACKGROUND=1 (the guarantee) hypruse's input
+stays on the agent's workspaces and `--foreground` is refused; it does not
+bound what a launched command does. A refusal ends `so it cannot be done in
+the background: ...` and names what works instead. A background result says
+`(the human's focus untouched)` only when the human's focused window and
+workspace read the same before and after, and ends with `; WARNING: the
+human's focused window changed ...` when they did not: stop and report it.
 
 **Trust layers stay in the environment.** HYPRUSE_READONLY, HYPRUSE_CONFINE,
 HYPRUSE_AUTH_GUARD, HYPRUSE_STRICT, HYPRUSE_MARK, HYPRUSE_JOURNAL,
@@ -358,7 +362,7 @@ pressed ctrl+l into 0x55a447938f40
 In the background:
 
 ```
-typed 12 characters into the text field in yad through the accessibility interface (the human's focus untouched); now 'Ada Lovelace'
+typed 12 characters into the text field in yad through the accessibility interface (the human's focus untouched); the field now holds the typed text (12 characters)
 sent 5 keys to 0x564859226b80 (yad) with sendshortcut (the human's focus untouched)
 sent ctrl+a to 0x564859226b80 (yad) with sendshortcut (the human's focus untouched)
 ```
@@ -371,15 +375,18 @@ you opened with `use_bind`, which is not a window (the result then carries
 to it, not to the focused window`). This drives shortcuts the focused app
 handles; compositor binds (`super+...`) go through `use_bind`, window and
 workspace actions through `hypr`. Refused (exit 3): a locked session, a
-launcher holding the grab while `--window` names a target, a window outside
-HYPRUSE_CONFINE, a system authentication dialog, a password field under
-HYPRUSE_AUTH_GUARD=strict (in the background, any password field without
-`--allow-auth`). Background refusals: a character the keyboard layout has
-no key for when the text cannot go through the accessibility interface
-(checked before any key is sent), an XWayland window on the sendshortcut
-path, a keyboard switched away from its first layout on that path, and no
-`--window` under HYPRUSE_BACKGROUND=1. `type` of a secret is never right
-unless the user asked for it explicitly.
+window outside HYPRUSE_CONFINE, a system authentication dialog; on the
+human's window, a launcher holding the grab while `--window` names a target
+and a password field under HYPRUSE_AUTH_GUARD=strict. In the background, a
+password field (the focused one, or one among several when the window does
+not say which has focus) without `--allow-auth`, a character the keyboard
+layout has no key for when the text cannot go through the accessibility
+interface (checked before any key is sent), an XWayland window or a
+keyboard switched away from its first layout on the sendshortcut path, and
+no `--window` under HYPRUSE_BACKGROUND=1. Typed text never appears in a
+result: the field is described as holding the typed text, or not, and `ui`
+shows its value. Newlines, tabs and backspaces are always sent as keys.
+`type` of a secret is never right unless the user asked for it explicitly.
 
 ## click_ui
 
@@ -408,8 +415,13 @@ pressed check box 'Agree' through its accessibility action (no pointer, the huma
 focused text 'City' through its accessibility action (no pointer, the human's focus untouched) in yad
 ```
 
-A press the app ignored ends `; no change seen`, and one that closed the
-window ends `; the window closed`.
+A check box, slider or field the app did not change ends `; no change seen`,
+and a press that closed the window ends `; the window closed`. A button has
+no value to read back, so check its effect with `ui`. Refused in the
+background (exit 3), besides the trust layers: a right or double click, a
+control with no accessibility action, a control in a window whose app has
+another window of the same title or size (the tree cannot tell them apart),
+and focusing a GTK 3 field while Hyprland's `misc:focus_on_activate` is on.
 
 An ambiguous name prints the tool's note and the candidates, and exits 4
 (`index=N` in the note is `--index N` on the CLI):
@@ -508,9 +520,13 @@ Output:
 note opened on workspace 99, one of the agent's (HYPRUSE_AGENT_WORKSPACES), out of the human's sight; pass background=false to open it on the human's workspace
 ```
 
-The `note` line also appears when a single-instance app opened elsewhere and
-was moved to the requested workspace. No window within the wait prints the note
-and exits 4:
+The `note` line also says when an app that was already running (a browser)
+opened its window from the running process on another workspace and was
+moved, and whether that was on the human's screen, where it took their
+focus; under HYPRUSE_BACKGROUND=1 that also prints a `warning` line. The
+verb waits for its own window, one on the requested workspace or of the
+launched program's class, and ignores any other that opens meanwhile. No
+window within the wait prints the note and exits 4:
 
 ```
 launched, but no new window appeared within 8s, slow or single-instance apps may open late and on their own workspace; call desktop() to find the window, then hypr move_window if needed
@@ -522,8 +538,10 @@ Notes: the command runs via Hyprland `exec` and the verb blocks on the real
 `openwindow` event, so the address it prints is the new window, nothing to
 poll. The agent's workspaces are HYPRUSE_AGENT_WORKSPACES (99 down to 90 by
 default), HYPRUSE_AGENT_FILL apps to each (default 1); one holding a window
-the agent did not open is skipped. Under HYPRUSE_BACKGROUND=1 a
-`--workspace` outside them is refused (exit 3). Windows it opened join the `launched` confinement scope and are tagged
+the agent did not open, or on screen, is skipped, and
+HYPRUSE_CONFINE=workspace:... narrows them. Under HYPRUSE_BACKGROUND=1 a
+`--workspace` outside them, or on screen, is refused (exit 3), and the
+command still runs as given: never launch one that drives the desktop. Windows it opened join the `launched` confinement scope and are tagged
 under HYPRUSE_MARK. Exit 4 does not mean the app failed: check `desktop`.
 
 ## use_bind

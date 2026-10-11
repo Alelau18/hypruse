@@ -169,15 +169,32 @@ but the active one. `background.refuse()` words every refusal the same
 way: the reason, then what to do instead, which under the guarantee is to
 ask the human.
 
+- The background paths act on an AT-SPI object directly, so the object
+  must belong to the target window. `window_frame` matches an app's
+  toplevel by title, then size, which is fine for coordinates (the click
+  point is checked against the window) but can pick another window of the
+  same app, the human's included. `a11y.window_frame_for` takes the app's
+  other Hyprland windows as peers and returns a frame only when exactly one
+  matches a title or size no peer shares; otherwise `click_ui` refuses and
+  `keyboard` falls back to sendshortcut, which Hyprland aims by address.
 - `click_ui` resolves the control as before, with its AT-SPI service and
   path kept (marks store them too, so a mark works in the background).
-  `_click_in_background` runs the guards, then calls the control's
-  `DoAction`, or `GrabFocus` for a text field, and reads the control back
-  through `current_value` so the result says what changed.
+  `_click_in_background` runs the guards and the reads that can refuse
+  (the action check, GTK 3 with `misc:focus_on_activate`) before the dry-run
+  return, then calls the control's `DoAction`, or `GrabFocus` for a text
+  field (told by role number, since GTK 4 names it "text box"), and reads
+  the control back through `current_value`.
+- Every background result reads the human's active window and workspace
+  before and after (`_seat_now`, `_seat_report`): it may say "the human's
+  focus untouched" only when they match, and warns when an app moved them.
 - `keyboard` with `window=` goes through `_keyboard_in_background`. Text
   goes into the focused text field with `EditableText.InsertText` at the
   caret. GTK reports no FOCUSED state inside an inactive window, so a
-  window with exactly one editable field uses that one. InsertText's
+  window with exactly one editable field uses that one; a password field
+  among several refuses without `allow_auth`. Text with a newline, tab or
+  backspace goes key by key, as wtype would press them, and the result
+  describes the field without repeating it, since the journal stores
+  every result line. InsertText's
   length is in UTF-8 bytes for GTK and the other ATK toolkits and in
   UTF-16 units for Qt, so it is computed per `ToolkitName`. Without a
   field, every character is mapped to a key on the active layout
@@ -197,9 +214,13 @@ ask the human.
   window other than the active one. A move counts, since focus follows
   the mouse.
 - `launch` with no workspace asks `background.next_workspace` for the
-  first workspace in the range with room and none of the human's windows,
-  and launches silently there. A silent launch leaves the seat baseline
-  alone, so a change the human made since the last action is still theirs
+  first workspace in the range with room, none of the human's windows, and
+  not on screen (Hyprland drops a silent rule for the workspace a window
+  maps on), and launches silently there. `_launched_window` makes the
+  openwindow wait take only a window on that workspace or of the launched
+  program's class, so a window the human opens meanwhile is never moved
+  or owned. The seat baseline is refreshed only when the launch moved the
+  seat, so a change the human made since the last action is still theirs
   for `guard_seat` to see.
 - Under the guarantee, `trust._confine_scope()` is `("agent", explicit)`:
   a window must be on an agent workspace and inside `HYPRUSE_CONFINE`

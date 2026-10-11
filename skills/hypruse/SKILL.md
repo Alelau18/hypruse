@@ -84,7 +84,9 @@ background: their cursor, keyboard focus and workspace stay where they are.
 - `click_ui NAME --window ADDR` presses the control through the
   accessibility tree, and `keyboard ... --window ADDR` types into the
   window's text field or sends the keys to that window alone. The result
-  line says which method it used and what it read back.
+  line says which method it used and what it read back. A line ending in
+  `WARNING: the human's focused window changed` means an app took the
+  human's focus: stop and tell the user.
 - Read a hidden window with `ui`, not a screenshot: hidden apps often stop
   drawing, so their pixels can be stale.
 - `pointer` is the human's cursor and is refused over any window but
@@ -93,6 +95,9 @@ background: their cursor, keyboard focus and workspace stay where they are.
   `--foreground` does the action on the human's screen and takes it over;
   use it only when the user asked for that. Under HYPRUSE_BACKGROUND=1
   nothing may take the foreground: ask the user.
+- An app that is already running (a browser) opens a new window on the
+  human's screen before `launch` moves it; the note says so. Never
+  `launch` a command that drives the desktop itself (hyprctl, wtype).
 
 ## Coordinates
 

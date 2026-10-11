@@ -421,17 +421,20 @@ hypruse click_ui Agree --window $W
 # pressed check box 'Agree' through its accessibility action (no pointer, the human's focus untouched) in yad; now: checked=true
 
 hypruse keyboard type "Ada Lovelace" --window $W --then ui
-# typed 12 characters into the text field in yad through the accessibility interface (the human's focus untouched); now 'Ada Lovelace'
+# typed 12 characters into the text field in yad through the accessibility interface (the human's focus untouched); the field now holds the typed text (12 characters)
 # [0] text "Name" @981,538 value="Ada Lovelace"
 # [1] check box "Agree" @960,501 checked=true
 # [2] button "OK" @1019,578
 # note 0x564859226b80 is not on screen (no monitor is showing its workspace 99): these points are inside it, not on what the human sees, so press its controls with click_ui; a pointer click at these points would land on whatever is on screen there
 ```
 
-The `now:` part of each line and the `--then ui` values are the
-verification: they are read back from the accessibility tree. Do not
-screenshot a hidden window to check; many apps stop drawing while hidden,
-so the capture can show an old frame.
+The `now:` part, `the field now holds the typed text` and the `--then ui`
+values are the verification: they are read back from the accessibility
+tree. `(the human's focus untouched)` is checked too: if a line ends with
+`WARNING: the human's focused window changed ...`, an app brought a window
+forward, so stop and tell the user. Do not screenshot a hidden window to
+check; many apps stop drawing while hidden, so the capture can show an old
+frame.
 
 Never use `pointer` on a hidden window. The `@x,y` points are where its
 controls sit inside it, and the screen at those points shows the human's

@@ -89,8 +89,10 @@ where they are: `click_ui` presses the control through its accessibility
 action, `keyboard(window=...)` types through the accessibility interface
 or sends the keys to that window alone, and `launch` with no workspace
 opens the app on one of the agent's own workspaces ({workspaces}), out of
-the human's sight. Each result says which method it used and what the
-accessibility tree read back. The pointer cannot work in the background,
+the human's sight. Each result says which method it used and whether the
+human's focus stayed put; a check box, slider or field is read back, and
+a WARNING means an app took the human's focus, so stop and say so. Check
+a button press or keys with `ui`. The pointer cannot work in the background,
 so it is refused over any window but the human's: press controls there
 with `click_ui`. A hidden window's screenshot can be stale (many apps stop
 drawing while hidden), so read its state with `ui`. When something cannot
@@ -106,9 +108,13 @@ or switch their workspace. `launch` opens apps there, `click_ui` presses
 controls through the accessibility tree, and `keyboard` needs window= and
 types into that window in the background. The pointer, workspace
 switches, focus_window, fullscreen and use_bind are refused, and
-background=false cannot override that. A hidden window's screenshot can
-be stale (many apps stop drawing while hidden), so read its state with
-`ui`. When something cannot be done, ask the human."""
+background=false cannot override that. `launch` still runs its command as
+given, so never launch a command that drives the desktop itself, and an
+app that is already running (a browser) opens its window on the human's
+screen first: start a separate instance. A result with a WARNING means
+the human's focus moved: stop and tell them. A hidden window's screenshot
+can be stale (many apps stop drawing while hidden), so read its state
+with `ui`. When something cannot be done, ask the human."""
 
 BACKGROUND_OFF = """
 Background mode is off for this session (HYPRUSE_BACKGROUND=0): every
@@ -1627,10 +1633,14 @@ def launch(
     window gets moved after it appears) and `wait_s` (1-30, default 8;
     raise for slow apps). Without `workspace`, the app opens silently on
     the next of the agent's own workspaces (HYPRUSE_AGENT_WORKSPACES, 99
-    down to 90 by default), out of the human's sight, so the agent can
-    work on it in the background; `background=false` opens it on the
-    human's workspace instead. Returns the new window's
-    address/class/title/workspace, or a timeout note."""
+    down to 90 by default) that is not on screen, so the agent can work on
+    it in the background; `background=false` opens it on the human's
+    workspace instead. It waits for its own window (one on that workspace,
+    or of the program's own class), never one the human opens meanwhile.
+    An app that is already running opens its window from the running
+    process, on the human's screen, before it is moved: the note says so.
+    Returns the new window's address/class/title/workspace, or a timeout
+    note."""
     safety.touch("launch")
     wait_s = min(max(wait_s, 1.0), 30.0)
     # Background mode: with no workspace, automatic mode and the guarantee
@@ -2161,10 +2171,12 @@ def sequence(
     keyboard) appearing, so later steps do not act on stale state.
     Notification popups and bars are not treated as changes. It does NOT catch
     a bare focus change, so to type into a specific window reliably give
-    that keyboard step a window= address (it focuses first). Bounded to 20
+    that keyboard step a window= address (the keys go to that window).
+    Bounded to 20
     steps and ~30s total. `then` observes the final state ('desktop'
     default, 'screenshot', 'ui', 'none'). `background` applies to every
-    pointer, keyboard and click_ui step that does not set its own."""
+    pointer, keyboard and click_ui step that does not set its own, and
+    background=true refuses a hypr step that takes the human's view."""
     safety.touch("sequence")
     if not steps:
         raise ValueError("sequence needs at least one step")

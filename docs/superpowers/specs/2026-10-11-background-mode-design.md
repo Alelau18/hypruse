@@ -119,6 +119,28 @@ UTF-16 units for Qt, so it is computed per toolkit.
   accessibility text, sendshortcut, foreground), and a dry run reports the
   method it would use.
 
+## Changes from the review before release
+
+A 175-agent review of the first build found that the design's main
+promise needed more than the policy. These rules were added:
+
+- A background action acts on an AT-SPI object directly, so the object
+  must provably belong to the target window: a frame matched by a title
+  or size that another window of the same app shares is not used (the
+  click refuses, the keys go by sendshortcut, aimed by address).
+- Results read the human's active window and workspace before and after,
+  claim "focus untouched" only when they match, and warn when an app
+  moved them. Typed results never repeat the text (the journal stores
+  result lines).
+- `launch` waits for its own window (on its workspace, or of the launched
+  program's class) and never picks an agent workspace that is on screen.
+- The guarantee bounds hypruse's own input; a launched command runs as
+  given, and an already running app opens its window on the human's
+  screen first, which the result reports as a warning.
+- GTK 3 fields are not focused over AT-SPI while `misc:focus_on_activate`
+  is on, a password field among several refuses without `allow_auth`, and
+  newlines and tabs are always keys.
+
 ## Safety
 
 - Every existing guard applies to the background paths. Confinement checks

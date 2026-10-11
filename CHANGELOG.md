@@ -15,49 +15,67 @@ with no compositor plugin.
   is in runs on their screen as before. An action on any other window
   runs without their cursor, keyboard focus or workspace. `click_ui`
   presses the control through its accessibility action (a text field gets
-  the app's own focus) and reads it back. `keyboard` with `window=` types
-  into the window's text field through the accessibility interface, or
-  sends the keys to that window alone with Hyprland's `sendshortcut`,
-  mapped to the keyboard layout (AZERTY and AltGr characters included).
-  Each result names the method and what the accessibility tree read back,
-  and a refusal gives the reason and what to do instead: a right or double
-  click, a control with no accessibility action, a character the layout
-  has no key for, an XWayland window, or a keyboard switched away from its
-  first layout on the sendshortcut path.
+  the app's own focus). `keyboard` with `window=` types into the window's
+  focused or only text field through the accessibility interface, or sends
+  the keys to that window alone with Hyprland's `sendshortcut`, mapped to
+  the keyboard layout (AZERTY and AltGr characters included).
+- **Results that say what happened.** Each background result names its
+  method and reads the human's focused window and workspace before and
+  after: it says their focus was untouched only when it was, and ends with
+  a `WARNING` when an app took it. A check box, slider or field is read
+  back from the accessibility tree; typed results never repeat the text.
+  A refusal gives the reason and what to do instead.
 - **The agent's workspaces.** `launch` with no workspace opens the app
   silently on the next of the agent's own workspaces:
   `HYPRUSE_AGENT_WORKSPACES`, 99 down to 90 by default (a range in either
   direction, a comma list, or `name:` workspaces), `HYPRUSE_AGENT_FILL`
-  apps to a workspace (default 1), skipping any that hold the human's
-  windows.
+  apps to a workspace (default 1). It skips one that holds the human's
+  windows or is on screen, counts a window an earlier session tagged
+  `hypruse-owned` as the agent's, and stays inside
+  `HYPRUSE_CONFINE=workspace:...`. It waits for its own window, never one
+  the human opens meanwhile.
 - **The guarantee, `HYPRUSE_BACKGROUND=1`.** Input is confined to the
   windows on the agent's workspaces, and to `HYPRUSE_CONFINE`'s scope too
   when both are set. The pointer, workspace switches, `focus_window`,
-  `fullscreen` and `use_bind` are refused, and `move_window` and `launch`
-  take only the agent's workspaces.
+  `fullscreen`, `toggle_floating` with no target and `use_bind` are
+  refused, and `move_window` and `launch` take only agent workspaces that
+  are off screen. It bounds hypruse's own input, not what a launched
+  command does.
 - **`background=true|false`** on `click_ui`, `keyboard`, `pointer`,
-  `launch` and `sequence` (which passes it to its steps), and
-  `--background` / `--foreground` on the CLI verbs.
+  `launch` and `sequence` (which passes it to its pointer, keyboard and
+  `click_ui` steps and, when true, refuses a `hypr` step that takes the
+  human's view), and `--background` / `--foreground` on the CLI verbs.
+- **Background refusals.** A right or double click; a control with no
+  accessibility action; a control in a window whose app has another window
+  of the same title or size, which the accessibility tree cannot tell
+  apart; focusing a GTK 3 field while `misc:focus_on_activate` is on; a
+  password field among several text fields without `allow_auth`; and, on
+  the `sendshortcut` path, a character the layout has no key for, an
+  XWayland window, or a keyboard switched away from its first layout.
 - A live suite, `pytest -m background`, that drives yad forms on the
   agent's workspaces and checks the human's active window, workspace and
-  cursor after every step.
+  cursor after every step, and the compositor's focus and workspace events.
 
 ### Changed
 - In automatic mode, the default, some calls behave differently from
   0.12. `launch` without a workspace opens on an agent workspace, not the
   human's. `click_ui` and `keyboard(window=...)` on a window the human is
   not in no longer focus it. `pointer` is refused where its input would
-  land on a window other than the active one, and a move counts, since
-  focus follows the mouse. `HYPRUSE_BACKGROUND=0` keeps 0.12's behaviour
-  for the session, and `background=false` does so for one call.
+  land on a window other than the active one (a launcher or popup over the
+  point counts as the human's), and a move counts, since focus follows the
+  mouse. `HYPRUSE_BACKGROUND=0` keeps 0.12's behaviour for the session,
+  and `background=false` does so for one call.
 - `ui` lists editable text fields among the actionable controls, and an
   unnamed field takes the name of its label, so `click_ui Name` finds a
-  GTK form's field by the label next to it.
-- A silent launch no longer re-baselines the `HYPRUSE_STRICT` seat guard,
-  since the human's seat did not change.
+  GTK form's field by the label next to it. A control is listed once even
+  when its label also points at it.
 - `ui` and `then='ui'` end with a note when the window is not on screen:
   its points are inside the window, and a `pointer` click at them would
   land on whatever the human sees there.
+- `launch` with a workspace now waits for a window on that workspace or of
+  the launched program's class, instead of the first window that opens
+  anywhere, and re-baselines the `HYPRUSE_STRICT` seat guard only when it
+  moved the seat (always with `HYPRUSE_BACKGROUND=0`).
 
 ## [0.12.1] - 2026-10-11
 
