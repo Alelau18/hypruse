@@ -13,7 +13,7 @@ from hypruse import server as srv
 def make_client():
     return {
         "address": "0xa", "class": "gedit", "title": "doc",
-        "at": [100, 50], "size": [800, 600], "pid": 42,
+        "at": [100, 50], "size": [800, 600], "pid": 42, "workspace": {"id": 1},
     }
 
 
@@ -51,6 +51,8 @@ def wired(monkeypatch):
     # check would query the live compositor)
     monkeypatch.setattr(srv.trust, "covering_layer", lambda x, y: None)
     monkeypatch.setattr(srv.trust, "_read_layers", lambda: [])
+    # and no other window over the point, unless a test says so
+    monkeypatch.setattr(srv.trust, "_windows_under", lambda x, y: [])
     calls["client"] = client
     return calls
 
@@ -232,5 +234,62 @@ def test_click_ui_confinement_wiring_refuses_out_of_scope(wired, monkeypatch):
 def test_click_ui_auth_wiring_refuses_polkit(wired, monkeypatch):
     wired["client"]["class"] = "hyprpolkitagent"
     with pytest.raises(srv.trust.TrustError, match="authentication dialog"):
+        srv.click_ui(name="Save")
+    assert wired["clicks"] == []
+
+
+# --- click_ui checks the point, not just the target (0.12.1 review) ---------
+
+AUTH_DIALOG = {"address": "0xp", "class": "hyprpolkitagent", "floating": True,
+               "at": [100, 50], "size": [400, 200], "workspace": {"id": 1}}
+
+
+def test_click_ui_refuses_a_floating_auth_dialog_over_the_control(wired, monkeypatch):
+    # Hyprland's hit test puts a floating window above any tiled one, so the
+    # dialog, not the target, would take the click
+    monkeypatch.setattr(srv.trust, "_windows_under", lambda x, y: [AUTH_DIALOG])
+    with pytest.raises(srv.trust.TrustError, match="authentication dialog"):
+        srv.click_ui(name="Save")
+    assert wired["clicks"] == [] and wired["dispatch"] == []
+    monkeypatch.setattr(srv.journal, "dry_run", lambda: True)
+    with pytest.raises(srv.trust.TrustError, match="authentication dialog"):
+        srv.click_ui(name="Save")  # the dry run rehearses the refusal too
+
+
+def test_click_ui_through_an_auth_dialog_needs_allow_auth(wired, monkeypatch):
+    monkeypatch.setattr(srv.trust, "_windows_under", lambda x, y: [AUTH_DIALOG])
+    srv.click_ui(name="Save", allow_auth=True)
+    assert wired["clicks"] == [(150, 80, "left")]
+
+
+def test_click_ui_ignores_windows_that_cannot_be_over_the_target(wired, monkeypatch):
+    # a tiled neighbour cannot overlap a tiled target, an inactive group tab
+    # shares its rect without drawing, and a window on another (non-special)
+    # workspace is gone once the target's workspace is shown
+    tiled = {"address": "0xt", "class": "hyprpolkitagent", "floating": False,
+             "at": [0, 0], "size": [900, 900], "workspace": {"id": 1}}
+    tab = dict(AUTH_DIALOG, address="0xg", visible=False)
+    elsewhere = dict(AUTH_DIALOG, address="0xe", workspace={"id": 9})
+    monkeypatch.setattr(srv.trust, "_windows_under", lambda x, y: [tiled, tab, elsewhere])
+    srv.click_ui(name="Save")
+    assert wired["clicks"] == [(150, 80, "left")]
+
+
+def test_click_ui_refuses_an_out_of_scope_window_over_the_control(wired, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_CONFINE", f"class:{wired['client']['class']}")
+    other = dict(AUTH_DIALOG, address="0xf", **{"class": "firefox"})
+    monkeypatch.setattr(srv.trust, "_windows_under", lambda x, y: [other])
+    with pytest.raises(srv.trust.TrustError, match="confinement"):
+        srv.click_ui(name="Save")
+    assert wired["clicks"] == []
+
+
+def test_click_ui_refuses_when_focusing_moved_the_window(wired, monkeypatch):
+    # focusing can fullscreen a window behind a fullscreen one, scroll a
+    # column into view, or move a scratchpad: the old point is stale
+    moved = dict(wired["client"], at=[300, 200])
+    seen = iter([wired["client"], moved])
+    monkeypatch.setattr(srv, "_resolve_window", lambda w="": next(seen))
+    with pytest.raises(srv.trust.TrustError, match="moved"):
         srv.click_ui(name="Save")
     assert wired["clicks"] == []

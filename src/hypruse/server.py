@@ -412,7 +412,8 @@ def ui(window: str = "", name: str = "", actionable: bool = True) -> list[Any] |
     keeps only interactive roles (buttons, entries, menu items, ...).
     Returns [{role, name, x, y, clickable}] where x,y is the click point:
     focus the window, then click it with `pointer` (the window must be
-    visible to receive the click), or do both in one call with `click_ui`.
+    visible to receive the click, and focusing can move it, so read again
+    after focusing), or do both in one call with `click_ui`.
     Controls that carry a CURRENT VALUE also
     report it: `value` (text typed into an entry, or a slider/spinner
     number), `percent` for a slider's position, `checked` for a box or
@@ -467,8 +468,10 @@ def _draw_marks(
 
 
 # the last marks capture, so click_ui(mark=N) can click a numbered control.
-# Offsets are WINDOW-RELATIVE and re-anchored to the window's current
-# position at click time, so a moved window does not invalidate the marks.
+# Offsets are WINDOW-RELATIVE and re-anchored to the window's position
+# when click_ui resolves the mark, so a window moved since the capture does
+# not invalidate them; one that moves when focused for the click is
+# refused, since its controls may have reflowed.
 _last_marks: dict[str, Any] = {}
 
 
@@ -882,7 +885,8 @@ def click_ui(
     # the click provably cannot reach it (window_given=True always refuses,
     # even with allow_auth: there is no "drive the prompt by control name").
     trust.guard_session_lock(True, allow_auth)
-    trust.guard_covering_layer(x, y)
+    trust.guard_covering_layer(x, y, allow_auth)
+    trust.guard_click_point(client, x, y, allow_auth)  # a floating window over it
     if journal.dry_run():  # before the focus dispatch, which is a real change
         return _acted(
             f"{_DRY} click {desc} at ({x}, {y}) in {client.get('class', '')}",
@@ -891,6 +895,19 @@ def click_ui(
         )
     hyprctl.dispatch("focuswindow", f"address:{client['address']}")
     time.sleep(0.05)  # focus (and a possible workspace switch) settles first
+    # focusing can move the window: Omarchy fullscreens a window focused
+    # behind a fullscreen one, a scrolling layout fits its column into
+    # view, a scratchpad follows the focused monitor. The point was worked
+    # out from where it was, so a moved window means a stale point.
+    now = _resolve_window(client["address"])
+    if (now.get("at"), now.get("size")) != (client.get("at"), client.get("size")):
+        raise trust.TrustError(
+            f"the window moved when it was focused (from {client.get('at')} "
+            f"{client.get('size')} to {now.get('at')} {now.get('size')}); nothing was "
+            "clicked. Call click_ui again so the point is worked out from where it is now."
+        )
+    trust.guard_covering_layer(x, y, allow_auth)
+    trust.guard_click_point(now, x, y, allow_auth)
     hinput.click(x, y, button=button, double=double)
     trust.remember_seat()
     # observe the CLICKED window, not whatever holds focus after the click

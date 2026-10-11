@@ -97,8 +97,8 @@ def test_guard_pointer_includes_special_workspace(monkeypatch):
     # coverage check must add specialWorkspace to the visible set
     monkeypatch.setenv("HYPRUSE_CONFINE", "class:kitty")
     monkeypatch.setenv("HYPRUSE_AUTH_GUARD", "0")
-    monitors = [{"name": "m", "activeWorkspace": {"id": 1},
-                 "specialWorkspace": {"id": -99}}]
+    monitors = [{"name": "m", "x": 0, "y": 0, "width": 1920, "height": 1080, "scale": 1.0,
+                 "activeWorkspace": {"id": 1}, "specialWorkspace": {"id": -99}}]
     windows = [
         {"address": "0xvault", "class": "keepassxc", "at": [40, 40], "size": [300, 300],
          "workspace": {"id": -99}, "mapped": True},
@@ -113,7 +113,8 @@ def test_guard_pointer_includes_special_workspace_without_ids(monkeypatch):
     # scratchpad is known only by name and must still count as on screen
     monkeypatch.setenv("HYPRUSE_CONFINE", "class:kitty")
     monkeypatch.setenv("HYPRUSE_AUTH_GUARD", "0")
-    monitors = [{"name": "m", "activeWorkspace": {"id": 1, "type": "normal", "name": "1"},
+    monitors = [{"name": "m", "x": 0, "y": 0, "width": 1920, "height": 1080, "scale": 1.0,
+                 "activeWorkspace": {"id": 1, "type": "normal", "name": "1"},
                  "specialWorkspace": {"type": "special", "name": "special:vault"}}]
     windows = [
         {"address": "0xvault", "class": "keepassxc", "at": [40, 40], "size": [300, 300],
@@ -1007,3 +1008,20 @@ def test_session_locked_survives_a_non_utf8_process_name(monkeypatch, tmp_path):
     monkeypatch.setattr(trust, "_PROC", str(tmp_path))
     monkeypatch.setattr(trust, "_compositor_locked", lambda: True)
     assert real_session_locked() == "lock screen"
+
+
+def test_pointer_refuses_a_point_off_every_monitor_under_a_guard(monkeypatch):
+    # Hyprland moves the cursor to the nearest monitor edge, where a window
+    # the guard never checked would take the click
+    monkeypatch.setenv("HYPRUSE_CONFINE", "class:kitty")
+    full = {"address": "0xf", "class": "firefox", "at": [0, 0], "size": [1920, 1080],
+            "workspace": {"id": 1}, "mapped": True}
+    _batch(monkeypatch, MON, [full])
+    monkeypatch.setattr(trust.hyprctl, "query", lambda cmd: {})
+    with pytest.raises(trust.TrustError, match="off every monitor"):
+        trust.guard_pointer(5000, 500)
+
+
+def test_click_ui_allow_auth_lifts_the_unreadable_layer_refusal(monkeypatch):
+    _layers_down(monkeypatch)
+    trust.guard_covering_layer(500, 500, allow_auth=True)

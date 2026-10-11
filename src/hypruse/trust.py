@@ -209,9 +209,15 @@ def guard_use_bind() -> None:
 def _windows_under(x: float, y: float) -> list[dict[str, Any]]:
     """Every mapped, on-screen window whose rect covers (x, y). One batched
     hyprctl call (monitors + clients) so a pointer guard costs one fork."""
+    return _seat_at(x, y)[1]
+
+
+def _seat_at(x: float, y: float) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The monitors, and the mapped on-screen windows whose rect covers
+    (x, y), from one batched hyprctl call."""
     monitors, clients = hyprctl.batch_query(["monitors", "clients"])
     visible = hyprctl.visible_workspaces(monitors)
-    return [
+    return monitors, [
         c
         for c in clients
         if c.get("mapped", True)
@@ -248,7 +254,15 @@ def guard_pointer(x: float | None, y: float | None, allow_auth: bool = False) ->
                 "cannot resolve the cursor position to guard a coordinate-less "
                 f"pointer action ({exc}); pass explicit x,y or retry"
             ) from exc
-    under = _windows_under(px, py)
+    monitors, under = _seat_at(px, py)
+    if hyprctl.monitor_at(monitors, px, py) is None:
+        # Hyprland moves the cursor to the nearest point inside the monitor
+        # layout, where a window this guard never checked takes the input
+        raise TrustError(
+            f"({px:.0f}, {py:.0f}) is off every monitor: Hyprland would move the pointer "
+            "to the nearest screen edge, onto a window the guards never checked; "
+            "refusing. Aim at a point on a monitor."
+        )
     if scope is not None:
         outside = [c for c in under if not _client_in_scope(c, scope)]
         if outside:
@@ -286,6 +300,68 @@ def guard_pointer(x: float | None, y: float | None, allow_auth: bool = False) ->
                 "authentication prompt; refusing the click. Pass allow_auth=true only "
                 "if a human intends this credential action."
             )
+
+
+def guard_click_point(
+    client: dict[str, Any], x: float, y: float, allow_auth: bool = False
+) -> None:
+    """Guard click_ui's point, not just its target window. Hyprland's hit
+    test puts floating windows above tiled ones, so a floating or
+    fullscreen window over the target's control takes the click; refuse
+    when that window is an authentication dialog, or out of scope under
+    confinement. What cannot be over the target does not count: the target
+    and its group tabs, an inactive tab (it shares a rect without
+    drawing), a tiled neighbour on its workspace (tiled windows do not
+    overlap), another floating window when the target floats too (focusing
+    raises the target), and windows on other normal workspaces (gone once
+    the target's workspace is shown). A pulled-up special workspace sits
+    over everything, so its windows count. Fails closed while a guard is
+    on and the windows cannot be read."""
+    scope = _confine_scope()
+    auth = _auth_guard_on() and not allow_auth
+    if scope is None and not auth:
+        return
+    try:
+        under = _windows_under(x, y)
+    except Exception as exc:
+        raise TrustError(
+            f"cannot read the windows over ({x:.0f}, {y:.0f}) to guard the click ({exc}); "
+            "refusing. Retry."
+        ) from exc
+    mine = hyprctl.workspace_ref(client.get("workspace"))
+    skip = {client.get("address"), *(client.get("grouped") or [])}
+
+    def over_target(c: dict[str, Any]) -> bool:
+        if c.get("address") in skip or c.get("visible") is False:
+            return False
+        ws = c.get("workspace") or {}
+        if hyprctl.workspace_ref(ws) != mine:
+            return _is_special(ws)
+        if c.get("fullscreen"):
+            return True
+        return bool(c.get("floating")) and not client.get("floating")
+
+    over = [c for c in under if over_target(c)]
+    if auth:
+        hit = next((c for c in over if (c.get("class") or "").lower() in _AUTH_CLASSES), None)
+        if hit is not None:
+            raise TrustError(
+                f"({x:.0f}, {y:.0f}) is covered by {hit.get('class')}, a system authentication "
+                "dialog, which would take the click; refusing. Pass allow_auth=true only if "
+                "a human intends this credential action."
+            )
+    if scope is not None:
+        outside = [c for c in over if not _client_in_scope(c, scope)]
+        if outside:
+            classes = ", ".join(sorted({c.get("class", "?") for c in outside}))
+            raise TrustError(
+                f"({x:.0f}, {y:.0f}) is covered by a window outside the confinement scope "
+                f"({classes}; {_describe(scope)}), which would take the click; refusing"
+            )
+
+
+def _is_special(ws: dict[str, Any]) -> bool:
+    return ws.get("type") == "special" or str(ws.get("name", "")).startswith("special:")
 
 
 def _covers(client: dict[str, Any], x: float, y: float) -> bool:
@@ -583,7 +659,7 @@ def _dismiss_advice(kind: str) -> str:
     )
 
 
-def guard_covering_layer(x: float, y: float) -> None:
+def guard_covering_layer(x: float, y: float, allow_auth: bool = False) -> None:
     """Refuse a window-targeted click while a focus-stealing layer covers
     the point: the layer would receive the click, the window's control
     never would, and reporting 'clicked' would be a lie. For click_ui,
@@ -594,10 +670,11 @@ def guard_covering_layer(x: float, y: float) -> None:
     cannot be ruled out."""
     surfaces = _read_layers()
     if surfaces is None:
-        if _auth_guard_on():
+        if _auth_guard_on() and not allow_auth:
             raise TrustError(
                 "cannot read the layer list to rule out an authentication prompt "
-                f"over ({x:.0f}, {y:.0f}); refusing the click. Retry."
+                f"over ({x:.0f}, {y:.0f}); refusing the click. Retry, or pass "
+                "allow_auth=true only if a human intends a credential action."
             )
         return
     s = _topmost_covering(surfaces, x, y)
