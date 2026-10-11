@@ -25,6 +25,11 @@ class ScreenshotError(RuntimeError):
     """grim failed or the capture target does not exist."""
 
 
+class CaptureRefused(ScreenshotError):
+    """A capture that trying again will not fix: the window is gone, there
+    is no active window, or the session is locked."""
+
+
 _REGION = re.compile(r"^\s*(-?\d+)\s*,\s*(-?\d+)\s*[, ]\s*(\d+)\s*x\s*(\d+)\s*$")
 
 _SIZE = re.compile(r"^\s*(\d+)\s*x\s*(\d+)\s*$")
@@ -222,11 +227,11 @@ def _scale_for_rect(x: int, y: int, w: int, h: int, monitors: list[dict[str, Any
 def _find_window(window: str, clients: list[dict[str, Any]], active: str | None) -> dict[str, Any]:
     target = active if window == "active" else window
     if not target:
-        raise ScreenshotError("no active window")
+        raise CaptureRefused("no active window")
     for c in clients:
         if c.get("address") == target:
             return c
-    raise ScreenshotError(
+    raise CaptureRefused(
         f"window {target!r} not found, call desktop() for current addresses"
     )
 
@@ -408,7 +413,7 @@ def capture(
         # capture would show what the human's lock screen hides
         locker = trust.session_locked()
         if locker:
-            raise ScreenshotError(
+            raise CaptureRefused(
                 f"the session is locked ({locker}): window captures are refused "
                 "until a human unlocks it, since they would show what the lock "
                 "screen hides. A monitor screenshot shows the lock screen."
@@ -537,8 +542,13 @@ def capture_stable(
         time.sleep(interval)
         try:
             nxt, nmeta = capture(window, region, scale, max_bytes, max_edge, lossless)
+        except CaptureRefused:
+            raise  # gone or locked: an older frame would hide that
         except ScreenshotError:
             continue  # e.g. mid-animation: keep the last good frame and try again
+        if nmeta.get("visible") is False:
+            nmeta["stable"] = None  # it left the screen: see the note above
+            return nxt, nmeta
         if nxt == data:
             nmeta["stable"] = True
             return nxt, nmeta

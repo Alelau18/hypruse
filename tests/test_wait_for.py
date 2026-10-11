@@ -177,3 +177,16 @@ def test_the_already_active_check_knows_both_names(monkeypatch):
 def test_a_sequence_excuses_its_own_switch_under_either_name():
     assert srv._workspace_signatures(WEB_057) == {"workspace:web", "workspace:2"}
     assert srv._workspace_signatures({"id": 2, "name": "2"}) == {"workspace:2"}  # 0.56
+
+
+def test_a_digit_filter_does_not_match_a_named_workspace_on_056(monkeypatch):
+    # 0.56 gives a named workspace a negative id (-1337); its digits are not
+    # a name anyone filtered on
+    named = {"id": -1337, "name": "web"}
+    renamed = {"id": 2, "name": "mail"}
+    monkeypatch.setattr(srv.hyprctl, "query",
+                        lambda what: [named, renamed] if what == "workspaces" else {})
+    matches = srv._event_matcher("3")
+    assert not matches("workspace", {"name": "web"})
+    # a renamed numbered workspace still matches its number
+    assert srv._event_matcher("2")("workspace", {"name": "mail"})

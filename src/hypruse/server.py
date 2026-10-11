@@ -1286,7 +1286,12 @@ def _workspace_aliases(ref: str) -> str:
     try:
         for w in hyprctl.query("workspaces") or []:
             if ref in (str(w.get("address", "")), str(w.get("id", "")), str(w.get("name", ""))):
-                return " ".join(str(w.get(k, "")) for k in ("name", "address", "id"))
+                names = [str(w.get("name", "")), str(w.get("address", ""))]
+                # a workspace's number, but not 0.56's negative ids for named
+                # and special workspaces (-1337), whose digits nobody filters on
+                if isinstance(w.get("id"), int) and w["id"] > 0:
+                    names.append(str(w["id"]))
+                return " ".join(names)
     except Exception:
         pass
     return ""

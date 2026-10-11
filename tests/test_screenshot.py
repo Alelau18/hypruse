@@ -406,3 +406,41 @@ def test_the_size_check_tolerates_grim_truncating(monkeypatch):
     _scene(monkeypatch, [SHOWN, wide], toplevel=lambda args: _png(1567, 876))
     _, meta = screenshot.capture(window="0xb", max_edge=1568)
     assert meta["image"] == [1567, 876]
+
+
+def test_capture_stable_reports_a_window_that_closed_mid_loop(monkeypatch):
+    # a dialog that closes on its own must not come back as a stale frame
+    # of a window that is gone
+    frames = iter([(b"a", {"visible": True}),
+                   screenshot.CaptureRefused("window '0xa' not found, call desktop()")])
+
+    def fake_capture(*a, **k):
+        f = next(frames)
+        if isinstance(f, Exception):
+            raise f
+        return f[0], dict(f[1])
+
+    monkeypatch.setattr(screenshot, "capture", fake_capture)
+    with pytest.raises(screenshot.ScreenshotError, match="not found"):
+        screenshot.capture_stable(window="0xa", interval=0, timeout=5)
+
+
+def test_capture_stable_does_not_certify_a_window_that_left_the_screen(monkeypatch):
+    frames = iter([(b"a", {"visible": True}), (b"a", {"visible": False})])
+
+    def fake_capture(*a, **k):
+        data, meta = next(frames)
+        return data, dict(meta)
+
+    monkeypatch.setattr(screenshot, "capture", fake_capture)
+    _, meta = screenshot.capture_stable(window="0xa", interval=0, timeout=5)
+    assert meta["stable"] is None
+
+
+def test_a_missing_window_and_a_lock_are_refusals_that_do_not_pass(monkeypatch):
+    _scene(monkeypatch, [SHOWN])
+    with pytest.raises(screenshot.CaptureRefused):
+        screenshot.capture(window="0xdead")
+    monkeypatch.setattr(screenshot.trust, "session_locked", lambda: "hyprlock")
+    with pytest.raises(screenshot.CaptureRefused):
+        screenshot.capture(window="0xa")
