@@ -527,3 +527,24 @@ def test_numbered_workspaces_sort_as_numbers():
     ws = [{"id": i, "name": str(i)} for i in (10, 2, 1)]
     s = hyprctl.snapshot_from([], ws, [], None, None)
     assert [w["id"] for w in s["workspaces"]] == [1, 2, 10]
+
+
+def test_send_shortcut_legacy(monkeypatch):
+    sent = []
+    monkeypatch.setattr(hyprctl, "_provider", hyprctl.HYPRLANG)
+    monkeypatch.setattr(hyprctl, "_run", lambda *a: sent.append(a) or "ok")
+    hyprctl.send_shortcut("SHIFT", "ampersand", "0xabc")
+    assert sent == [("dispatch", "sendshortcut", "SHIFT, ampersand, address:0xabc")]
+
+
+def test_send_shortcut_lua():
+    expr = hyprctl.lua_dispatch("sendshortcut", ("SHIFT, ampersand, address:0xabc",))
+    assert expr == ('hl.dsp.send_shortcut({ mods = "SHIFT", key = "ampersand", '
+                    'window = "address:0xabc" })')
+
+
+def test_active_layout(monkeypatch):
+    monkeypatch.setattr(hyprctl, "query", lambda what: {"keyboards": [
+        {"main": False, "layout": "us"},
+        {"main": True, "layout": "fr", "variant": "", "options": ""}]})
+    assert hyprctl.active_layout() == ("fr", "", "")

@@ -237,6 +237,14 @@ def _lua_tagwindow(tag: str, window: str = "") -> str:
 # thing. Each pair lands on the SAME C++ action, so the desktop behaves
 # identically either way; the two places where the Lua defaults are not the
 # legacy ones (a silent move, a fullscreen toggle) are spelled out above.
+def _lua_sendshortcut(arg: str) -> str:
+    mods, key, window = (p.strip() for p in arg.split(",", 2))
+    return (
+        f"hl.dsp.send_shortcut({{ mods = {lua_str(mods)}, key = {lua_str(key)}, "
+        f"window = {lua_str(window)} }})"
+    )
+
+
 _LUA_DISPATCH = {
     "exec": _lua_exec,
     "movecursor": _lua_movecursor,
@@ -247,6 +255,7 @@ _LUA_DISPATCH = {
     "fullscreen": _lua_fullscreen,
     "togglefloating": _lua_togglefloating,
     "tagwindow": _lua_tagwindow,
+    "sendshortcut": _lua_sendshortcut,
 }
 
 
@@ -317,6 +326,25 @@ def dispatch(name: str, *args: str) -> None:
         if now == was or _provider is None:
             raise
         _dispatch_as(now, name, args)
+
+
+def send_shortcut(mods: str, key: str, address: str) -> None:
+    """Send one key, with modifiers, to a window without focusing it.
+    Hyprland moves keyboard focus to the window, sends the key and restores
+    focus inside one event-loop step (Actions::pass), so the human's own
+    keys cannot interleave. Refuse an XWayland target before calling this:
+    between two XWayland windows Hyprland delivers to the focused one."""
+    dispatch("sendshortcut", f"{mods}, {key}, address:{address}")
+
+
+def active_layout() -> tuple[str, str, str]:
+    """(layout, variant, options) of the main keyboard; ("us", "", "") if unknown."""
+    with contextlib.suppress(Exception):
+        kb = next(k for k in query("devices")["keyboards"] if k.get("main"))
+        layout = (kb.get("layout") or "us").split(",")[0]
+        variant = (kb.get("variant") or "").split(",")[0]
+        return layout, variant, kb.get("options") or ""
+    return "us", "", ""
 
 
 def keyword(name: str, *values: str) -> None:
