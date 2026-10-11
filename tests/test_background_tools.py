@@ -5,6 +5,8 @@ import pytest
 
 from hypruse import server as srv
 
+REAL_UI_READ = srv._ui_read  # bound before the fixture stubs it
+
 CLIENT = {"address": "0xa", "class": "gedit", "title": "doc", "at": [100, 50],
           "size": [800, 600], "pid": 42, "workspace": {"id": 99}, "monitor": 0,
           "floating": False}
@@ -28,10 +30,17 @@ def wired_bg(monkeypatch):
         return dict(CLIENT, xwayland=s["xwayland"])
 
     monkeypatch.setattr(srv, "_resolve_window", resolve)
-    monkeypatch.setattr(srv, "_ui_read", lambda w="", name="", actionable=True, handles=False: [
-        {"role": s["role"], "name": "Save" if s["role"] != "text" else "Name",
-         "x": 150, "y": 80, "clickable": True, "_svc": "svc",
-         "_path": "/save" if s["role"] != "text" else "/name"}])
+    def ui_read(w="", name="", actionable=True, handles=False):
+        item = {"role": s["role"], "name": "Save" if s["role"] != "text" else "Name",
+                "x": 150, "y": 80, "clickable": True}
+        if s["frame_sure"]:
+            item["_svc"], item["_path"] = "svc", "/save" if s["role"] != "text" else "/name"
+        else:
+            item["_unsure"] = True
+        return [item]
+
+    s["frame_sure"] = True
+    monkeypatch.setattr(srv, "_ui_read", ui_read)
 
     monkeypatch.setattr(srv, "_active_address", lambda: s["active"])
 
@@ -64,6 +73,9 @@ def wired_bg(monkeypatch):
                         lambda bus, pid, title="", size=None: ("app", "/root"))
     monkeypatch.setattr(srv.a11y, "window_frame",
                         lambda bus, svc, path, title="", size=None: (svc, path))
+    monkeypatch.setattr(srv.a11y, "window_frame_for",
+                        lambda bus, svc, path, title, size, peers:
+                        (svc, path) if s["frame_sure"] else None)
     monkeypatch.setattr(srv.a11y, "focused_text", lambda bus, svc, path: s["focused_text"])
     s["fields"] = []
     monkeypatch.setattr(srv.a11y, "editable_fields", lambda bus, svc, path: s["fields"])
@@ -73,6 +85,15 @@ def wired_bg(monkeypatch):
         s["inserted"].append((svc, path, text))
         texts["field"] += text
         return True
+
+    s["fail_after"] = None
+
+    def shortcut(mods, key, addr):
+        if s["fail_after"] is not None and len(s["shortcuts"]) >= s["fail_after"]:
+            raise srv.hyprctl.HyprctlError("window gone")
+        s["shortcuts"].append((mods, key, addr))
+
+    monkeypatch.setattr(srv.hyprctl, "send_shortcut", shortcut)
 
     monkeypatch.setattr(srv.a11y, "insert_text", insert)
     monkeypatch.setattr(srv.a11y, "text_of", lambda bus, svc, path: texts["field"])
@@ -183,7 +204,7 @@ def test_typing_into_a_hidden_text_field_uses_accessibility_text(wired_bg):
     out = str(srv.keyboard("type", text="hello", window="0xa"))
     assert wired_bg["inserted"] == [("svc", "/name", "hello")]
     assert wired_bg["typed"] == [] and wired_bg["dispatch"] == [] and wired_bg["shortcuts"] == []
-    assert "accessibility interface" in out and "'hello'" in out
+    assert "accessibility interface" in out and "holds the typed text (5 characters)" in out
 
 
 def test_typing_without_a_text_field_sends_chords(wired_bg):
@@ -504,3 +525,81 @@ def test_then_ui_after_a_background_press_carries_the_note(wired_bg, monkeypatch
     monkeypatch.setattr(srv.hyprctl, "batch_query", lambda cmds: [MONS, [CLIENT]])
     out = srv.click_ui(name="Save", window="0xa", then="ui")
     assert "not on screen" in out[-1].text
+
+
+# --- review fixes: identity, passwords, the journal ---------------------------
+
+
+def test_typing_in_a_window_its_tree_cannot_tell_apart_goes_by_keys(wired_bg):
+    # another window of the same app shares its title or size: the field
+    # found could be the human's, and sendshortcut is aimed by address
+    wired_bg["frame_sure"] = False
+    wired_bg["focused_text"] = ("svc", "/name", 79)
+    srv.keyboard("type", text="hi", window="0xa")
+    assert wired_bg["inserted"] == [] and len(wired_bg["shortcuts"]) == 2
+
+
+def test_a_press_in_a_window_its_tree_cannot_tell_apart_is_refused(wired_bg):
+    wired_bg["frame_sure"] = False
+    with pytest.raises(srv.trust.TrustError, match="cannot tell"):
+        srv.click_ui(name="Save", window="0xa")
+    assert wired_bg["actions"] == []
+
+
+def test_ui_read_hands_out_controls_only_from_a_proven_frame(wired_bg, monkeypatch):
+    monkeypatch.setattr(srv.a11y, "find_elements", lambda bus, s_, p, name="", actionable=True: (
+        [{"role": "push button", "name": "Save", "extent": (10, 10, 20, 20),
+          "clickable": True, "svc": s_, "path": p + "/save"}], False))
+    sure = REAL_UI_READ("0xa", handles=True)
+    assert sure[0]["_svc"] == "app" and "_unsure" not in sure[0]
+    wired_bg["frame_sure"] = False
+    unsure = REAL_UI_READ("0xa", handles=True)
+    assert "_svc" not in unsure[0] and unsure[0]["_unsure"]
+    assert "_unsure" not in REAL_UI_READ("0xa")[0]  # coordinates only: nothing to prove
+
+
+def test_a_password_field_among_several_is_refused_when_focus_is_unknown(wired_bg):
+    wired_bg["fields"] = [("svc", "/user", 79), ("svc", "/pw", 40)]
+    with pytest.raises(srv.trust.TrustError, match="password"):
+        srv.keyboard("type", text="hunter2", window="0xa")
+    assert wired_bg["shortcuts"] == [] and wired_bg["inserted"] == []
+    srv.keyboard("type", text="hunter2", window="0xa", allow_auth=True)
+    assert len(wired_bg["shortcuts"]) == 7
+
+
+def test_the_result_never_echoes_the_field(wired_bg):
+    # the journal stores every act's result line, and typed text is only
+    # ever recorded as a length plus a digest
+    wired_bg["focused_text"] = ("svc", "/name", 79)
+    out = str(srv.keyboard("type", text="sk-live-SECRET", window="0xa"))
+    assert "SECRET" not in out and "holds the typed text" in out
+
+
+def test_a_keyless_character_is_named_by_position_not_echoed(wired_bg):
+    with pytest.raises(srv.trust.TrustError) as err:
+        srv.keyboard("type", text="ab\u4e0a", window="0xa")
+    assert "character 3" in str(err.value) and "\u4e0a" not in str(err.value)
+
+
+def test_typing_without_an_accessibility_bus_falls_back_to_keys(wired_bg, monkeypatch):
+    def no_bus():
+        raise srv.a11y.A11yError("accessibility bus reported no address")
+
+    monkeypatch.setattr(srv.a11y, "connect", no_bus)
+    srv.keyboard("type", text="ls", window="0xa")
+    assert len(wired_bg["shortcuts"]) == 2
+
+
+def test_newlines_and_tabs_are_keys_even_with_a_text_field(wired_bg):
+    # wtype and sendshortcut press Return for a newline; inserting a raw
+    # newline into an entry would submit nothing
+    wired_bg["focused_text"] = ("svc", "/name", 79)
+    srv.keyboard("type", text="q\n", window="0xa")
+    assert wired_bg["inserted"] == []
+    assert wired_bg["shortcuts"] == [("", "q", "0xa"), ("", "Return", "0xa")]
+
+
+def test_a_key_that_fails_partway_says_how_many_landed(wired_bg):
+    wired_bg["fail_after"] = 2
+    with pytest.raises(srv.hyprctl.HyprctlError, match="sent 2 of 4 keys"):
+        srv.keyboard("type", text="abcd", window="0xa")

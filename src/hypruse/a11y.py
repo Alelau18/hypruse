@@ -236,6 +236,39 @@ def window_frame(
     return (app_svc, app_path)
 
 
+def window_frame_for(
+    bus: Bus,
+    app_svc: str,
+    app_path: str,
+    title: str,
+    size: tuple[int, int] | None,
+    peers: list[tuple[str, tuple[int, int]]],
+) -> tuple[str, str] | None:
+    """The toplevel that is provably THIS window, or None when that cannot
+    be told. The background paths act on the object directly, so a guess
+    would press or type in another window of the same app, the human's
+    included. `peers` are the (title, size) of the app's other windows in
+    Hyprland: a title or size one of them shares could pick its frame, so
+    it proves nothing. Proof is exactly one frame named `title`, or else
+    exactly one frame of `size`. A lone frame is the window when the app has
+    no other window."""
+    frames = _children(bus, app_svc, app_path)
+    if len(frames) == 1 and not peers:
+        return (app_svc, app_path)
+    if title and all(t != title for t, _ in peers):
+        named = [f for f in frames if _name(bus, *f) == title]
+        if len(named) == 1:
+            return named[0]
+        if len(named) > 1:
+            return None
+    if size and all(tuple(z) != tuple(size) for _, z in peers):
+        sized = [f for f in frames
+                 if (ext := _window_extents(bus, *f)) and (ext[2], ext[3]) == tuple(size)]
+        if len(sized) == 1:
+            return sized[0]
+    return None
+
+
 def _name(bus: Bus, svc: str, path: str) -> str:
     try:
         return str(bus.prop(svc, path, _ACCESSIBLE, "Name") or "")
@@ -441,6 +474,10 @@ def _element(
         **element_value(bus, svc, path, role_num, states),
         "svc": svc,
         "path": path,
+        # a text field, told by role number: role NAMES differ per toolkit
+        # (GTK4 says "text box"), and pressing a field's action activates it
+        "field": (role_num in _TEXT_ROLES or role_num == PASSWORD_ROLE)
+        and _STATE_EDITABLE in states,
     }
 
 

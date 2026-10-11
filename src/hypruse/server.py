@@ -411,6 +411,18 @@ def _guarded_active_client() -> dict[str, Any] | None:
     # HyprctlError (IPC down/timeout) propagates: the guard fails closed
 
 
+def _peers(client: dict[str, Any]) -> list[tuple[str, tuple[int, int]]] | None:
+    """(title, size) of the other Hyprland windows of the client's process,
+    or None when the client list cannot be read."""
+    with contextlib.suppress(Exception):
+        return [
+            (c.get("title", ""), tuple(c.get("size") or (0, 0)))
+            for c in hyprctl.query("clients")
+            if c.get("pid") == client.get("pid") and c.get("address") != client.get("address")
+        ]
+    return None
+
+
 def _ui_read(
     window: str = "", name: str = "", actionable: bool = True, handles: bool = False
 ) -> list[Any] | str:
@@ -426,6 +438,13 @@ def _ui_read(
         if app is None:
             return f"{cls} exposes no accessibility tree; use screenshot + zoom instead"
         frame = a11y.window_frame(bus, app[0], app[1], title, tuple(client["size"]))
+        exact = None
+        if handles:  # a background press acts on the control itself: prove the frame
+            peers = _peers(client)
+            if peers is not None:
+                exact = a11y.window_frame_for(
+                    bus, app[0], app[1], title, tuple(client["size"]), peers)
+            frame = exact or frame
         elements, truncated = a11y.find_elements(
             bus, frame[0], frame[1], name=name, actionable=actionable
         )
@@ -452,8 +471,11 @@ def _ui_read(
         for key in ("value", "percent", "checked"):  # present only where it applies
             if key in e:
                 item[key] = e[key]
-        if handles:  # for click_ui and marks: what a background press needs
+        if handles and exact is not None:  # what a background press needs
             item["_svc"], item["_path"] = e["svc"], e["path"]
+            item["_field"] = bool(e.get("field"))
+        elif handles:  # another window of the app could own this control
+            item["_unsure"] = True
         out.append(item)
     if not out:
         what = f"matching {name!r}" if name else "actionable"
@@ -625,6 +647,9 @@ def marks(window: str = "", name: str = "") -> list[Any] | str:
                      "label": f"{e['role']} {e['name']!r}", "role": e["role"]}
         if "_svc" in e:  # a background press needs the control itself, not its point
             stored[i]["svc"], stored[i]["path"] = e["_svc"], e["_path"]
+            stored[i]["field"] = e.get("_field", False)
+        elif e.get("_unsure"):
+            stored[i]["unsure"] = True
     global _last_marks
     # class and time travel with the numbering: a later click_ui(mark=N)
     # checks both, since the CLI carries this record across processes and an
@@ -1023,7 +1048,9 @@ def click_ui(
         x, y = client["at"][0] + item["dx"], client["at"][1] + item["dy"]
         desc = f"mark {mark} ({item['label']})"
         control = {"_svc": item.get("svc"), "_path": item.get("path"),
-                   "role": item.get("role", "")}
+                   "role": item.get("role", ""), "_unsure": item.get("unsure", False)}
+        if "field" in item:
+            control["_field"] = item["field"]
     else:
         client = _resolve_window(window)
         elements = _ui_read(client["address"], name=name, handles=True)
@@ -1113,46 +1140,64 @@ def _keyboard_in_background(
     layout = hyprctl.active_layout()
     kmap = keymap.for_layout(*layout)
     if action == "type":
-        bus = a11y.connect()
-        app = a11y.app_for_pid(bus, client.get("pid"), client.get("title", ""),
-                               tuple(client["size"]))
-        field = None
-        fields: list[tuple[str, str, int]] = []
-        if app is not None:
-            frame = a11y.window_frame(bus, app[0], app[1], client.get("title", ""),
-                                      tuple(client["size"]))
-            field = a11y.focused_text(bus, *frame)
-            if field is None:  # GTK reports no focus inside an inactive window
-                fields = a11y.editable_fields(bus, *frame)
-                field = fields[0] if len(fields) == 1 else None
-        if field is not None and field[2] == a11y.PASSWORD_ROLE and not allow_auth:
+        field, fields, unsure = None, [], False
+        bus = None
+        try:
+            bus = a11y.connect()
+            title, size = client.get("title", ""), tuple(client["size"])
+            app = a11y.app_for_pid(bus, client.get("pid"), title, size)
+            peers = _peers(client) if app is not None else []
+            frame = None
+            if app is not None and peers is not None:
+                frame = a11y.window_frame_for(bus, app[0], app[1], title, size, peers)
+            unsure = app is not None and frame is None
+            if frame is not None:
+                field = a11y.focused_text(bus, *frame)
+                if field is None:  # GTK reports no focus inside an inactive window
+                    fields = a11y.editable_fields(bus, *frame)
+                    field = fields[0] if len(fields) == 1 else None
+        except a11y.A11yError:
+            field, fields = None, []  # no accessibility: keys are the way in
+        password = (field is not None and field[2] == a11y.PASSWORD_ROLE) or (
+            field is None and any(f[2] == a11y.PASSWORD_ROLE for f in fields))
+        if password and not allow_auth:
+            where = ("the focused field" if field is not None
+                     else f"one of its {len(fields)} text fields, and it does not say which "
+                     "has its focus,")
             raise trust.TrustError(
-                f"the focused field in {cls} is a password field; refusing to type into it. "
+                f"{where} in {cls} is a password field; refusing to type into it. "
                 "Pass allow_auth=true only if a human intends this credential entry."
             )
-        if field is not None:
+        keys_only = any(ch in keymap.CONTROL_CHARS for ch in text)
+        if field is not None and bus is not None and not keys_only:
             if journal.dry_run():
                 return _acted(f"{_DRY} type {len(text)} characters into the text field in "
                               f"{cls} through the accessibility interface", then, window=addr)
             before = a11y.text_of(bus, field[0], field[1])
             if a11y.insert_text(bus, field[0], field[1], text):
                 after = a11y.text_of(bus, field[0], field[1])
-                seen = f"now {after[:80]!r}" if after != before else "no change seen"
                 return _acted(
                     f"typed {len(text)} characters into the text field in {cls} through the "
-                    f"accessibility interface (the human's focus untouched); {seen}",
+                    f"accessibility interface (the human's focus untouched); "
+                    f"{_read_back(before, after, text)}",
                     then, window=addr)
-        if field is not None:
+        if keys_only:
+            why = "newlines, tabs and backspaces are keys, so the whole text goes key by key"
+        elif field is not None:
             why = "its text field did not accept accessibility text"
+        elif unsure:
+            why = (f"{cls} has another window that shares this one's title or size, so its "
+                   "accessibility tree cannot tell which text field is this window's")
         elif fields:
             why = f"{cls} does not say which of its {len(fields)} text fields has its focus"
         else:
             why = f"{cls} has no accessibility text field to put it in"
         chords = []
-        for ch in text:
+        for i, ch in enumerate(text, start=1):
             chord = kmap.chord(ch)
-            if chord is None:
-                bg.refuse(f"{ch!r} has no key on the {layout[0]} keyboard layout, and {why}")
+            if chord is None:  # by position: typed text never goes into a result
+                bg.refuse(f"character {i} of the text has no key on the {layout[0]} "
+                          f"keyboard layout, and {why}")
             chords.append(chord)
     else:
         mods, key = hinput.parse_combo(keys)
@@ -1179,16 +1224,32 @@ def _keyboard_in_background(
     what = f"{len(chords)} keys" if action == "type" else f"{keys}"
     if journal.dry_run():
         return _acted(f"{_DRY} send {what} to {addr} with sendshortcut", then, window=addr)
-    for mods_, key_ in chords:
-        hyprctl.send_shortcut(mods_, key_, addr)
+    for sent, (mods_, key_) in enumerate(chords):
+        try:
+            hyprctl.send_shortcut(mods_, key_, addr)
+        except hyprctl.HyprctlError as exc:  # say how much landed, so a retry does not repeat it
+            raise hyprctl.HyprctlError(
+                f"sent {sent} of {len(chords)} keys to {addr} before: {exc}") from exc
     return _acted(
         f"sent {what} to {addr} ({cls}) with sendshortcut (the human's focus untouched)",
         then, window=addr)
 
 
+def _read_back(before: str, after: str, text: str) -> str:
+    """What a text field shows after typing, without its contents: the
+    journal keeps every result line, and typed text is only ever recorded
+    as a length plus a digest. `ui` shows the value itself."""
+    if after == before:
+        return "no change seen"
+    if len(after) == len(before) + len(text) and text in after:
+        return f"the field now holds the typed text ({len(after)} characters)"
+    return f"the field changed, but not by exactly the typed text ({len(after)} characters now)"
+
+
 # roles whose "click" is taking keyboard focus, which GrabFocus does inside
 # the app without touching the human's focus
-_TEXT_ROLE_NAMES = frozenset({"text", "entry", "password text", "terminal"})
+_TEXT_ROLE_NAMES = frozenset(
+    {"text", "entry", "password text", "terminal", "text box", "search box"})
 
 
 def _click_in_background(
@@ -1199,11 +1260,17 @@ def _click_in_background(
     trust.guard_client(client)  # confinement (the agent's workspaces under the guarantee)
     trust.guard_auth_client(client, allow_auth)
     trust.guard_session_lock(True, allow_auth)
+    cls = client.get("class", "")
+    if control.get("_unsure"):
+        bg.refuse(
+            f"{cls} has another window that shares this one's title or size, so its "
+            f"accessibility tree cannot tell which window is {client['address']}, and a press "
+            "could land in the other one"
+        )
     svc, path = control.get("_svc"), control.get("_path")
     if not isinstance(svc, str) or not isinstance(path, str):
         bg.refuse("this control was not resolved through the accessibility tree")
-    cls = client.get("class", "")
-    is_text = control.get("role", "") in _TEXT_ROLE_NAMES
+    is_text = control.get("_field", control.get("role", "") in _TEXT_ROLE_NAMES)
     how = "gave it the app's own focus" if is_text else "pressed it"
     if journal.dry_run():
         return _acted(f"{_DRY} {desc} in {cls}: would be {how} through its "

@@ -539,3 +539,59 @@ def test_insert_text_counts_the_length_in_utf16_for_qt():
                   toolkits={"qtapp": "Qt"})
     assert a11y.insert_text(bus, *entry, " \u2713 \U0001f600 ok")
     assert a11y.text_of(bus, *entry) == " \u2713 \U0001f600 ok"
+
+
+# --- which frame is THIS window, for the background paths --------------------
+
+
+def _two_frames(name_a, name_b, size_a=(400, 300), size_b=(800, 600)):
+    return FakeBus({
+        ("app", "/root"): {"role": 75, "name": "app", "children": [("app", "/fa"), ("app", "/fb")]},
+        ("app", "/fa"): {"role": 23, "name": name_a, "extent": (0, 0, *size_a), "children": []},
+        ("app", "/fb"): {"role": 23, "name": name_b, "extent": (0, 0, *size_b), "children": []},
+    })
+
+
+def test_a_unique_title_names_the_frame():
+    bus = _two_frames("Home", "Docs")
+    assert a11y.window_frame_for(bus, "app", "/root", "Docs", (800, 600), []) == ("app", "/fb")
+
+
+def test_two_frames_with_the_title_cannot_be_told_apart():
+    # a single-instance app: the human's window and the agent's, both 'Home'
+    bus = _two_frames("Home", "Home")
+    assert a11y.window_frame_for(bus, "app", "/root", "Home", (800, 600), []) is None
+
+
+def test_a_peer_window_with_the_same_title_proves_nothing_by_title():
+    # the agent's frame may carry another name while the human's 'Home'
+    # matches the title; only a size no peer shares can tell them apart
+    bus = _two_frames("Home", "Other")
+    peers = [("Home", (400, 300))]
+    assert a11y.window_frame_for(bus, "app", "/root", "Home", (800, 600), peers) == (
+        "app", "/fb")
+    bus = _two_frames("Home", "Other", size_b=(400, 300))
+    assert a11y.window_frame_for(bus, "app", "/root", "Home", (400, 300), peers) is None
+
+
+def test_a_unique_size_names_the_frame_when_no_peer_shares_it():
+    bus = _two_frames("x", "y")
+    assert a11y.window_frame_for(bus, "app", "/root", "T", (400, 300), [("U", (800, 600))]) == (
+        "app", "/fa")
+    # a peer of the same size: its frame could be the one that matches
+    assert a11y.window_frame_for(bus, "app", "/root", "T", (400, 300), [("U", (400, 300))]) is None
+
+
+def test_no_match_is_unsure():
+    bus = _two_frames("x", "y")
+    assert a11y.window_frame_for(bus, "app", "/root", "T", (10, 10), []) is None
+
+
+def test_one_frame_and_no_peer_is_this_window():
+    bus, root = _tree()  # app -> one frame
+    assert a11y.window_frame_for(bus, *root, "anything", (1, 1), []) == root
+
+
+def test_one_frame_with_a_peer_must_match():
+    bus, root = _tree()
+    assert a11y.window_frame_for(bus, *root, "anything", (1, 1), [("other", (2, 2))]) is None

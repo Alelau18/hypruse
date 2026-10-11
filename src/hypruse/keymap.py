@@ -17,6 +17,7 @@ import functools
 # names), 3 Shift+AltGr
 _LEVEL_MODS = ("", "SHIFT", "MOD5", "SHIFT MOD5")
 _CONTROL = {"\n": "Return", "\r": "Return", "\t": "Tab", "\b": "BackSpace"}
+CONTROL_CHARS = frozenset(_CONTROL)  # typed as keys, never inserted as text
 
 
 class _RuleNames(ctypes.Structure):
