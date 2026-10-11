@@ -434,3 +434,16 @@ def test_a_dry_run_names_the_agent_workspace(launch_fake, monkeypatch):
     monkeypatch.setattr(srv.journal, "dry_run", lambda: True)
     out = srv.launch("foot")
     assert "[workspace 99 silent]" in out and launch_fake["rule"] is None
+
+
+def test_a_keyless_character_with_several_fields_says_why(wired_bg):
+    # the hidden app does not say which field has its focus, so the text
+    # cannot go through accessibility, and the layout has no key for it
+    wired_bg["fields"] = [("svc", "/a", 61), ("svc", "/b", 61)]
+    with pytest.raises(srv.trust.TrustError, match="which of its 2 text fields"):
+        srv.keyboard("type", text="上", window="0xa")
+
+
+def test_a_keyless_character_with_no_field_says_so(wired_bg):
+    with pytest.raises(srv.trust.TrustError, match="no accessibility text field"):
+        srv.keyboard("type", text="上", window="0xa")

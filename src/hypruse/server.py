@@ -1092,6 +1092,7 @@ def _keyboard_in_background(
         app = a11y.app_for_pid(bus, client.get("pid"), client.get("title", ""),
                                tuple(client["size"]))
         field = None
+        fields: list[tuple[str, str, int]] = []
         if app is not None:
             frame = a11y.window_frame(bus, app[0], app[1], client.get("title", ""),
                                       tuple(client["size"]))
@@ -1116,8 +1117,12 @@ def _keyboard_in_background(
                     f"typed {len(text)} characters into the text field in {cls} through the "
                     f"accessibility interface (the human's focus untouched); {seen}",
                     then, window=addr)
-        why = ("its text field did not accept accessibility text" if field is not None
-               else f"{cls} has no accessibility text field to put it in")
+        if field is not None:
+            why = "its text field did not accept accessibility text"
+        elif fields:
+            why = f"{cls} does not say which of its {len(fields)} text fields has its focus"
+        else:
+            why = f"{cls} has no accessibility text field to put it in"
         chords = []
         for ch in text:
             chord = kmap.chord(ch)
