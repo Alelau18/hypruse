@@ -33,9 +33,9 @@ def wired_bg(monkeypatch):
     def ui_read(w="", name="", actionable=True, handles=False):
         item = {"role": s["role"], "name": "Save" if s["role"] != "text" else "Name",
                 "x": 150, "y": 80, "clickable": True}
-        if s["frame_sure"]:
+        if handles and s["frame_sure"]:  # like the real one: handles only when asked
             item["_svc"], item["_path"] = "svc", "/save" if s["role"] != "text" else "/name"
-        else:
+        elif handles:
             item["_unsure"] = True
         return [item]
 
@@ -193,15 +193,29 @@ def test_the_guarantee_never_clicks_even_the_active_window(wired_bg, monkeypatch
     assert wired_bg["actions"] and not wired_bg["clicks"]
 
 
-def test_marks_carry_what_a_background_press_needs(wired_bg):
+def test_marks_carry_what_a_background_press_needs(wired_bg, monkeypatch):
+    # the documented flow: marks() on a hidden window, then click_ui(mark=N)
+    monkeypatch.setattr(srv, "_grab_env", lambda **kw: (b"IMG", {
+        "geometry": [100, 50, 800, 600], "scale": 1.0, "image": [800, 600],
+        "format": "jpeg"}))
+    monkeypatch.setattr(srv, "_draw_marks", lambda *a: None)
     srv._last_marks.clear()
-    srv._last_marks.update({"window": "0xa", "class": "gedit", "ts": srv.time.time(),
-                            "size": [800, 600],
-                            "items": {1: {"dx": 50, "dy": 30, "label": "push button 'Save'",
-                                          "svc": "svc", "path": "/save",
-                                          "role": "push button"}}})
+    srv.marks(window="0xa")
     srv.click_ui(mark=1)
     assert wired_bg["actions"] == [("svc", "/save")]
+
+
+def test_a_mark_from_an_unproven_frame_is_refused_in_the_background(wired_bg, monkeypatch):
+    monkeypatch.setattr(srv, "_grab_env", lambda **kw: (b"IMG", {
+        "geometry": [100, 50, 800, 600], "scale": 1.0, "image": [800, 600],
+        "format": "jpeg"}))
+    monkeypatch.setattr(srv, "_draw_marks", lambda *a: None)
+    wired_bg["frame_sure"] = False
+    srv._last_marks.clear()
+    srv.marks(window="0xa")
+    with pytest.raises(srv.trust.TrustError, match="cannot tell"):
+        srv.click_ui(mark=1)
+    assert wired_bg["actions"] == []
 
 
 def test_focusing_a_text_field_does_not_claim_no_change(wired_bg):

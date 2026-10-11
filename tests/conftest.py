@@ -77,6 +77,11 @@ def foreground_by_default(monkeypatch):
     background tests unset it to get the automatic default.
     """
     monkeypatch.setenv("HYPRUSE_BACKGROUND", "0")
+    # and the documented defaults for the agent's workspaces, whatever the
+    # developer's shell exports
+    monkeypatch.delenv("HYPRUSE_AGENT_WORKSPACES", raising=False)
+    monkeypatch.delenv("HYPRUSE_AGENT_FILL", raising=False)
+    monkeypatch.delenv("HYPRUSE_CONFINE", raising=False)
 
 
 @pytest.fixture(autouse=True)

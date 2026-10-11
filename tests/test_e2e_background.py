@@ -117,6 +117,7 @@ def test_keys_reach_a_hidden_window_through_sendshortcut(live):
     addr = live["open"]("Name", "City", title="hypruse-bg-two")
     srv.click_ui(name="City", window=addr)
     out = str(srv.keyboard("type", text="Paris 1@", window=addr))
+    assert "sendshortcut" in out, out  # not through the accessibility interface
     assert _control(addr, "City").get("value") == "Paris 1@", out
     assert _seat() == live["before"], _MOVED
 
