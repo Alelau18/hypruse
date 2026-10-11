@@ -40,6 +40,11 @@ COORD_WINDOW = 1  # ATSPI_COORD_TYPE_WINDOW: extents relative to the toplevel
 # AtspiStateType bit positions (GetState returns a 2-word uint32 bitfield)
 _STATE_ENABLED, _STATE_SENSITIVE, _STATE_SHOWING, _STATE_VISIBLE = 8, 24, 25, 30
 _STATE_FOCUSED = 12
+_STATE_EDITABLE = 7
+
+# AtspiRelationType: a label names a field through these
+_REL_LABEL_FOR, _REL_LABELLED_BY = 1, 2
+_LABEL_ROLE = 29
 
 PASSWORD_ROLE = 40  # AtspiRole PASSWORD_TEXT: never read, never type without consent
 
@@ -377,29 +382,66 @@ def find_elements(
         if needle and needle not in nm.lower():
             continue
         role_num = _role_num(bus, svc, path)  # also gates the value read below
-        if actionable and role_num not in ACTIONABLE_ROLE_NUMS:
+        if needle and role_num == _LABEL_ROLE:
+            # a name search: the field this label names (GTK's entries are
+            # unnamed text, named only by the label beside them)
+            for fs, fp in _related(bus, svc, path, _REL_LABEL_FOR):
+                field = _element(bus, fs, fp, _role_num(bus, fs, fp), nm, actionable=True)
+                if field is not None:
+                    results.append(field)
+            if actionable:
+                continue  # the label itself is not something to click
+        editable = role_num in _TEXT_ROLES and _STATE_EDITABLE in _states(bus, svc, path)
+        if actionable and role_num not in ACTIONABLE_ROLE_NUMS and not editable:
             continue
+        if editable and not nm:
+            nm = next((_name(bus, ls, lp) for ls, lp in
+                       _related(bus, svc, path, _REL_LABELLED_BY)), "")
         if not nm and not needle and role_num not in _VALUE_BEARING_ROLES:
             # unnamed and valueless: nothing to target or report. An unnamed
             # slider or checkbox still carries a reading worth returning.
             continue
-        ext = _window_extents(bus, svc, path)
-        if ext is None:
-            continue
-        states = _states(bus, svc, path)
-        results.append(
-            {
-                "role": _role_name(bus, svc, path),
-                "name": nm,
-                "extent": ext,
-                "clickable": _clickable_now(states),
-                **element_value(bus, svc, path, role_num, states),
-                "svc": svc,
-                "path": path,
-            }
-        )
+        item = _element(bus, svc, path, role_num, nm, actionable=False)
+        if item is not None:
+            results.append(item)
     truncated = visited >= max_nodes and bool(stack) and len(results) < max_results
     return results, truncated
+
+
+def _related(bus: Bus, svc: str, path: str, rel_type: int) -> list[tuple[str, str]]:
+    """The targets of one AT-SPI relation type (LABEL_FOR, LABELLED_BY)."""
+    try:
+        rels = bus.call(svc, path, _ACCESSIBLE, "GetRelationSet")[0]
+    except (A11yError, IndexError):
+        return []
+    out: list[tuple[str, str]] = []
+    for kind, targets in rels:
+        if int(kind) == rel_type:
+            out.extend((ts, tp) for ts, tp in targets)
+    return out
+
+
+def _element(
+    bus: Bus, svc: str, path: str, role_num: int, nm: str, actionable: bool
+) -> dict[str, Any] | None:
+    """One find_elements record, or None when it is not actionable (when
+    asked) or has no usable geometry."""
+    states = _states(bus, svc, path)
+    editable = role_num in _TEXT_ROLES and _STATE_EDITABLE in states
+    if actionable and role_num not in ACTIONABLE_ROLE_NUMS and not editable:
+        return None
+    ext = _window_extents(bus, svc, path)
+    if ext is None:
+        return None
+    return {
+        "role": _role_name(bus, svc, path),
+        "name": nm,
+        "extent": ext,
+        "clickable": _clickable_now(states),
+        **element_value(bus, svc, path, role_num, states),
+        "svc": svc,
+        "path": path,
+    }
 
 
 def focused_role(bus: Bus, app_svc: str, app_path: str, max_nodes: int = 200) -> int | None:
@@ -435,9 +477,10 @@ def current_value(bus: Bus, svc: str, path: str) -> dict[str, Any]:
 
 def has_action(bus: Bus, svc: str, path: str) -> bool:
     """Whether the element has an action to invoke (a button, a check box),
-    which is what a background press needs."""
+    which is what a background press needs. NActions is a property in
+    AT-SPI, not a method."""
     try:
-        return int(bus.call(svc, path, _ACTION, "GetNActions")[0]) > 0
+        return int(bus.prop(svc, path, _ACTION, "NActions")) > 0
     except (A11yError, IndexError, ValueError):
         return False
 

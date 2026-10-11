@@ -111,8 +111,8 @@ class FakeBus:
         if method == "DoAction":
             node["done"] = True
             return [True]
-        if method == "GetNActions":
-            return [node.get("n_actions", 1)]
+        if method == "GetRelationSet":
+            return [[[t, [list(x) for x in targets]] for t, targets in node.get("relations", [])]]
         if method == "GrabFocus":
             node["grabbed"] = True
             return [True]
@@ -129,6 +129,8 @@ class FakeBus:
         node = self.nodes[(svc, path)]
         if name == "CharacterCount":
             return len(node.get("text", ""))
+        if name == "NActions":  # a property in AT-SPI, not a method
+            return node.get("n_actions", 1)
         if name in ("CurrentValue", "MinimumValue", "MaximumValue"):
             return node[{"CurrentValue": "cur", "MinimumValue": "min", "MaximumValue": "max"}[name]]
         return node.get("name", "")
@@ -474,3 +476,26 @@ def test_focused_text_finds_the_focused_field_in_a_hidden_window():
         entry: {"role": 79, "name": "", "children": [], "states": {a11y._STATE_FOCUSED}},
     }
     assert a11y.focused_text(FakeBus(nodes), *root) == ("app", "/entry", 79)
+
+
+
+def test_an_unnamed_editable_field_is_listed_under_its_label():
+    # GTK reports an entry as role text with no name of its own; the label
+    # beside it names it through a LABELLED_BY relation (type 2)
+    root, field, label, ro = ("app", "/root"), ("app", "/field"), ("app", "/label"), ("app", "/ro")
+    nodes = {
+        root: {"role": 23, "name": "w", "children": [label, field, ro]},
+        label: {"role": 29, "name": "Name", "children": [], "relations": [(1, [field])],
+                "extent": (10, 10, 40, 20), "states": ALL_STATES},
+        field: {"role": 61, "name": "", "children": [], "relations": [(2, [label])],
+                "extent": (60, 10, 200, 20), "states": ALL_STATES | {a11y._STATE_EDITABLE},
+                "text": ""},
+        ro: {"role": 61, "name": "", "children": [], "extent": (10, 40, 200, 20),
+             "states": ALL_STATES, "text": "read only"},
+    }
+    els, _ = a11y.find_elements(FakeBus(nodes), *root)
+    assert [(e["role"], e["name"]) for e in els] == [("widget", "Name")]
+    assert els[0]["path"] == "/field"
+    # a name search finds it through the label (LABEL_FOR, type 1)
+    found, _ = a11y.find_elements(FakeBus(nodes), *root, name="name")
+    assert [(e["name"], e["path"]) for e in found] == [("Name", "/field")]

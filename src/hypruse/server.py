@@ -990,7 +990,7 @@ def _click_in_background(
            f"untouched) in {cls}")
     if not any(c.get("address") == client["address"] for c in hyprctl.query("clients")):
         msg += "; the window closed"
-    else:
+    elif not is_text:  # focus is not a value: a field reads the same after it
         after = a11y.current_value(bus, svc, path)
         if after != before:
             msg += "; now: " + ", ".join(

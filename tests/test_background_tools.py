@@ -133,3 +133,11 @@ def test_marks_carry_what_a_background_press_needs(wired_bg):
                                           "role": "push button"}}})
     srv.click_ui(mark=1)
     assert wired_bg["actions"] == [("svc", "/save")]
+
+
+def test_focusing_a_text_field_does_not_claim_no_change(wired_bg):
+    # focus is not a value: an unchanged empty field is the expected outcome
+    wired_bg["role"] = "text"
+    wired_bg["values"][:] = [{"value": ""}, {"value": ""}]
+    out = str(srv.click_ui(name="Name", window="0xa"))
+    assert "focused" in out and "no change" not in out
