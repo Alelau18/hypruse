@@ -278,8 +278,9 @@ def screenshot(
     "x,y,WxH". Returns the image (or a file path to read) + JSON metadata
     with geometry/scale for pixel→global mapping. A window on a hidden
     workspace or under another window is still captured as itself
-    (metadata `source` "window", or "screen" when it had to be cropped
-    from the screen); `visible` says whether the compositor draws it, and
+    (metadata `source` "window"; without grim -T a shown window is cropped
+    from the screen, `source` "screen", and a hidden one is refused);
+    `visible` says whether the compositor draws it, and
     a hidden one may show how it last looked (many apps stop drawing while
     hidden). Window captures are refused while the session is locked. `scale` 0.1-1.0:
     optional deliberate downscale, usually leave unset. `stable=true`
@@ -1666,8 +1667,9 @@ _READONLY_DOCS = {
     "x,y,WxH". Returns the image (or a file path to read) + JSON metadata
     with geometry/scale for pixel→global mapping. A window on a hidden
     workspace or under another window is still captured as itself
-    (metadata `source` "window", or "screen" when it had to be cropped
-    from the screen); `visible` says whether the compositor draws it, and
+    (metadata `source` "window"; without grim -T a shown window is cropped
+    from the screen, `source` "screen", and a hidden one is refused);
+    `visible` says whether the compositor draws it, and
     a hidden one may show how it last looked (many apps stop drawing while
     hidden). Window captures are refused while the session is locked. `scale` 0.1-1.0:
     optional deliberate downscale, usually leave unset. `stable=true`

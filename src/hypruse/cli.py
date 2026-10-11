@@ -114,16 +114,25 @@ def _window_capture_note() -> tuple[bool, str]:
     """Informational: grim -T (grim 1.5+) is what lets a window screenshot
     capture the window itself; without it, window screenshots crop the
     screen. Read from grim's own help, which lists -T when it has it."""
+    from hypruse import hyprctl
+
+    crop = (
+        "window screenshots crop the screen, so covering windows show and hidden ones are refused"
+    )
     try:
         out = subprocess.run(["grim", "-h"], capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.TimeoutExpired):
         return True, "grim not found (see dependencies)"
-    if "-T" in (out.stdout or "") + (out.stderr or ""):
-        return True, "grim -T: a window screenshot is the window itself, even hidden or covered"
-    return True, (
-        "grim has no -T (needs grim 1.5+): window screenshots crop the screen, "
-        "so covering windows show and hidden windows are refused"
-    )
+    if "-T" not in (out.stdout or "") + (out.stderr or ""):
+        return True, f"grim has no -T (needs grim 1.5+): {crop}"
+    # -T captures by the window id hyprctl reports, which Hyprland 0.54 added
+    try:
+        clients = hyprctl.query("clients") or []
+    except Exception:
+        clients = []
+    if clients and not any("stableId" in c for c in clients):
+        return True, f"this Hyprland reports no window ids (needs 0.54+): {crop}"
+    return True, "grim -T: a window screenshot is the window itself, even hidden or covered"
 
 
 def _mode_note() -> tuple[bool, str]:

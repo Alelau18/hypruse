@@ -6,6 +6,7 @@ import pytest
 
 import hypruse
 from hypruse import cli
+from hypruse import hyprctl as hyprctl_mod
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -254,5 +255,17 @@ def test_doctor_says_whether_grim_can_capture_a_window_itself(monkeypatch, help_
         stdout, stderr = help_text, ""
 
     monkeypatch.setattr(cli.subprocess, "run", lambda *a, **k: Done())
+    monkeypatch.setattr(hyprctl_mod, "query", lambda what: [{"stableId": "18000010"}])
     ok, detail = cli._window_capture_note()
     assert ok is True and expect in detail  # informational, never a failure
+
+
+def test_doctor_needs_window_ids_from_hyprland_too(monkeypatch):
+    # grim -T captures by the window id Hyprland reports from 0.54 on
+    class Done:
+        stdout, stderr = "  -T <identifier> Set the identifier", ""
+
+    monkeypatch.setattr(cli.subprocess, "run", lambda *a, **k: Done())
+    monkeypatch.setattr(hyprctl_mod, "query", lambda what: [{"address": "0xa"}])
+    ok, detail = cli._window_capture_note()
+    assert ok is True and "0.54" in detail and "crop the screen" in detail

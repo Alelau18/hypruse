@@ -23,9 +23,18 @@ Fixes from a review of 0.12.0.
   or the byte budget is reported as itself. A hidden window caught
   mid-animation is retried for up to about a second, and `stable=true`
   keeps its last good frame when one capture fails.
-- **Trust guards.** A layer whose namespace contains "polkit" counts as an
+- **Trust guards.** `click_ui` checks the point it clicks, not only its
+  target: it refuses when a floating authentication dialog covers the
+  control (Hyprland gives a floating window the click, and
+  hyprpolkitagent opens floating), or under confinement an out-of-scope
+  window. It reads the target again after focusing it and refuses if
+  focusing moved it (Omarchy fullscreens a window focused behind a
+  fullscreen one, and a scrolling layout scrolls its column into view).
+  `pointer` refuses a point off every monitor while a guard is on, since
+  Hyprland would move the click to the nearest screen edge, onto a window
+  nothing checked. A layer whose namespace contains "polkit" counts as an
   authentication prompt, so the prompts end-4's dots (`quickshell:polkit`)
-  and DankMaterialShell draw are covered as well as Omarchy 4's. When the
+  draws are covered as well as Omarchy 4's. When the
   layer list cannot be read, `pointer`, `click_ui` and `keyboard` refuse
   instead of letting input through to a prompt they cannot rule out,
   unless `allow_auth` is passed or `HYPRUSE_AUTH_GUARD=0`. That setting now
@@ -44,11 +53,12 @@ Fixes from a review of 0.12.0.
 - The live lock test checks the real `hyprctl -j locked` reply.
 
 ### Added
-- `hypruse doctor` says whether grim can capture a window itself (`-T`,
-  grim 1.5+).
+- `hypruse doctor` says whether a window screenshot can capture the window
+  itself, which takes grim 1.5+ (`-T`) on Hyprland 0.54+ (window ids).
 
 ### Changed
-- Requires `mcp` 1.14 or newer; older versions failed at startup.
+- Requires `mcp` 1.21.1 or newer; older versions fail at startup with
+  current pydantic.
 
 ## [0.12.0] - 2026-10-08
 

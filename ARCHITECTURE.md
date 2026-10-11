@@ -139,7 +139,7 @@ beacon pid, releases the button, clears the beacon) and the blunter
 
 1. `desktop` → find `firefox` at `0x…`, workspace 3, geometry.
 2. `hypr focus_window 0x…` (IPC, ~ms), no vision spent.
-3. `screenshot window=0x…` → the window's own pixels (grim 1.5+; otherwise a crop of the screen) + `geometry`/`scale` (or `ui` to read
+3. `screenshot window=0x…` → the window's own pixels (grim 1.5+ on Hyprland 0.54+; otherwise a crop of the screen, or a refusal for a hidden window) + `geometry`/`scale` (or `ui` to read
    the accessibility tree by name, no pixels).
 4. `pointer click x y`, computed from image pixel via the contract (or
    `click_ui name="Save"` to resolve and click in one call).
@@ -183,9 +183,12 @@ The input-delivering tools (`keyboard`, `click_ui`,
 and `pointer`'s click/drag/scroll; a bare `pointer` move only shifts the
 cursor) refuse while it is up unless `allow_auth` says a human wants the
 agent driving the prompt. The guards are the confinement
-path over the same happy path above: step 4 is refused if the point is over
-an out-of-scope or authentication window, step 2 if the target is out of
-scope.
+path over the same happy path above: step 2 is refused if the target is out
+of scope, and step 4 if the point is off every monitor, over an
+authentication window, or (under confinement) over an out-of-scope one.
+For `click_ui` that means a floating or fullscreen window over the
+control, since tiled windows do not overlap its target; it also re-reads
+the target after focusing it and refuses if focusing moved it.
 
 ## The record: journal, dry run, replay
 

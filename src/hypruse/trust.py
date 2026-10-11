@@ -31,8 +31,11 @@ click aimed under a launcher or on-screen-keyboard layer surface would
 land on the layer, not the window), guard_keyboard_layer (a launcher
 holds the keyboard grab, so synthetic keys go to it no matter which
 window was focused), and guard_session_lock (the session is locked, so
-all input reaches a credential prompt). All are positive-detection and
-best-effort: an unreadable system state never blocks anything.
+all input reaches a credential prompt). All are positive-detection, and
+the lock check is best-effort. While HYPRUSE_AUTH_GUARD is on (the
+default), though, pointer, click_ui and keyboard refuse when the layer
+list cannot be read, since an authentication prompt drawn as a layer
+cannot be ruled out.
 """
 
 from __future__ import annotations
