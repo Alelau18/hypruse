@@ -347,6 +347,18 @@ def active_layout() -> tuple[str, str, str]:
     return "us", "", ""
 
 
+def layout_group() -> tuple[int, int]:
+    """(index, count) of the main keyboard's active layout; (0, 1) if unknown.
+    sendshortcut needs the first: Hyprland finds a key on the layout in use
+    but delivers it with layout group 0, so on any other the app reads a
+    different character."""
+    with contextlib.suppress(Exception):
+        kb = next(k for k in query("devices")["keyboards"] if k.get("main"))
+        count = len((kb.get("layout") or "us").split(","))
+        return int(kb.get("active_layout_index") or 0), count
+    return 0, 1
+
+
 def keyword(name: str, *values: str) -> None:
     """Set a config keyword at runtime (`hyprctl keyword`, not a dispatcher):
     used for runtime windowrulev2/border rules. Answers 'ok' on success.

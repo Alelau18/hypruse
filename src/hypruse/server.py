@@ -1141,6 +1141,13 @@ def _keyboard_in_background(
             names += chord[0].split()
             key = chord[1]
         chords = [(" ".join(dict.fromkeys(names)), key)]
+    group, groups = hyprctl.layout_group()
+    if group != 0:
+        bg.refuse(
+            f"the keyboard is on layout {group + 1} of {groups}, and Hyprland's sendshortcut "
+            "finds a key on the layout in use but the app reads it on the first one, so "
+            "other characters would arrive; switch to the first layout"
+        )
     if client.get("xwayland"):
         bg.refuse(f"{cls} is an XWayland window, and Hyprland sends background keys between "
                   "two XWayland windows to the focused one instead")

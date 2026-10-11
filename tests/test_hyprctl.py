@@ -548,3 +548,17 @@ def test_active_layout(monkeypatch):
         {"main": False, "layout": "us"},
         {"main": True, "layout": "fr", "variant": "", "options": ""}]})
     assert hyprctl.active_layout() == ("fr", "", "")
+
+
+def test_layout_group_reads_the_main_keyboards_index_and_count(monkeypatch):
+    monkeypatch.setattr(hyprctl, "query", lambda what: {"keyboards": [
+        {"main": True, "layout": "us,fr", "active_layout_index": 1}]})
+    assert hyprctl.layout_group() == (1, 2)
+
+
+def test_layout_group_is_the_first_of_one_when_unknown(monkeypatch):
+    def boom(what):
+        raise hyprctl.HyprctlError("down")
+
+    monkeypatch.setattr(hyprctl, "query", boom)
+    assert hyprctl.layout_group() == (0, 1)

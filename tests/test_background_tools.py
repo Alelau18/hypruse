@@ -47,6 +47,7 @@ def wired_bg(monkeypatch):
     monkeypatch.setattr(srv.hyprctl, "send_shortcut",
                         lambda mods, key, addr: s["shortcuts"].append((mods, key, addr)))
     monkeypatch.setattr(srv.hyprctl, "active_layout", lambda: ("us", "", ""))
+    monkeypatch.setattr(srv.hyprctl, "layout_group", lambda: (0, 1))
     monkeypatch.setattr(srv.hinput, "click",
                         lambda x, y, button="left", double=False: s["clicks"].append((x, y)))
     monkeypatch.setattr(srv.hinput, "type_text", lambda t: s["typed"].append(t))
@@ -447,3 +448,21 @@ def test_a_keyless_character_with_several_fields_says_why(wired_bg):
 def test_a_keyless_character_with_no_field_says_so(wired_bg):
     with pytest.raises(srv.trust.TrustError, match="no accessibility text field"):
         srv.keyboard("type", text="上", window="0xa")
+
+
+def test_keys_are_refused_while_the_keyboard_is_on_another_layout(wired_bg, monkeypatch):
+    # Hyprland finds a key on the layout in use but the app reads it on the
+    # first one, so on us,fr switched to fr an "a" would arrive as "q"
+    monkeypatch.setattr(srv.hyprctl, "layout_group", lambda: (1, 2))
+    with pytest.raises(srv.trust.TrustError, match="layout 2 of 2"):
+        srv.keyboard("type", text="a", window="0xa")
+    with pytest.raises(srv.trust.TrustError, match="layout 2 of 2"):
+        srv.keyboard("key", keys="ctrl+s", window="0xa")
+    assert wired_bg["shortcuts"] == []
+
+
+def test_accessibility_text_does_not_care_about_the_layout(wired_bg, monkeypatch):
+    monkeypatch.setattr(srv.hyprctl, "layout_group", lambda: (1, 2))
+    wired_bg["fields"] = [("svc", "/name", 61)]
+    srv.keyboard("type", text="a", window="0xa")
+    assert wired_bg["inserted"] == [("svc", "/name", "a")]
