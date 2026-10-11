@@ -476,3 +476,31 @@ def test_a_right_or_double_click_is_refused_in_the_background(wired_bg):
     with pytest.raises(srv.trust.TrustError, match="double click"):
         srv.click_ui(name="Save", window="0xa", double=True)
     assert wired_bg["actions"] == [] and wired_bg["clicks"] == []
+
+
+# --- ui of a hidden window ----------------------------------------------------
+
+
+def test_ui_of_a_hidden_window_says_its_points_are_not_on_screen(wired_bg, monkeypatch):
+    # a pointer click at those points would land on whatever the human sees
+    monkeypatch.setattr(srv.shot, "_hidden_reason",
+                        lambda c, m, cl=None: "its workspace is not on any monitor")
+    monkeypatch.setattr(srv.hyprctl, "batch_query", lambda cmds: [MONS, [CLIENT]])
+    out = srv.ui(window="0xa")
+    note = out[-1]["note"]
+    assert note.startswith("0xa is not on screen (its workspace is not on any monitor)")
+    assert "click_ui" in note and "pointer" in note
+
+
+def test_ui_of_a_shown_window_has_no_note(wired_bg, monkeypatch):
+    monkeypatch.setattr(srv.shot, "_hidden_reason", lambda c, m, cl=None: None)
+    monkeypatch.setattr(srv.hyprctl, "batch_query", lambda cmds: [MONS, [CLIENT]])
+    assert all("note" not in e for e in srv.ui(window="0xa"))
+
+
+def test_then_ui_after_a_background_press_carries_the_note(wired_bg, monkeypatch):
+    monkeypatch.setattr(srv.shot, "_hidden_reason",
+                        lambda c, m, cl=None: "its workspace is not on any monitor")
+    monkeypatch.setattr(srv.hyprctl, "batch_query", lambda cmds: [MONS, [CLIENT]])
+    out = srv.click_ui(name="Save", window="0xa", then="ui")
+    assert "not on screen" in out[-1].text

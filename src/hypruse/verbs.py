@@ -123,7 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--window", default=_S, metavar="ADDR")
     v.add_argument("--name", default=_S, metavar="TEXT", help="filter by accessible name")
     v.add_argument("--all", action="store_true", default=_S,
-                   help="include controls that are not actionable (text fields, labels)")
+                   help="include controls that are not actionable (labels, panels)")
 
     v = verb("marks", "the window with its controls numbered, plus the legend")
     v.add_argument("--window", default=_S, metavar="ADDR")
@@ -621,6 +621,9 @@ def _render_items(tool: str, items: list[dict[str, Any]]) -> str:
 def _render_ui(items: list[dict[str, Any]], key: str = "") -> str:
     lines = []
     for i, e in enumerate(items):
+        if "note" in e and "role" not in e:
+            lines.append(f"note {_safe(e['note'])}")
+            continue
         n = e.get(key, i) if key else i
         role, name = _safe(e.get("role", "")), _q(e.get("name", ""))
         line = f"[{n}] {role} {name} @{e.get('x')},{e.get('y')}"

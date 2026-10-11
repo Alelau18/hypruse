@@ -483,8 +483,29 @@ def ui(window: str = "", name: str = "", actionable: bool = True) -> list[Any] |
     Electron/Chrome without --force-renderer-accessibility, expose little
     or nothing); when it does not, fall back to screenshot + zoom."""
     safety.touch("ui")
-    view = _ui_read(window, name, actionable)
+    view = _with_hidden_note(window, _ui_read(window, name, actionable))
     trust.remember_seat()  # a fresh read re-arms the strict seat guard
+    return view
+
+
+def _with_hidden_note(window: str, view: list[Any] | str) -> list[Any] | str:
+    """A ui view, plus a note when the window is not on screen. Its points
+    are where its controls sit inside it, and the screen at those points
+    shows something else, usually the human's own window, which a pointer
+    click there would hit. Background mode makes such windows common."""
+    if isinstance(view, list):
+        with contextlib.suppress(Exception):
+            client = _resolve_window(window)
+            monitors, clients = hyprctl.batch_query(["monitors", "clients"])
+            reason = shot._hidden_reason(client, monitors, clients)
+            if reason is not None:
+                tail = "." if READONLY else (
+                    ", so press its controls with click_ui; a pointer click at these "
+                    "points would land on whatever is on screen there"
+                )
+                view.append({"note": f"{client['address']} is not on screen ({reason}): "
+                                     f"these points are inside it, not on what the human "
+                                     f"sees{tail}"})
     return view
 
 
@@ -658,7 +679,7 @@ def _acted(msg: str, then: str, window: str = "") -> list[Any] | str:
             return [head, _text(f"screenshot failed: {exc}")]
     if then == "ui":
         try:
-            view = _ui_read(window)
+            view = _with_hidden_note(window, _ui_read(window))
         except Exception as exc:  # the observation must never mask the action's success
             view = f"ui read failed: {exc}"
             if window:
