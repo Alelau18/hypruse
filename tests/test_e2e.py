@@ -12,6 +12,10 @@ import pytest
 
 from hypruse import hyprctl, screenshot, wire
 
+# bound at import time, so conftest's autouse stubs do not hide them
+from hypruse.trust import _compositor_locked as real_compositor_locked  # noqa: E402
+from hypruse.trust import session_locked as real_session_locked  # noqa: E402
+
 pytestmark = pytest.mark.e2e
 
 needs_hyprland = pytest.mark.skipif(
@@ -100,19 +104,22 @@ def test_virtual_pointer_handshake_no_events():
 
 
 @needs_hyprland
-def test_session_lock_detection_matches_reality():
-    """The whole session-lock guard rests on a protocol fact: modern
-    lockers are ext-session-lock clients, invisible to `hyprctl layers`,
-    so detection must go through the process, not the layer list. Verify
-    the live machine agrees, without ever locking the screen."""
+def test_session_lock_detection_matches_reality(monkeypatch):
+    """The session-lock guard asks the compositor first (`hyprctl -j
+    locked`), since a lock built into the shell (Omarchy 4) has no locker
+    process to find. Verify the live reply parses, without ever locking the
+    screen. conftest stubs both functions for the unit suite, so this uses
+    the real ones."""
     import shutil as _shutil
     import subprocess as _sub
 
     from hypruse import trust
 
-    # unlocked session: the /proc scan runs against real /proc and finds
-    # no locker (this test would never run under an actual lock)
-    assert trust.session_locked() is None
+    monkeypatch.setattr(trust, "_compositor_locked", real_compositor_locked)
+    # unlocked session (this test would never run under an actual lock):
+    # the compositor answers False, and nothing reads as locked
+    assert real_compositor_locked() is False
+    assert real_session_locked() is None
 
     # and the architectural premise: if a locker is installed, it links
     # ext-session-lock and NOT layer-shell, which is why layers cannot see
