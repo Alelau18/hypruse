@@ -1040,3 +1040,24 @@ def test_hyprland_dialogs_are_named_for_what_they_are(monkeypatch):
     assert "not-responding" in str(e.value) and "credential" not in str(e.value)
     with pytest.raises(trust.TrustError, match="Hyprland's own dialog"):
         trust.guard_auth_client(dialog, allow_auth=False)
+
+
+def test_the_guarantee_confines_to_the_agent_workspaces(monkeypatch):
+    monkeypatch.delenv("HYPRUSE_CONFINE", raising=False)
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-98")
+    trust.guard_client(client(addr="0xa", ws=98))
+    with pytest.raises(trust.TrustError, match="agent's workspaces"):
+        trust.guard_client(client(addr="0xb", ws=5))
+
+
+def test_under_the_guarantee_an_explicit_confinement_narrows_never_widens(monkeypatch):
+    # both must hold: a kitty on the human's workspace stays out of reach
+    monkeypatch.setenv("HYPRUSE_CONFINE", "class:kitty")
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-98")
+    trust.guard_client(client(addr="0xa", cls="kitty", ws=99))
+    with pytest.raises(trust.TrustError, match="agent's workspaces"):
+        trust.guard_client(client(addr="0xb", cls="kitty", ws=5))
+    with pytest.raises(trust.TrustError, match="class"):
+        trust.guard_client(client(addr="0xc", cls="firefox", ws=99))

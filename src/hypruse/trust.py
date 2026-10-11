@@ -122,10 +122,24 @@ def restore_state(state: Any) -> None:
     _last_notify["ts"] = float(ts) if isinstance(ts, int | float) else 0.0
 
 
-def _confine_scope() -> tuple[str, tuple[str, ...]] | None:
-    """Parse HYPRUSE_CONFINE, or None when confinement is off. Raises
-    TrustError (which denies the action) on a malformed value, so a typo
-    fails closed instead of silently disabling the sandbox."""
+def _confine_scope() -> tuple[str, Any] | None:
+    """The confinement scope, or None when confinement is off. Under the
+    background guarantee (HYPRUSE_BACKGROUND=1) it is ("agent", explicit):
+    a window must be on the agent's workspaces AND inside HYPRUSE_CONFINE
+    when that is set too, so an explicit scope narrows the guarantee and
+    never widens it."""
+    from hypruse import background  # background imports this module
+
+    explicit = _explicit_scope()
+    if background.mode() == background.GUARANTEE:
+        return ("agent", explicit)
+    return explicit
+
+
+def _explicit_scope() -> tuple[str, tuple[str, ...]] | None:
+    """Parse HYPRUSE_CONFINE, or None when it is unset. Raises TrustError
+    (which denies the action) on a malformed value, so a typo fails closed
+    instead of silently disabling the sandbox."""
     raw = os.environ.get("HYPRUSE_CONFINE", "").strip()
     if not raw:
         return None
@@ -142,8 +156,14 @@ def _confine_scope() -> tuple[str, tuple[str, ...]] | None:
     )
 
 
-def _client_in_scope(client: dict[str, Any], scope: tuple[str, tuple[str, ...]]) -> bool:
+def _client_in_scope(client: dict[str, Any], scope: tuple[str, Any]) -> bool:
     kind, vals = scope
+    if kind == "agent":
+        from hypruse import background
+
+        return background.on_agent_workspace(client) and (
+            vals is None or _client_in_scope(client, vals)
+        )
     if kind == "launched":
         return client.get("address") in _owned
     if kind == "class":
@@ -152,8 +172,10 @@ def _client_in_scope(client: dict[str, Any], scope: tuple[str, tuple[str, ...]])
     return str(ws.get("id")) in vals or str(ws.get("name", "")) in vals
 
 
-def _describe(scope: tuple[str, tuple[str, ...]]) -> str:
+def _describe(scope: tuple[str, Any]) -> str:
     kind, vals = scope
+    if kind == "agent":
+        return "the agent's workspaces" + (f" and {_describe(vals)}" if vals else "")
     return "windows hypruse launched" if kind == "launched" else f"{kind} in {list(vals)}"
 
 
