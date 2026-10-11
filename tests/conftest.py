@@ -77,3 +77,17 @@ def foreground_by_default(monkeypatch):
     background tests unset it to get the automatic default.
     """
     monkeypatch.setenv("HYPRUSE_BACKGROUND", "0")
+
+
+@pytest.fixture(autouse=True)
+def no_live_batch_query(monkeypatch):
+    """hyprctl.batch_query fails unless a test stubs it.
+
+    Same rule: it shells out to whatever Hyprland is running the suite, and
+    a test that forgot to stub it would pass or fail on the developer's own
+    desktop. Code that degrades without the compositor gets to degrade.
+    """
+    def unreachable(cmds):
+        raise hyprctl.HyprctlError("no compositor in unit tests")
+
+    monkeypatch.setattr(hyprctl, "batch_query", unreachable)

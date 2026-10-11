@@ -1,10 +1,14 @@
-"""Background mode, live. Run explicitly with:  pytest -m background
+"""Background mode, live. Run explicitly, hands-off:  pytest -m background
 
 Opens yad forms on the agent's workspaces, drives them in the background
 and reads the results back from the accessibility tree. After every step
 the human's active window, active workspace and cursor must be exactly
 what they were before the suite started: that is the promise background
-mode makes, checked against the real compositor.
+mode makes, checked against the real compositor. Using the mouse or
+keyboard during the run moves the seat too, so leave them alone; the
+compositor's own events are checked as well, and those hold either way:
+no window the suite opened ever takes focus, and no agent workspace is
+ever switched to.
 """
 
 import contextlib
@@ -14,10 +18,12 @@ import time
 
 import pytest
 
-from hypruse import hyprctl, trust
+from hypruse import background as bg
+from hypruse import events, hyprctl, trust
 from hypruse import server as srv
 
 # bound at import time, so conftest's autouse stubs do not hide them
+from hypruse.hyprctl import batch_query as real_batch_query  # noqa: E402
 from hypruse.trust import _compositor_locked as real_compositor_locked  # noqa: E402
 from hypruse.trust import session_locked as real_session_locked  # noqa: E402
 
@@ -44,11 +50,13 @@ def live(monkeypatch):
     environment leaves it unless a test sets it, and every window this
     test opened closed afterwards."""
     monkeypatch.setattr(hyprctl, "_provider", None)
+    monkeypatch.setattr(hyprctl, "batch_query", real_batch_query)
     monkeypatch.setattr(trust, "session_locked", real_session_locked)
     monkeypatch.setattr(trust, "_compositor_locked", real_compositor_locked)
     monkeypatch.delenv("HYPRUSE_BACKGROUND", raising=False)
     monkeypatch.delenv("HYPRUSE_CONFINE", raising=False)
     opened: list[str] = []
+    stream = events.EventStream()
     before = _seat()
 
     def open_form(*fields: str, title: str) -> str:
@@ -63,7 +71,16 @@ def live(monkeypatch):
     for addr in opened:
         with contextlib.suppress(Exception):
             hyprctl.dispatch("closewindow", f"address:{addr}")
-    assert _seat() == before, "the human's seat moved"
+    seen = stream.drain(0.3)
+    stream.close()
+    focused = [p for n, p in seen if n == "activewindowv2" and p.get("address") in opened]
+    assert not focused, f"a window the suite opened took focus: {focused}"
+    switched = [p for n, p in seen if n == "workspace" and bg.is_agent_workspace(p["name"])]
+    assert not switched, f"an agent workspace was switched to: {switched}"
+    assert _seat() == before, _MOVED
+
+
+_MOVED = "the human's seat moved (if you used the mouse or keyboard, rerun hands-off)"
 
 
 def _control(addr: str, name: str) -> dict:
@@ -79,17 +96,17 @@ def test_an_app_opens_on_an_agent_workspace_and_is_driven_unseen(live):
     from hypruse import background as bg
 
     assert bg.on_agent_workspace(client), client.get("workspace")
-    assert _seat() == live["before"]
+    assert _seat() == live["before"], _MOVED
 
     out = str(srv.click_ui(name="Agree", window=addr))
     assert "accessibility action" in out and "checked=true" in out, out
     assert _control(addr, "Agree").get("checked") is True
-    assert _seat() == live["before"]
+    assert _seat() == live["before"], _MOVED
 
     out = str(srv.keyboard("type", text="Bonjour ✓ 1@", window=addr))
     assert "accessibility interface" in out, out
     assert _control(addr, "Name").get("value") == "Bonjour ✓ 1@"
-    assert _seat() == live["before"]
+    assert _seat() == live["before"], _MOVED
 
 
 def test_keys_reach_a_hidden_window_through_sendshortcut(live):
@@ -99,13 +116,13 @@ def test_keys_reach_a_hidden_window_through_sendshortcut(live):
     srv.click_ui(name="City", window=addr)
     out = str(srv.keyboard("type", text="Paris 1@", window=addr))
     assert _control(addr, "City").get("value") == "Paris 1@", out
-    assert _seat() == live["before"]
+    assert _seat() == live["before"], _MOVED
 
     out = str(srv.keyboard("key", keys="ctrl+a", window=addr))
     assert "sendshortcut" in out, out
     srv.keyboard("key", keys="BackSpace", window=addr)
     assert _control(addr, "City").get("value") == ""
-    assert _seat() == live["before"]
+    assert _seat() == live["before"], _MOVED
 
 
 def test_the_guarantee_holds_live(live, monkeypatch):
@@ -120,4 +137,4 @@ def test_the_guarantee_holds_live(live, monkeypatch):
         srv.hypr("focus_window", target=addr)
     with pytest.raises(trust.TrustError, match="window="):
         srv.keyboard("type", text="x")
-    assert _seat() == live["before"]
+    assert _seat() == live["before"], _MOVED

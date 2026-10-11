@@ -5,6 +5,9 @@ import pytest
 
 from hypruse import hyprctl
 
+# bound at import time: conftest makes the module attribute fail by default
+from hypruse.hyprctl import batch_query as real_batch_query  # noqa: E402
+
 FIX = json.loads((Path(__file__).parent / "fixtures" / "desktop.json").read_text())
 
 
@@ -115,7 +118,7 @@ def test_batch_query_splits_concatenated_json(monkeypatch):
         return fake
 
     monkeypatch.setattr(hyprctl, "_run", run)
-    vals = hyprctl.batch_query(["monitors", "workspaces", "clients", "activewindow", "cursorpos"])
+    vals = real_batch_query(["monitors", "workspaces", "clients", "activewindow", "cursorpos"])
     assert seen["args"] == (
         "--batch",
         "j/monitors ; j/workspaces ; j/clients ; j/activewindow ; j/cursorpos",
@@ -127,13 +130,13 @@ def test_batch_query_splits_concatenated_json(monkeypatch):
 def test_batch_query_wrong_count_raises(monkeypatch):
     monkeypatch.setattr(hyprctl, "_run", lambda *a: "[]")  # one doc for two commands
     with pytest.raises(hyprctl.HyprctlError, match="returned 1 results for 2"):
-        hyprctl.batch_query(["monitors", "workspaces"])
+        real_batch_query(["monitors", "workspaces"])
 
 
 def test_batch_query_garbage_raises(monkeypatch):
     monkeypatch.setattr(hyprctl, "_run", lambda *a: "not json")
     with pytest.raises(hyprctl.HyprctlError, match="unparseable"):
-        hyprctl.batch_query(["monitors"])
+        real_batch_query(["monitors"])
 
 
 def test_snapshot_uses_one_batched_call(monkeypatch):
