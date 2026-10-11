@@ -85,7 +85,7 @@ def zoom_region(x: float, y: float, size: str = "", window: str = "") -> tuple[i
         c = _find_window(window, clients, active)
         reason = _hidden_reason(c, hyprctl.query("monitors"), clients)
         if reason:
-            raise _not_shown(c, reason, "zoom crops the screen")
+            raise _not_shown(c, reason, "zoom crops the screen", final=False)
         (bx, by), (bw, bh) = c["at"], c["size"]
     else:
         monitors = hyprctl.query("monitors")
@@ -282,8 +282,13 @@ def _bring_forward(c: dict[str, Any]) -> str:
     return f"bring it on screen with hypr(action='focus_window', target='{c['address']}')"
 
 
-def _not_shown(c: dict[str, Any], reason: str, why: str) -> ScreenshotError:
-    return ScreenshotError(
+def _not_shown(
+    c: dict[str, Any], reason: str, why: str, final: bool = True
+) -> ScreenshotError:
+    """A refusal for a window that is not on screen. `final` when trying
+    again cannot help (no -T, no window id): capture_stable stops on it."""
+    cls = CaptureRefused if final else ScreenshotError
+    return cls(
         f"window {c['address']} is not shown ({reason}), and {why}. To see it, "
         f"{_bring_forward(c)}."
     )
@@ -455,9 +460,10 @@ def capture(
     if window and (hidden is not None or not _xwayland_popup_over(c, clients, monitors)):
         grabbed = _toplevel_or_reason(c, scale, max_edge, max_bytes, lossless,
                                       _own_scale(c, monitors, base_scale), hidden)
-        if isinstance(grabbed, str):
+        if isinstance(grabbed, _NoToplevel):
             if hidden is not None:
-                raise _not_shown(c, hidden, grabbed)
+                # _toplevel_or_reason already retried what a moment could fix
+                raise _not_shown(c, hidden, str(grabbed))
             grabbed = None
     if grabbed is not None:
         data, fmt, factor = grabbed
@@ -498,8 +504,8 @@ def _toplevel_or_reason(
     lossless: bool,
     own_scale: float,
     hidden: str | None,
-) -> tuple[bytes, str, float] | str:
-    """_grab_toplevel, or the reason it could not. A hidden window caught
+) -> tuple[bytes, str, float] | _NoToplevel:
+    """_grab_toplevel, or why it could not. A hidden window caught
     mid-animation (its buffer not yet at the size hyprctl reports) is
     retried for up to about a second, since nothing else can capture it."""
     for attempt in range(5):
@@ -507,7 +513,7 @@ def _toplevel_or_reason(
             return _grab_toplevel(c, scale, max_edge, max_bytes, lossless, own_scale)
         except _NoToplevel as exc:
             if not exc.retry or hidden is None or attempt == 4:
-                return str(exc)
+                return exc
             time.sleep(0.25)
     raise AssertionError("unreachable")
 

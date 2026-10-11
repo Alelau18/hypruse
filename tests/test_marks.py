@@ -14,7 +14,14 @@ def make_client():
     return {
         "address": "0xa", "class": "gedit", "title": "doc",
         "at": [100, 50], "size": [800, 600], "pid": 42, "workspace": {"id": 1},
+        "monitor": 0, "floating": False,
     }
+
+
+MONS = [{"id": 0, "name": "eDP-1", "x": 0, "y": 0, "width": 1920, "height": 1080,
+         "scale": 1.0, "activeWorkspace": {"id": 1}, "specialWorkspace": {"id": 0}},
+        {"id": 1, "name": "DP-1", "x": 1920, "y": 0, "width": 1920, "height": 1080,
+         "scale": 1.0, "activeWorkspace": {"id": 5}, "specialWorkspace": {"id": 0}}]
 
 
 ELEMENTS = [
@@ -51,8 +58,8 @@ def wired(monkeypatch):
     # check would query the live compositor)
     monkeypatch.setattr(srv.trust, "covering_layer", lambda x, y: None)
     monkeypatch.setattr(srv.trust, "_read_layers", lambda: [])
-    # and no other window over the point, unless a test says so
-    monkeypatch.setattr(srv.trust, "_windows_under", lambda x, y: [])
+    # one monitor, and no other window over the point, unless a test says so
+    monkeypatch.setattr(srv.trust, "_click_scene", lambda: (MONS, []))
     calls["client"] = client
     return calls
 
@@ -238,16 +245,20 @@ def test_click_ui_auth_wiring_refuses_polkit(wired, monkeypatch):
     assert wired["clicks"] == []
 
 
-# --- click_ui checks the point, not just the target (0.12.1 review) ---------
+# --- click_ui checks the point it will click (0.12.1 review rounds) -------
 
 AUTH_DIALOG = {"address": "0xp", "class": "hyprpolkitagent", "floating": True,
-               "at": [100, 50], "size": [400, 200], "workspace": {"id": 1}}
+               "at": [100, 50], "size": [400, 200], "workspace": {"id": 1}, "monitor": 0}
+
+
+def _scene(monkeypatch, clients, fallthrough=0):
+    monkeypatch.setattr(srv.trust, "_click_scene", lambda: (MONS, clients))
+    monkeypatch.setattr(srv.trust, "_special_fallthrough", lambda: fallthrough)
 
 
 def test_click_ui_refuses_a_floating_auth_dialog_over_the_control(wired, monkeypatch):
-    # Hyprland's hit test puts a floating window above any tiled one, so the
-    # dialog, not the target, would take the click
-    monkeypatch.setattr(srv.trust, "_windows_under", lambda x, y: [AUTH_DIALOG])
+    # Hyprland's hit test puts a floating window above any tiled one
+    _scene(monkeypatch, [AUTH_DIALOG])
     with pytest.raises(srv.trust.TrustError, match="authentication dialog"):
         srv.click_ui(name="Save")
     assert wired["clicks"] == [] and wired["dispatch"] == []
@@ -257,36 +268,106 @@ def test_click_ui_refuses_a_floating_auth_dialog_over_the_control(wired, monkeyp
 
 
 def test_click_ui_through_an_auth_dialog_needs_allow_auth(wired, monkeypatch):
-    monkeypatch.setattr(srv.trust, "_windows_under", lambda x, y: [AUTH_DIALOG])
+    _scene(monkeypatch, [AUTH_DIALOG])
     srv.click_ui(name="Save", allow_auth=True)
     assert wired["clicks"] == [(150, 80, "left")]
 
 
-def test_click_ui_ignores_windows_that_cannot_be_over_the_target(wired, monkeypatch):
-    # a tiled neighbour cannot overlap a tiled target, an inactive group tab
-    # shares its rect without drawing, and a window on another (non-special)
-    # workspace is gone once the target's workspace is shown
-    tiled = {"address": "0xt", "class": "hyprpolkitagent", "floating": False,
-             "at": [0, 0], "size": [900, 900], "workspace": {"id": 1}}
-    tab = dict(AUTH_DIALOG, address="0xg", visible=False)
-    elsewhere = dict(AUTH_DIALOG, address="0xe", workspace={"id": 9})
-    monkeypatch.setattr(srv.trust, "_windows_under", lambda x, y: [tiled, tab, elsewhere])
-    srv.click_ui(name="Save")
-    assert wired["clicks"] == [(150, 80, "left")]
+def _check(client, x=150, y=80, **kw):
+    return srv.trust.check_click_point(client, x, y, **kw)
 
 
-def test_click_ui_refuses_an_out_of_scope_window_over_the_control(wired, monkeypatch):
-    monkeypatch.setenv("HYPRUSE_CONFINE", f"class:{wired['client']['class']}")
-    other = dict(AUTH_DIALOG, address="0xf", **{"class": "firefox"})
-    monkeypatch.setattr(srv.trust, "_windows_under", lambda x, y: [other])
+def test_a_floating_target_does_not_hide_a_floating_auth_dialog(monkeypatch):
+    # focusing a floating window does not raise it on Hyprland 0.56
+    target = dict(make_client(), floating=True)
+    _scene(monkeypatch, [AUTH_DIALOG])
+    with pytest.raises(srv.trust.TrustError, match="authentication dialog"):
+        _check(target)
+
+
+def test_a_pinned_window_over_the_point_counts(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_CONFINE", "class:gedit")
+    pip = {"address": "0xq", "class": "mpv", "floating": True, "pinned": True,
+           "at": [120, 60], "size": [200, 120], "workspace": {"id": 5}, "monitor": 1}
+    _scene(monkeypatch, [pip])
     with pytest.raises(srv.trust.TrustError, match="confinement"):
-        srv.click_ui(name="Save")
+        _check(dict(make_client(), floating=True))
+
+
+def test_a_floating_window_from_another_monitor_counts(monkeypatch):
+    # a floating window can hang across a monitor edge
+    stray = dict(AUTH_DIALOG, address="0xs", workspace={"id": 5}, monitor=1)
+    _scene(monkeypatch, [stray])
+    with pytest.raises(srv.trust.TrustError, match="authentication dialog"):
+        _check(make_client())
+
+
+def test_windows_that_cannot_cover_the_target_do_not_count(monkeypatch):
+    tiled = dict(AUTH_DIALOG, address="0xt", floating=False)  # tiled: no overlap
+    tab = dict(AUTH_DIALOG, address="0xg", visible=False)  # an inactive tab
+    replaced = dict(AUTH_DIALOG, address="0xe", workspace={"id": 9}, monitor=0)
+    other_tiled = dict(AUTH_DIALOG, address="0xo", floating=False,
+                       workspace={"id": 5}, monitor=1)
+    _scene(monkeypatch, [tiled, tab, replaced, other_tiled])
+    _check(make_client())
+
+
+def test_a_scratchpad_focusing_will_hide_does_not_count_before_focus(monkeypatch):
+    # with input:special_fallthrough 0 (the default), focusing a window on a
+    # regular workspace hides the monitor's scratchpad
+    monkeypatch.setenv("HYPRUSE_CONFINE", "class:gedit")
+    pad = {"address": "0xk", "class": "kitty", "floating": False, "at": [0, 0],
+           "size": [1920, 1080], "workspace": {"id": -98, "name": "special:term"},
+           "monitor": 0}
+    mons = [dict(MONS[0], specialWorkspace={"id": -98, "name": "special:term"}), MONS[1]]
+    monkeypatch.setattr(srv.trust, "_click_scene", lambda: (mons, [pad]))
+    monkeypatch.setattr(srv.trust, "_special_fallthrough", lambda: 0)
+    _check(make_client())  # before focus: it will be hidden
+    with pytest.raises(srv.trust.TrustError, match="confinement"):
+        _check(make_client(), focused=True)  # still up after focusing: it is over
+    monkeypatch.setattr(srv.trust, "_special_fallthrough", lambda: None)
+    with pytest.raises(srv.trust.TrustError, match="confinement"):
+        _check(make_client())  # cannot tell: fail closed
+
+
+def test_click_ui_refuses_a_point_off_every_monitor(monkeypatch):
+    # Hyprland would move the click to the nearest monitor edge
+    off = dict(make_client(), at=[-500, 50])
+    _scene(monkeypatch, [])
+    with pytest.raises(srv.trust.TrustError, match="off every monitor"):
+        _check(off, x=-300, y=80)
+
+
+def test_click_ui_refuses_a_point_outside_its_window(monkeypatch):
+    _scene(monkeypatch, [])
+    with pytest.raises(srv.trust.TrustError, match="outside the window"):
+        _check(make_client(), x=1500, y=80)
+
+
+def test_a_mark_on_a_resized_window_must_be_taken_again(wired, monkeypatch):
+    srv._last_marks.clear()
+    srv._last_marks.update({"window": "0xa", "class": "gedit", "ts": srv.time.time(),
+                            "size": [1200, 600],
+                            "items": {1: {"dx": 50, "dy": 30, "label": "push button 'Save'"}}})
+    with pytest.raises(ValueError, match="resized"):
+        srv.click_ui(mark=1)
+    assert wired["clicks"] == []
+
+
+def test_a_moved_window_tells_a_mark_caller_to_take_marks_again(wired, monkeypatch):
+    srv._last_marks.clear()
+    srv._last_marks.update({"window": "0xa", "class": "gedit", "ts": srv.time.time(),
+                            "size": [800, 600],
+                            "items": {1: {"dx": 50, "dy": 30, "label": "push button 'Save'"}}})
+    moved = dict(wired["client"], at=[300, 200])
+    seen = iter([wired["client"], moved])
+    monkeypatch.setattr(srv, "_resolve_window", lambda w="": next(seen))
+    with pytest.raises(srv.trust.TrustError, match="marks"):
+        srv.click_ui(mark=1)
     assert wired["clicks"] == []
 
 
 def test_click_ui_refuses_when_focusing_moved_the_window(wired, monkeypatch):
-    # focusing can fullscreen a window behind a fullscreen one, scroll a
-    # column into view, or move a scratchpad: the old point is stale
     moved = dict(wired["client"], at=[300, 200])
     seen = iter([wired["client"], moved])
     monkeypatch.setattr(srv, "_resolve_window", lambda w="": next(seen))

@@ -498,6 +498,9 @@ def restore_marks(state: Any) -> None:
         _last_marks = {"window": state["window"], "items": items}
         if isinstance(state.get("class"), str):
             _last_marks["class"] = state["class"]
+        size = state.get("size")
+        if isinstance(size, list) and len(size) == 2 and all(isinstance(v, int) for v in size):
+            _last_marks["size"] = size
         # a record without a timestamp is treated as expired, never as fresh
         ts = state.get("ts")
         _last_marks["ts"] = float(ts) if isinstance(ts, int | float) else 0.0
@@ -546,6 +549,7 @@ def marks(window: str = "", name: str = "") -> list[Any] | str:
     # address can be handed to a different window later
     _last_marks = {
         "window": addr, "class": client.get("class", ""), "ts": time.time(), "items": stored,
+        "size": list(client.get("size") or []),  # a resized window invalidates the offsets
     }
     hint = (
         "numbered marks match the legend entries"
@@ -854,6 +858,12 @@ def click_ui(
                 f"no mark {mark}: the last marks capture was of {_last_marks['class']!r} and "
                 f"that address now belongs to {client.get('class')!r}; call marks() again"
             )
+        size = _last_marks.get("size")
+        if size and list(client.get("size") or []) != list(size):
+            raise ValueError(
+                f"no mark {mark}: the window was resized since marks() (from {list(size)} "
+                f"to {client.get('size')}), so its controls may have moved; call marks() again"
+            )
         item = _last_marks["items"][mark]
         x, y = client["at"][0] + item["dx"], client["at"][1] + item["dy"]
         desc = f"mark {mark} ({item['label']})"
@@ -887,7 +897,7 @@ def click_ui(
     # even with allow_auth: there is no "drive the prompt by control name").
     trust.guard_session_lock(True, allow_auth)
     trust.guard_covering_layer(x, y, allow_auth)
-    trust.guard_click_point(client, x, y, allow_auth)  # a floating window over it
+    trust.check_click_point(client, x, y, allow_auth)  # what will be over it
     if journal.dry_run():  # before the focus dispatch, which is a real change
         return _acted(
             f"{_DRY} click {desc} at ({x}, {y}) in {client.get('class', '')}",
@@ -902,13 +912,14 @@ def click_ui(
     # out from where it was, so a moved window means a stale point.
     now = _resolve_window(client["address"])
     if (now.get("at"), now.get("size")) != (client.get("at"), client.get("size")):
+        again = "marks() again" if mark else "click_ui again"
         raise trust.TrustError(
             f"the window moved when it was focused (from {client.get('at')} "
             f"{client.get('size')} to {now.get('at')} {now.get('size')}); nothing was "
-            "clicked. Call click_ui again so the point is worked out from where it is now."
+            f"clicked. Call {again}, so the point is worked out from where it is now."
         )
     trust.guard_covering_layer(x, y, allow_auth)
-    trust.guard_click_point(now, x, y, allow_auth)
+    trust.check_click_point(now, x, y, allow_auth, focused=True)
     hinput.click(x, y, button=button, double=double)
     trust.remember_seat()
     # observe the CLICKED window, not whatever holds focus after the click

@@ -444,3 +444,11 @@ def test_a_missing_window_and_a_lock_are_refusals_that_do_not_pass(monkeypatch):
     monkeypatch.setattr(screenshot.trust, "session_locked", lambda: "hyprlock")
     with pytest.raises(screenshot.CaptureRefused):
         screenshot.capture(window="0xa")
+
+
+def test_a_hidden_window_grim_cannot_capture_is_a_hard_refusal(monkeypatch):
+    # without -T a hidden window cannot be captured at all; capture_stable
+    # must stop there, not keep an older crop of whatever was on screen
+    _scene(monkeypatch, [SHOWN, HIDDEN], toplevel=_no_toplevel_capture)
+    with pytest.raises(screenshot.CaptureRefused, match="not shown"):
+        screenshot.capture(window="0xb")

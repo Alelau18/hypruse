@@ -305,46 +305,81 @@ def guard_pointer(x: float | None, y: float | None, allow_auth: bool = False) ->
             )
 
 
-def guard_click_point(
-    client: dict[str, Any], x: float, y: float, allow_auth: bool = False
+def _click_scene() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Monitors and every client, from one batched hyprctl call."""
+    monitors, clients = hyprctl.batch_query(["monitors", "clients"])
+    return monitors, clients
+
+
+def _special_fallthrough() -> int | None:
+    """Hyprland's input:special_fallthrough, or None when it cannot be read."""
+    try:
+        return int(hyprctl.query("getoption input:special_fallthrough")["int"])
+    except Exception:
+        return None
+
+
+def check_click_point(
+    client: dict[str, Any],
+    x: float,
+    y: float,
+    allow_auth: bool = False,
+    focused: bool = False,
 ) -> None:
-    """Guard click_ui's point, not just its target window. Hyprland's hit
-    test puts floating windows above tiled ones, so a floating or
-    fullscreen window over the target's control takes the click; refuse
-    when that window is an authentication dialog, or out of scope under
-    confinement. What cannot be over the target does not count: the target
-    and its group tabs, an inactive tab (it shares a rect without
-    drawing), a tiled neighbour on its workspace (tiled windows do not
-    overlap), another floating window when the target floats too (focusing
-    raises the target), and windows on other normal workspaces (gone once
-    the target's workspace is shown). A pulled-up special workspace sits
-    over everything, so its windows count. Fails closed while a guard is
-    on and the windows cannot be read."""
+    """click_ui's checks on the point it is about to click.
+
+    Always: the point must be on a monitor (Hyprland moves an off-monitor
+    point to the nearest edge, onto something else) and inside the target
+    window (a mark's offset can fall outside a window resized since
+    marks()).
+
+    While a guard is on: what covers the point once the target is
+    focused. Hyprland's hit test takes pinned windows first, then floating
+    ones, then tiled, and focusing a window does not raise it, so these
+    count: any pinned window; a floating or fullscreen window on the
+    target's workspace, whether or not the target floats; a floating
+    window from another monitor (it can hang across the edge); and a
+    scratchpad on the target's monitor, unless focusing will hide it
+    (input:special_fallthrough 0, the default, and a target on a regular
+    workspace; unreadable counts as not hidden). After focusing (`focused`)
+    a scratchpad still up counts. These do not: the target and its group
+    tabs, an inactive tab, a tiled window on its workspace (tiled windows
+    do not overlap, and the point is inside the target), and windows on
+    another regular workspace of its monitor, which focusing replaces.
+    Refuses when one of them is an authentication dialog, or out of scope
+    under confinement; fails closed while a guard is on and the desktop
+    cannot be read."""
     scope = _confine_scope()
     auth = _auth_guard_on() and not allow_auth
+    try:
+        monitors, clients = _click_scene()
+    except Exception as exc:
+        if scope is not None or auth:
+            raise TrustError(
+                f"cannot read the desktop to guard the click ({exc}); refusing. Retry."
+            ) from exc
+        monitors, clients = None, []
+    if monitors is not None and hyprctl.monitor_at(monitors, x, y) is None:
+        raise TrustError(
+            f"({x:.0f}, {y:.0f}) is off every monitor: Hyprland would move the click to the "
+            "nearest screen edge, onto something else; refusing. Bring the window fully on "
+            "screen first."
+        )
+    if not _covers(client, x, y):
+        raise TrustError(
+            f"({x:.0f}, {y:.0f}) is outside the window ({client.get('at')} "
+            f"{client.get('size')}), so the click would land on something else; refusing. "
+            "A mark taken before the window changed needs marks() again."
+        )
     if scope is None and not auth:
         return
-    try:
-        under = _windows_under(x, y)
-    except Exception as exc:
-        raise TrustError(
-            f"cannot read the windows over ({x:.0f}, {y:.0f}) to guard the click ({exc}); "
-            "refusing. Retry."
-        ) from exc
-    mine = hyprctl.workspace_ref(client.get("workspace"))
-    skip = {client.get("address"), *(client.get("grouped") or [])}
-
-    def over_target(c: dict[str, Any]) -> bool:
-        if c.get("address") in skip or c.get("visible") is False:
-            return False
-        ws = c.get("workspace") or {}
-        if hyprctl.workspace_ref(ws) != mine:
-            return _is_special(ws)
-        if c.get("fullscreen"):
-            return True
-        return bool(c.get("floating")) and not client.get("floating")
-
-    over = [c for c in under if over_target(c)]
+    over = [
+        c
+        for c in clients
+        if c.get("mapped", True)
+        and _covers(c, x, y)
+        and _would_cover(c, client, monitors or [], focused)
+    ]
     if auth:
         hit = next((c for c in over if (c.get("class") or "").lower() in _AUTH_CLASSES), None)
         if hit is not None:
@@ -361,6 +396,42 @@ def guard_click_point(
                 f"({x:.0f}, {y:.0f}) is covered by a window outside the confinement scope "
                 f"({classes}; {_describe(scope)}), which would take the click; refusing"
             )
+
+
+def _would_cover(
+    c: dict[str, Any],
+    target: dict[str, Any],
+    monitors: list[dict[str, Any]],
+    focused: bool,
+) -> bool:
+    """Whether `c`, whose rect holds the point, would take a click aimed
+    at `target` once the target is focused (see check_click_point)."""
+    if c.get("address") == target.get("address") or c.get("address") in (
+        target.get("grouped") or []
+    ):
+        return False
+    if c.get("visible") is False:  # an inactive tab: not drawn
+        return False
+    if c.get("pinned"):
+        return True
+    ws = c.get("workspace") or {}
+    ref = hyprctl.workspace_ref(ws)
+    if ref == hyprctl.workspace_ref(target.get("workspace")):
+        return bool(c.get("floating") or c.get("fullscreen"))
+    if ref not in hyprctl.visible_workspaces(monitors):
+        return False
+    if c.get("monitor") != target.get("monitor"):
+        return bool(c.get("floating"))  # it can hang across the monitor edge
+    if not _is_special(ws):
+        return False  # focusing the target replaces this workspace
+    if focused:
+        return True  # a scratchpad still up over the target
+    hidden_by_focus = (
+        not _is_special(target.get("workspace") or {})
+        and not target.get("pinned")
+        and _special_fallthrough() == 0
+    )
+    return not hidden_by_focus
 
 
 def _is_special(ws: dict[str, Any]) -> bool:

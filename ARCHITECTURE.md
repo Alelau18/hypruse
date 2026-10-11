@@ -179,16 +179,21 @@ locks from its Quickshell shell, with no locker process to find) and a
 crashed locker, which the protocol leaves locked rather than handing the
 session back. A scan of /proc for a known locker process names it in the
 refusal, and decides alone only when the compositor cannot be asked.
-The input-delivering tools (`keyboard`, `click_ui`,
-and `pointer`'s click/drag/scroll; a bare `pointer` move only shifts the
-cursor) refuse while it is up unless `allow_auth` says a human wants the
-agent driving the prompt. The guards are the confinement
-path over the same happy path above: step 2 is refused if the target is out
-of scope, and step 4 if the point is off every monitor, over an
+The input-delivering tools (`keyboard` and `pointer`'s click/drag/scroll;
+a bare `pointer` move only shifts the cursor) refuse while it is up unless
+`allow_auth` says a human wants the agent driving the prompt; `click_ui`
+always refuses then. The guards are the confinement path over the same
+happy path above: step 2 is refused if the target is out of scope, and
+step 4, while a guard is on, if the point is off every monitor, over an
 authentication window, or (under confinement) over an out-of-scope one.
-For `click_ui` that means a floating or fullscreen window over the
-control, since tiled windows do not overlap its target; it also re-reads
-the target after focusing it and refuses if focusing moved it.
+`click_ui` refuses a point off every monitor or outside its target
+always, and judges what covers the point as it will be once the target is
+focused: pinned windows, floating or fullscreen windows on the target's
+workspace, floating windows that can hang over from another monitor, and
+a scratchpad focusing will not hide (tiled windows do not overlap its
+target, and focusing a floating window does not raise it). It re-reads
+the target after focusing it, refuses if focusing moved it, and checks
+the point again before clicking.
 
 ## The record: journal, dry run, replay
 

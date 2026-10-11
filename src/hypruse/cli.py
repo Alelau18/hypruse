@@ -130,7 +130,12 @@ def _window_capture_note() -> tuple[bool, str]:
         clients = hyprctl.query("clients") or []
     except Exception:
         clients = []
-    if clients and not any("stableId" in c for c in clients):
+    if not clients:
+        return True, (
+            "grim -T found, but no window is open to check that this Hyprland reports "
+            "window ids (needs 0.54+); run doctor again with a window open"
+        )
+    if not any("stableId" in c for c in clients):
         return True, f"this Hyprland reports no window ids (needs 0.54+): {crop}"
     return True, "grim -T: a window screenshot is the window itself, even hidden or covered"
 

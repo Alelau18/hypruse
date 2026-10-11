@@ -24,12 +24,16 @@ Fixes from a review of 0.12.0.
   mid-animation is retried for up to about a second, and `stable=true`
   keeps its last good frame when one capture fails.
 - **Trust guards.** `click_ui` checks the point it clicks, not only its
-  target: it refuses when a floating authentication dialog covers the
-  control (Hyprland gives a floating window the click, and
-  hyprpolkitagent opens floating), or under confinement an out-of-scope
-  window. It reads the target again after focusing it and refuses if
-  focusing moved it (Omarchy fullscreens a window focused behind a
-  fullscreen one, and a scrolling layout scrolls its column into view).
+  target. It refuses a point off every monitor or outside the target, and
+  a mark taken before the window was resized. It refuses when an
+  authentication dialog will cover the control once the target is
+  focused, or under confinement an out-of-scope window: Hyprland gives
+  the click to pinned and floating windows first and focusing does not
+  raise a window, so a floating dialog over the control takes it, and
+  hyprpolkitagent opens floating. It reads the target again after
+  focusing it and refuses if focusing moved it (Omarchy fullscreens a
+  window focused behind a fullscreen one, and a scrolling layout scrolls
+  its column into view).
   `pointer` refuses a point off every monitor while a guard is on, since
   Hyprland would move the click to the nearest screen edge, onto a window
   nothing checked. A layer whose namespace contains "polkit" counts as an

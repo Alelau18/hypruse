@@ -269,3 +269,13 @@ def test_doctor_needs_window_ids_from_hyprland_too(monkeypatch):
     monkeypatch.setattr(hyprctl_mod, "query", lambda what: [{"address": "0xa"}])
     ok, detail = cli._window_capture_note()
     assert ok is True and "0.54" in detail and "crop the screen" in detail
+
+
+def test_doctor_does_not_vouch_for_window_ids_it_could_not_see(monkeypatch):
+    class Done:
+        stdout, stderr = "  -T <identifier> Set the identifier", ""
+
+    monkeypatch.setattr(cli.subprocess, "run", lambda *a, **k: Done())
+    monkeypatch.setattr(hyprctl_mod, "query", lambda what: [])
+    ok, detail = cli._window_capture_note()
+    assert ok is True and "no window" in detail
