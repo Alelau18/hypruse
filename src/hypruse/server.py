@@ -1469,22 +1469,65 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
     return _acted(msg, then)
 
 
-def _await_new_window(before: set[str], wait_s: float) -> dict[str, Any] | None:
+def _await_new_window(
+    before: set[str], wait_s: float, accept: Callable[[dict[str, Any]], bool] | None = None
+) -> dict[str, Any] | None:
     """Polling fallback when the event socket is unavailable."""
     deadline = time.monotonic() + wait_s
     while time.monotonic() < deadline:
         time.sleep(0.15)
         for c in hyprctl.query("clients"):
-            if c["address"] not in before:
+            if c["address"] not in before and (accept is None or accept(c)):
                 return c
     return None
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def _program(command: str) -> str:
+    """The program a launch command runs, past `env` and VAR=value words."""
+    for word in command.split():
+        if word == "env" or ("=" in word and not word.startswith("-")):
+            continue
+        return os.path.basename(word)
+    return ""
+
+
+def _launched_window(workspace: str, command: str) -> Callable[[dict[str, Any]], bool]:
+    """Which new window a placed launch waits for: one on its workspace, or
+    one of the launched program's own class (a single-instance app's window
+    opens from the running process, which ignores the rule). Any other new
+    window is someone else's, often the human's, and must not be taken over
+    and moved. `workspace` is an event's workspace name or a client's
+    workspace record."""
+    prog = _norm(_program(command))
+
+    def on_it(ws: Any) -> bool:
+        rec = ws if isinstance(ws, dict) else {"name": str(ws)}
+        name = str(rec.get("name", ""))
+        return bg.matches(workspace, rec) or name in (workspace, workspace.removeprefix("name:"))
+
+    def same_app(cls: str) -> bool:
+        c, last = _norm(cls), _norm(cls.rsplit(".", 1)[-1])
+        if len(prog) < 3 or len(c) < 3:
+            return False
+        return prog in c or c in prog or (len(last) >= 3 and (last in prog or prog in last))
+
+    def accept(win: dict[str, Any]) -> bool:
+        return bool(on_it(win.get("workspace")) or same_app(str(win.get("class", ""))))
+
+    return accept
 
 
 def _client_by_address(address: str) -> dict[str, Any] | None:
     return next((c for c in hyprctl.query("clients") if c["address"] == address), None)
 
 
-def _launch_and_wait(rule_command: str, wait_s: float) -> dict[str, Any] | None:
+def _launch_and_wait(
+    rule_command: str, wait_s: float, accept: Callable[[dict[str, Any]], bool] | None = None
+) -> dict[str, Any] | None:
     """Dispatch exec and return the new window's client record.
 
     Preferred path: subscribe to the event socket BEFORE dispatching, then
@@ -1496,10 +1539,11 @@ def _launch_and_wait(rule_command: str, wait_s: float) -> dict[str, Any] | None:
     except events.EventError:
         before = {c["address"] for c in hyprctl.query("clients")}
         hyprctl.dispatch("exec", rule_command)
-        return _await_new_window(before, wait_s)
+        return _await_new_window(before, wait_s, accept)
     with stream:
         hyprctl.dispatch("exec", rule_command)
-        hit = stream.wait_for({"openwindow"}, None, wait_s)
+        matcher = None if accept is None else (lambda name, payload: accept(payload))
+        hit = stream.wait_for({"openwindow"}, matcher, wait_s)
     if hit is None:
         return None
     address = hit[1]["address"]
@@ -1526,26 +1570,49 @@ def launch(
     safety.touch("launch")
     wait_s = min(max(wait_s, 1.0), 30.0)
     # Background mode: with no workspace, automatic mode and the guarantee
-    # open the app on the next agent workspace (background=false refuses
-    # under the guarantee, here); the guarantee takes no other workspace
+    # open the app on the next agent workspace that is off screen
+    # (background=false refuses under the guarantee, here); the guarantee
+    # takes no other workspace, and none the human can see
     to_agent = bg.decide(False, background)
+    mode = bg.mode()
     note = ""
     if workspace:
         bg.require_agent_workspace(
             _workspace(workspace), "leave workspace out to use the next free agent workspace"
         )
+        if mode == bg.GUARANTEE and any(
+            bg.matches(workspace, ws) for ws in _shown_workspaces(hyprctl.query("monitors"))
+        ):
+            bg.refuse(
+                f"workspace {workspace} is on screen, so the app would open in the human's "
+                "sight and take their focus",
+                "leave workspace out to use the next free agent workspace",
+            )
     elif to_agent:
-        workspace = bg.next_workspace(hyprctl.query("clients"), trust.owned())
-        note = (
-            f"opened on workspace {workspace}, one of the agent's "
-            "(HYPRUSE_AGENT_WORKSPACES), out of the human's sight; pass "
-            "background=false to open it on the human's workspace"
-        )
+        allowed = _confine_allows()
+        if mode != bg.GUARANTEE and allowed is not None and not any(
+            allowed(sel) for sel in bg.agent_workspaces()
+        ):
+            note = (
+                "HYPRUSE_CONFINE holds none of the agent's workspaces, so it opened on the "
+                "human's workspace as before background mode"
+            )
+        else:
+            workspace = bg.next_workspace(
+                hyprctl.query("clients"), trust.owned(),
+                shown=_shown_workspaces(hyprctl.query("monitors")), allowed=allowed,
+            )
+            note = (
+                f"opened on workspace {workspace}, one of the agent's "
+                "(HYPRUSE_AGENT_WORKSPACES), out of the human's sight; pass "
+                "background=false to open it on the human's workspace"
+            )
     rule = f"[workspace {_workspace(workspace)} silent] " if workspace else ""
     if journal.dry_run():
         return f"{_DRY} run {rule + command} and wait up to {wait_s:.0f}s for its window"
     active_before = _active_address() if rule else None
-    win = _launch_and_wait(rule + command, wait_s)
+    accept = _launched_window(workspace, command) if rule else None
+    win = _launch_and_wait(rule + command, wait_s, accept)
     if win is None:
         return (
             f"launched, but no new window appeared within {wait_s:.0f}s, slow or "
@@ -1563,26 +1630,63 @@ def launch(
     }
     if note:
         result["note"] = note
-    landed = {str(ws.get("id")), str(ws.get("name", ""))}
-    moved = bool(workspace) and workspace not in landed
+    moved = bool(workspace) and not _launched_window(workspace, "")(win)
     if moved:
         hyprctl.dispatch("movetoworkspacesilent", f"{workspace},address:{win['address']}")
         result["workspace"] = workspace
-        result["note"] = (f"{note}; " if note else "") + (
-            "window opened elsewhere (single-instance app behavior); "
-            "moved to the requested workspace"
+        landed = ws.get("name") or ws.get("id")
+        on_screen = None
+        with contextlib.suppress(Exception):
+            refs = hyprctl.visible_workspaces(hyprctl.query("monitors"))
+            on_screen = hyprctl.workspace_ref(ws) in refs
+        what = (
+            f"it opened on workspace {landed} first (single-instance app behavior) and was "
+            f"moved to {workspace}"
         )
-        active_now = _active_address()
-        if active_now != active_before:
-            result["note"] += (
-                f"; the human's focused window changed while it opened (now {active_now})"
+        if on_screen:
+            what += "; while there it was on the human's screen and took their keyboard focus"
+        elif on_screen is None:
+            what += "; it may have been on the human's screen and taken their focus there"
+        result["note"] = (f"{note}; " if note else "") + what
+        if mode == bg.GUARANTEE and on_screen is not False:
+            result["warning"] = (
+                "this broke HYPRUSE_BACKGROUND=1: the app was already running, and its new "
+                "window opened from the running process, which ignores the workspace rule; "
+                "start a separate instance (a browser: a separate profile) or ask the human"
             )
-    if not rule or moved:
-        # the new window took focus, or ours moved it: re-baseline the seat
-        # guard. A silent launch leaves the human's seat as it was, so a
-        # change since the last action is still theirs for the guard to see.
+    active_after = _active_address() if rule else None
+    if moved and active_after != active_before:
+        result["note"] += f" (the focused window is now {active_after})"
+    if mode == bg.OFF or not rule or moved or active_after != active_before:
+        # the launch moved the seat (the new window took focus, ours moved
+        # it, or Hyprland dropped the silent rule for the workspace on
+        # screen): re-baseline the seat guard. A launch that left the seat
+        # alone does not, so a change since the last action stays the
+        # human's for the guard to see. Off mode keeps 0.12's behaviour.
         trust.remember_seat()
     return result
+
+
+def _shown_workspaces(monitors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The workspace records on screen: each monitor's active one and any
+    scratchpad pulled up over it."""
+    out = []
+    for m in monitors:
+        for slot in ("activeWorkspace", "specialWorkspace"):
+            ws = m.get(slot) or {}
+            if hyprctl.workspace_ref(ws) is not None:
+                out.append(ws)
+    return out
+
+
+def _confine_allows() -> Callable[[str], bool] | None:
+    """HYPRUSE_CONFINE=workspace:... narrows the agent workspaces an app may
+    open on: one outside the scope could be neither used, moved nor closed."""
+    scope = trust._explicit_scope()
+    if scope is None or scope[0] != "workspace":
+        return None
+    vals = scope[1]
+    return lambda sel: sel in vals or sel.removeprefix("name:") in vals
 
 
 _INTERACTIVE_HELP = """\

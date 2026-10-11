@@ -129,3 +129,74 @@ def test_a_workspace_name_is_an_agent_workspace_only_when_listed(monkeypatch):
     assert bg.is_agent_workspace("98") and bg.is_agent_workspace("name:research")
     assert not bg.is_agent_workspace("3") and not bg.is_agent_workspace("+1")
     assert not bg.is_agent_workspace("special:magic")
+
+
+# --- review fixes -------------------------------------------------------------
+
+
+def test_a_workspace_on_screen_is_never_picked(monkeypatch):
+    # the human looking at 99 would see the app open, and Hyprland drops a
+    # silent rule for the workspace a window maps on anyway
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-97")
+    assert bg.next_workspace([], set(), shown=[_ws(99)]) == "98"
+    monkeypatch.setenv("HYPRUSE_AGENT_FILL", "2")
+    owned = {"0xa"}
+    assert bg.next_workspace([_c("0xa", 99)], owned, shown=[_ws(99)]) == "98"
+
+
+def test_the_overflow_skips_a_workspace_on_screen(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-98")
+    owned = {"0xa", "0xb", "0xc"}
+    cl = [_c("0xa", 99), _c("0xb", 98), _c("0xc", 98)]
+    assert bg.next_workspace(cl, owned, shown=[_ws(99)]) == "98"
+
+
+def test_every_free_workspace_on_screen_refuses(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99")
+    with pytest.raises(trust.TrustError, match="on screen"):
+        bg.next_workspace([], set(), shown=[_ws(99)])
+
+
+def test_a_named_workspace_on_screen_is_skipped(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "name:research,99")
+    assert bg.next_workspace([], set(), shown=[{"id": -1337, "name": "research"}]) == "99"
+
+
+def test_a_window_tagged_hypruse_owned_counts_as_the_agents(monkeypatch):
+    # a window an earlier session opened, under HYPRUSE_MARK
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-98")
+    monkeypatch.setenv("HYPRUSE_AGENT_FILL", "2")
+    left = dict(_c("0xold", 99), tags=["hypruse-owned*"])
+    assert bg.next_workspace([left], set()) == "99"
+
+
+def test_allowed_narrows_the_range(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-97")
+    assert bg.next_workspace([], set(), allowed=lambda sel: sel == "97") == "97"
+    with pytest.raises(trust.TrustError):
+        bg.next_workspace([], set(), allowed=lambda sel: False)
+
+
+def test_numbers_are_normalized(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "099,98")
+    assert bg.agent_workspaces() == ["99", "98"]
+
+
+@pytest.mark.parametrize("raw", ["1-100000", "99-2000000000", "3000000000"])
+def test_a_huge_range_refuses(monkeypatch, raw):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", raw)
+    with pytest.raises(trust.TrustError, match="HYPRUSE_AGENT_WORKSPACES"):
+        bg.agent_workspaces()
+
+
+def test_the_malformed_message_says_what_it_refuses(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "abc")
+    with pytest.raises(trust.TrustError) as err:
+        bg.agent_workspaces()
+    assert "refusing every action until" not in str(err.value) and "launch" in str(err.value)
+
+
+def test_matches_a_name_selector_and_numbers():
+    assert bg.matches("name:research", {"id": -1337, "name": "research"})
+    assert bg.matches("99", {"id": 99, "name": "99"})
+    assert not bg.matches("99", {"id": 9, "name": "9"})

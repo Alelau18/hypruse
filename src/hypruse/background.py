@@ -13,6 +13,7 @@ HYPRUSE_BACKGROUND=0: off, exactly 0.12's behaviour.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable, Iterable
 from typing import Any, NoReturn
 
 from hypruse import hyprctl, trust
@@ -78,34 +79,61 @@ def agent_workspaces() -> list[str]:
             out.append(part)
             continue
         lo, sep, hi = part.partition("-")
-        if sep and lo.isdigit() and hi.isdigit() and int(lo) > 0 and int(hi) > 0:
+        if sep and _id(lo) and _id(hi) and abs(int(lo) - int(hi)) < _MAX_WORKSPACES:
             a, b = int(lo), int(hi)
             step = -1 if a > b else 1
             out.extend(str(i) for i in range(a, b + step, step))
-        elif part.isdigit() and int(part) > 0:
-            out.append(part)
+        elif _id(part):
+            out.append(str(int(part)))  # 099 is workspace 99
         else:
             out = []
             break
-    if not out:
+    if not out or len(out) > _MAX_WORKSPACES:
         raise trust.TrustError(
             f"HYPRUSE_AGENT_WORKSPACES={raw!r} is malformed (use 99-90, 99,98,50 or "
-            "name:x); refusing every action until it is fixed"
+            f"name:x, at most {_MAX_WORKSPACES} workspaces); launch, and every action "
+            "under HYPRUSE_BACKGROUND=1, is refused until it is fixed"
         )
     return out
+
+
+_MAX_WORKSPACES = 1000
+_MAX_ID = 2**31 - 1  # Hyprland's workspace ids are 32-bit
+
+
+def _id(part: str) -> bool:
+    return part.isdigit() and 0 < int(part) <= _MAX_ID
 
 
 def fill() -> int:
     raw = os.environ.get("HYPRUSE_AGENT_FILL", "1").strip()
     if not raw.isdigit() or int(raw) < 1:
-        raise trust.TrustError(f"HYPRUSE_AGENT_FILL={raw!r} must be a whole number of 1 or more")
+        raise trust.TrustError(
+            f"HYPRUSE_AGENT_FILL={raw!r} must be a whole number of 1 or more; launch is "
+            "refused until it is fixed"
+        )
     return int(raw)
 
 
-def _matches(selector: str, ws: dict[str, Any]) -> bool:
+def matches(selector: str, ws: dict[str, Any]) -> bool:
+    """Whether a workspace record is the one an agent-workspace selector
+    (a number, or name:x) names."""
     if selector.startswith("name:"):
         return ws.get("name") == selector[5:]
+    if not selector.isdigit():
+        return False
     return hyprctl.workspace_ref(ws) == int(selector) or ws.get("name") == selector
+
+
+_matches = matches
+
+
+def _owned(client: dict[str, Any], owned: set[str]) -> bool:
+    """The agent opened it: in this session's owned set, or tagged
+    hypruse-owned by an earlier one under HYPRUSE_MARK."""
+    return client.get("address") in owned or any(
+        str(t).rstrip("*") == "hypruse-owned" for t in client.get("tags") or ()
+    )
 
 
 def is_agent_workspace(name: str) -> bool:
@@ -130,20 +158,37 @@ def on_agent_workspace(client: dict[str, Any]) -> bool:
     return any(_matches(s, ws) for s in agent_workspaces())
 
 
-def next_workspace(clients: list[dict[str, Any]], owned: set[str]) -> str:
+def next_workspace(
+    clients: list[dict[str, Any]],
+    owned: set[str],
+    shown: Iterable[dict[str, Any]] = (),
+    allowed: Callable[[str], bool] | None = None,
+) -> str:
     """Where the agent's next app goes: the first workspace in the range with
     fewer than fill() agent windows and none of the human's; when all are
-    full, the one with the fewest agent windows."""
+    full, the one with the fewest agent windows. Never one on screen
+    (`shown`, the monitors' workspace records): the human would see the app
+    open, and Hyprland drops a silent rule for the workspace a window maps
+    on, so it would take their focus too. `allowed` narrows the range."""
+    shown = list(shown)
     usable: list[tuple[str, int]] = []
+    on_screen = False
     for sel in agent_workspaces():
-        here = [c for c in clients if _matches(sel, c.get("workspace") or {})]
-        if any(c.get("address") not in owned for c in here):
+        if allowed is not None and not allowed(sel):
+            continue
+        here = [c for c in clients if matches(sel, c.get("workspace") or {})]
+        if any(not _owned(c, owned) for c in here):
             continue  # holds a window the agent did not open
+        if any(matches(sel, ws) for ws in shown):
+            on_screen = True
+            continue
         usable.append((sel, len(here)))
     if not usable:
+        why = ("every free agent workspace is on screen" if on_screen
+               else "every agent workspace holds a window the agent did not open")
         raise trust.TrustError(
-            "every agent workspace holds a window the agent did not open; free one or "
-            "widen HYPRUSE_AGENT_WORKSPACES"
+            f"{why}, so an app cannot open out of the human's sight; free one or widen "
+            "HYPRUSE_AGENT_WORKSPACES"
         )
     limit = fill()
     for sel, n in usable:

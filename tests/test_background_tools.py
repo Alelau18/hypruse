@@ -368,18 +368,20 @@ def test_automatic_mode_still_switches_workspaces_on_request(wired_bg):
 @pytest.fixture
 def launch_fake(monkeypatch):
     s = {"rule": None, "clients": [], "seat": 0, "active": ["0xhuman"],
-         "lands": None, "dispatch": []}
+         "lands": None, "dispatch": [], "monitors": MONS}
     monkeypatch.delenv("HYPRUSE_BACKGROUND", raising=False)
     monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
 
-    def launch_and_wait(rule_command, wait_s):
+    def launch_and_wait(rule_command, wait_s, accept=None):
         s["rule"] = rule_command.removesuffix("foot").strip()
         ws = s["lands"] or (rule_command.split()[1] if rule_command.startswith("[") else "1")
+        name = ws.removeprefix("name:")
         return {"address": "0xnew", "class": "foot", "title": "~",
-                "workspace": {"id": int(ws) if ws.isdigit() else -1, "name": ws}}
+                "workspace": {"id": int(ws) if ws.isdigit() else -1337, "name": name}}
 
     monkeypatch.setattr(srv, "_launch_and_wait", launch_and_wait)
-    monkeypatch.setattr(srv.hyprctl, "query", lambda what: s["clients"])
+    monkeypatch.setattr(srv.hyprctl, "query",
+                        lambda what: s["monitors"] if what == "monitors" else s["clients"])
     monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: s["dispatch"].append(a))
     monkeypatch.setattr(srv, "_active_address",
                         lambda: s["active"].pop(0) if len(s["active"]) > 1 else s["active"][0])
@@ -603,3 +605,103 @@ def test_a_key_that_fails_partway_says_how_many_landed(wired_bg):
     wired_bg["fail_after"] = 2
     with pytest.raises(srv.hyprctl.HyprctlError, match="sent 2 of 4 keys"):
         srv.keyboard("type", text="abcd", window="0xa")
+
+
+def test_launch_never_opens_on_an_agent_workspace_the_human_is_viewing(launch_fake):
+    launch_fake["monitors"] = [dict(MONS[0], activeWorkspace={"id": 99, "name": "99"})]
+    out = srv.launch("foot")
+    assert launch_fake["rule"] == "[workspace 98 silent]" and "98" in out["note"]
+
+
+def test_the_guarantee_refuses_a_workspace_on_screen(launch_fake, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    launch_fake["monitors"] = [dict(MONS[0], activeWorkspace={"id": 98, "name": "98"})]
+    with pytest.raises(srv.trust.TrustError, match="on screen"):
+        srv.launch("foot", workspace="98")
+    assert launch_fake["rule"] is None
+
+
+def test_a_named_agent_workspace_is_not_mistaken_for_a_move(launch_fake, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "name:research")
+    out = srv.launch("foot")
+    assert launch_fake["rule"] == "[workspace name:research silent]"
+    assert launch_fake["dispatch"] == [] and "elsewhere" not in out["note"]
+
+
+def test_with_background_off_launch_re_baselines_the_seat_as_before(launch_fake, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "0")
+    srv.launch("foot", workspace="3")
+    assert launch_fake["seat"] == 1
+
+
+def test_a_launch_that_took_focus_re_baselines_the_seat(launch_fake):
+    # Hyprland drops a silent rule for the workspace a window maps on
+    launch_fake["active"][:] = ["0xhuman", "0xnew"]
+    srv.launch("foot", workspace="3")
+    assert launch_fake["seat"] == 1
+
+
+def test_confinement_to_workspaces_narrows_where_apps_open(launch_fake, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_CONFINE", "workspace:3,97")
+    srv.launch("foot")
+    assert launch_fake["rule"] == "[workspace 97 silent]"
+
+
+def test_confinement_without_an_agent_workspace_opens_as_before(launch_fake, monkeypatch):
+    # the agent could not use, move or close an app outside its scope
+    monkeypatch.setenv("HYPRUSE_CONFINE", "workspace:3")
+    out = srv.launch("foot")
+    assert launch_fake["rule"] == "" and "HYPRUSE_CONFINE" in out["note"]
+
+
+def test_an_app_that_opened_on_screen_says_it_took_focus(launch_fake):
+    launch_fake["lands"] = "1"  # the human's workspace, on screen
+    out = srv.launch("foot")
+    assert "workspace 1" in out["note"] and "took their keyboard focus" in out["note"]
+    assert "warning" not in out
+
+
+def test_under_the_guarantee_an_app_that_opened_on_screen_is_a_warning(launch_fake, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    launch_fake["lands"] = "1"
+    out = srv.launch("foot")
+    assert "HYPRUSE_BACKGROUND" in out["warning"] and "separate" in out["warning"]
+
+
+# --- which new window is the launched one -------------------------------------
+
+
+class _Stream:
+    """An event stream that honours the matcher, like the real one."""
+
+    def __init__(self, events_):
+        self.events = events_
+
+    def wait_for(self, names, matcher, timeout):
+        return next(((n, p) for n, p in self.events if matcher is None or matcher(n, p)), None)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+
+def test_launch_waits_for_its_own_window_not_one_the_human_opens(monkeypatch):
+    human = ("openwindow", {"address": "0xkitty", "workspace": "1", "class": "kitty"})
+    ours = ("openwindow", {"address": "0xfoot", "workspace": "99", "class": "foot"})
+    monkeypatch.setattr(srv.events, "EventStream", lambda: _Stream([human, ours]))
+    monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: None)
+    monkeypatch.setattr(srv, "_client_by_address", lambda a: {"address": a})
+    accept = srv._launched_window("99", "foot")
+    assert srv._launch_and_wait("[workspace 99 silent] foot", 5, accept)["address"] == "0xfoot"
+
+
+def test_a_single_instance_app_is_recognised_by_its_class(monkeypatch):
+    accept = srv._launched_window("99", "firefox --new-window https://example.org")
+    assert accept({"address": "0xff", "workspace": "1", "class": "firefox"})
+    assert accept({"address": "0xt", "workspace": "1", "class": "org.gnome.TextEditor"}) is False
+    assert srv._launched_window("2", "gnome-text-editor")(
+        {"workspace": "1", "class": "org.gnome.TextEditor"})
+    assert srv._launched_window("2", "env GDK_BACKEND=wayland foot")(
+        {"workspace": "1", "class": "foot"})
