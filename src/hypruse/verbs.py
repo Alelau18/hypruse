@@ -78,6 +78,13 @@ def build_parser() -> argparse.ArgumentParser:
         json_flag(v)
         return v
 
+    def placement(v: argparse.ArgumentParser) -> None:
+        g = v.add_mutually_exclusive_group()
+        g.add_argument("--background", dest="background", action="store_true", default=_S,
+                       help="do it without the human's cursor, focus or screen, or refuse")
+        g.add_argument("--foreground", dest="background", action="store_false", default=_S,
+                       help="do it on the human's screen, as before background mode")
+
     def acting(v: argparse.ArgumentParser, auth: bool = False) -> None:
         # argparse hands everything after an action word to that action's
         # parser, so the flags an agent writes at the end must live there too
@@ -156,6 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="move there first")
     for a in ps.choices.values():
         acting(a, auth=True)
+        placement(a)
 
     v = verb("keyboard", "type text or press an app-level combo")
     ks = v.add_subparsers(dest="action", metavar="ACTION")
@@ -165,8 +173,9 @@ def build_parser() -> argparse.ArgumentParser:
     a = ks.add_parser("key", help="press COMBO: ctrl+shift+t, esc, F5, enter")
     a.add_argument("keys", metavar="COMBO")
     for a in ks.choices.values():
-        a.add_argument("--window", default=_S, metavar="ADDR", help="focus this window first")
+        a.add_argument("--window", default=_S, metavar="ADDR", help="the window to type into")
         acting(a, auth=True)
+        placement(a)
 
     v = verb("click_ui", "click a control by accessible name, or by marks number", ("click-ui",))
     v.add_argument("name", nargs="?", default=_S, metavar="NAME")
@@ -177,6 +186,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--button", choices=("left", "right", "middle"), default=_S)
     v.add_argument("--double", action="store_true", default=_S)
     acting(v, auth=True)
+    placement(v)
 
     v = verb("hypr", "workspace and window operations over IPC")
     hs = v.add_subparsers(dest="action", metavar="ACTION")
@@ -202,6 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--workspace", default=_S, metavar="WS", help="open it there, silently")
     v.add_argument("--wait", type=float, default=_S, metavar="S", help="1-30, default 8")
     v.add_argument("--dry-run", dest="dry_run", action="store_true", default=_S)
+    placement(v)
 
     v = verb("use_bind", "run one of the owner's keybinds by combo", ("use-bind",))
     v.add_argument("combo", metavar="COMBO")
@@ -212,6 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="a JSON array of {op, ...} steps, @file.json, or - for stdin")
     v.add_argument("--no-stop-on-change", dest="no_stop", action="store_true", default=_S)
     acting(v)
+    placement(v)
 
     v = verb("clipboard", "read or write the text clipboard (needs HYPRUSE_CLIPBOARD=1)")
     cs = v.add_subparsers(dest="action", metavar="ACTION")

@@ -1676,6 +1676,7 @@ def _structural(name: str, payload: dict[str, Any]) -> bool:
     return name in _WATCHED_EVENTS
 
 _SEQ_MAX_STEPS = 20
+_SEQ_PLACED = ("pointer", "keyboard", "click_ui")  # the steps that take background=
 _SEQ_SETTLE = 0.2  # between-step window to let a structural change surface
 _SEQ_BUDGET = 30.0  # total wall-clock ceiling so a sequence cannot hold the seat
 
@@ -1797,7 +1798,10 @@ def _seq_wait_for(
 
 @journal.journaled("act")
 def sequence(
-    steps: list[dict[str, Any]], stop_on_change: bool = True, then: str = "desktop"
+    steps: list[dict[str, Any]],
+    stop_on_change: bool = True,
+    then: str = "desktop",
+    background: bool | None = None,
 ) -> list[Any] | str:
     """Run an ordered list of actions in ONE call, so a click/type/enter
     micro-sequence costs one round-trip instead of several. Each step is
@@ -1853,6 +1857,8 @@ def sequence(
                 stopped = f"time budget ({_SEQ_BUDGET:.0f}s) reached before step {i}"
                 break
             run = dict(step)
+            if background is not None and step.get("op") in _SEQ_PLACED:
+                run.setdefault("background", background)  # a step's own choice wins
             if step.get("op") == "wait_for":  # never let one wait outlast the budget
                 run["timeout_s"] = min(float(step.get("timeout_s", 10)), max(budget_left, 1.0))
             try:

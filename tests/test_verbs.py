@@ -697,3 +697,18 @@ def test_desktop_quotes_workspace_names_that_are_not_numbers(stub, capsys):
     assert 'ws "my notes" focused' in out
     assert out.count('ws "my notes" "my notes" on eDP-1') == 1
     assert 'win 0x1 ws "special:vault" kitty' in out
+
+
+def test_background_flags_on_the_acting_verbs():
+    assert kwargs_of("click_ui", "Save", "--background")["background"] is True
+    assert kwargs_of("pointer", "click", "1", "2", "--foreground")["background"] is False
+    assert kwargs_of("keyboard", "type", "hi", "--window", "0xa", "--background")["background"]
+    assert kwargs_of("launch", "--foreground", "foot")["background"] is False
+    steps = '[{"op": "click_ui", "name": "Save"}]'
+    assert kwargs_of("sequence", steps, "--background")["background"] is True
+    assert "background" not in kwargs_of("click_ui", "Save")
+
+
+def test_background_and_foreground_exclude_each_other(capsys):
+    with pytest.raises(SystemExit):
+        parse("click_ui", "Save", "--background", "--foreground")

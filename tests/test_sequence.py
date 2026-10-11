@@ -471,3 +471,13 @@ def test_expected_signatures_mapping():
     assert srv._step_wait_names({"op": "wait_for", "event": "window_open"}) == {"openwindow"}
     assert srv._step_wait_names({"op": "pointer"}) == set()
     assert srv._event_signature("workspace", {"name": "5"}) == "workspace:5"
+
+
+def test_sequence_background_applies_to_every_step_that_takes_it(wired):
+    srv.sequence([{"op": "click_ui", "name": "Save", "window": "0xa"},
+                  {"op": "keyboard", "action": "key", "keys": "enter", "background": False},
+                  {"op": "hypr", "action": "close_window", "target": "0xa"}],
+                 background=True, stop_on_change=False, then="none")
+    assert wired[0]["background"] is True
+    assert wired[1]["background"] is False  # a step's own choice wins
+    assert "background" not in wired[2]  # hypr takes no background
