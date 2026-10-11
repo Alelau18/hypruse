@@ -133,6 +133,8 @@ class FakeBus:
     def prop(self, svc, path, iface, name):
         if name == "ToolkitName":
             return self.toolkits.get(svc, "GTK")
+        if name == "Version":  # the toolkit's
+            return "6.11.1" if self.toolkits.get(svc) == "Qt" else "4.22.4"
         node = self.nodes[(svc, path)]
         if name == "CharacterCount":
             return len(node.get("text", ""))
@@ -595,3 +597,32 @@ def test_one_frame_and_no_peer_is_this_window():
 def test_one_frame_with_a_peer_must_match():
     bus, root = _tree()
     assert a11y.window_frame_for(bus, *root, "anything", (1, 1), [("other", (2, 2))]) is None
+
+
+def test_a_named_field_its_label_points_at_is_found_once():
+    # Qt names a line edit after its buddy label, and the label points at
+    # it too: a name search must not report one control twice
+    root, field, label = ("app", "/root"), ("app", "/field"), ("app", "/label")
+    nodes = {
+        root: {"role": 23, "name": "w", "children": [label, field]},
+        label: {"role": 29, "name": "Email:", "children": [], "relations": [(1, [field])],
+                "extent": (10, 10, 40, 20), "states": ALL_STATES},
+        field: {"role": 61, "name": "Email:", "children": [], "relations": [(2, [label])],
+                "extent": (60, 10, 200, 20), "states": ALL_STATES | {a11y._STATE_EDITABLE},
+                "text": ""},
+    }
+    for actionable in (True, False):
+        found, _ = a11y.find_elements(FakeBus(nodes), *root, name="email",
+                                      actionable=actionable)
+        assert [e["path"] for e in found].count("/field") == 1
+
+
+def test_a_field_record_says_it_is_a_field():
+    root, field = ("app", "/root"), ("app", "/field")
+    nodes = {
+        root: {"role": 23, "name": "w", "children": [field]},
+        field: {"role": 61, "name": "Name", "children": [], "extent": (60, 10, 200, 20),
+                "states": ALL_STATES | {a11y._STATE_EDITABLE}, "text": ""},
+    }
+    els, _ = a11y.find_elements(FakeBus(nodes), *root)
+    assert els[0]["field"] is True

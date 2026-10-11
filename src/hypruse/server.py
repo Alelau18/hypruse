@@ -680,7 +680,7 @@ def marks(window: str = "", name: str = "") -> list[Any] | str:
 _OBSERVE_MODES = ("none", "desktop", "screenshot", "ui")
 
 
-def _acted(msg: str, then: str, window: str = "") -> list[Any] | str:
+def _acted(msg: str, then: str, window: str = "", fallback: bool = True) -> list[Any] | str:
     """Fuse an action with its observation: append a fresh view of the
     result to the action's own tool result, so the agent sees the effect
     without spending a second round-trip. `then='desktop'` appends a
@@ -707,7 +707,12 @@ def _acted(msg: str, then: str, window: str = "") -> list[Any] | str:
             view = _with_hidden_note(window, _ui_read(window))
         except Exception as exc:  # the observation must never mask the action's success
             view = f"ui read failed: {exc}"
-            if window:
+            if window and not fallback:
+                # a background action: the focused window is the human's,
+                # not the closed window's parent, so it is not shown
+                view = (f"{window} is gone (the action closed it); the human's own window "
+                        "is not shown, since this ran in the background")
+            elif window:
                 # the acted-on window can be GONE: clicking Close/OK/Discard
                 # destroys the very window whose controls we were asked to
                 # re-read. Fall back to whatever holds focus now (usually
@@ -1173,14 +1178,17 @@ def _keyboard_in_background(
             if journal.dry_run():
                 return _acted(f"{_DRY} type {len(text)} characters into the text field in "
                               f"{cls} through the accessibility interface", then, window=addr)
+            seat = _seat_now()
             before = a11y.text_of(bus, field[0], field[1])
             if a11y.insert_text(bus, field[0], field[1], text):
                 after = a11y.text_of(bus, field[0], field[1])
+                untouched, warning = _seat_report(seat)
+                paren = " (the human's focus untouched)" if untouched else ""
                 return _acted(
                     f"typed {len(text)} characters into the text field in {cls} through the "
-                    f"accessibility interface (the human's focus untouched); "
-                    f"{_read_back(before, after, text)}",
-                    then, window=addr)
+                    f"accessibility interface{paren}; {_read_back(before, after, text)}"
+                    f"{warning}",
+                    then, window=addr, fallback=False)
         if keys_only:
             why = "newlines, tabs and backspaces are keys, so the whole text goes key by key"
         elif field is not None:
@@ -1208,6 +1216,9 @@ def _keyboard_in_background(
             chord = kmap.chord(key)
             if chord is None:
                 bg.refuse(f"{key!r} has no key on the {layout[0]} keyboard layout")
+        else:  # a keysym name: a shifted one ("plus") goes through its character
+            chord = kmap.chord_for_key(key)
+        if chord is not None:
             names += chord[0].split()
             key = chord[1]
         chords = [(" ".join(dict.fromkeys(names)), key)]
@@ -1224,15 +1235,17 @@ def _keyboard_in_background(
     what = f"{len(chords)} keys" if action == "type" else f"{keys}"
     if journal.dry_run():
         return _acted(f"{_DRY} send {what} to {addr} with sendshortcut", then, window=addr)
+    seat = _seat_now()
     for sent, (mods_, key_) in enumerate(chords):
         try:
             hyprctl.send_shortcut(mods_, key_, addr)
         except hyprctl.HyprctlError as exc:  # say how much landed, so a retry does not repeat it
             raise hyprctl.HyprctlError(
                 f"sent {sent} of {len(chords)} keys to {addr} before: {exc}") from exc
-    return _acted(
-        f"sent {what} to {addr} ({cls}) with sendshortcut (the human's focus untouched)",
-        then, window=addr)
+    untouched, warning = _seat_report(seat)
+    paren = " (the human's focus untouched)" if untouched else ""
+    return _acted(f"sent {what} to {addr} ({cls}) with sendshortcut{paren}{warning}",
+                  then, window=addr, fallback=False)
 
 
 def _read_back(before: str, after: str, text: str) -> str:
@@ -1272,20 +1285,34 @@ def _click_in_background(
         bg.refuse("this control was not resolved through the accessibility tree")
     is_text = control.get("_field", control.get("role", "") in _TEXT_ROLE_NAMES)
     how = "gave it the app's own focus" if is_text else "pressed it"
-    if journal.dry_run():
-        return _acted(f"{_DRY} {desc} in {cls}: would be {how} through its "
-                      "accessibility action", then, window=client["address"])
+    # the reads that can refuse come before the dry run, so a rehearsal
+    # refuses what the real run would
     bus = a11y.connect()
     if not is_text and not a11y.has_action(bus, svc, path):
         bg.refuse("this control has no accessibility action")
+    if is_text:
+        kit, version = a11y.toolkit(bus, svc)
+        if kit.lower() == "gtk" and version.startswith("3.") and _focus_on_activate() != 0:
+            # GTK 3 presents its window when a widget takes focus over AT-SPI
+            bg.refuse(
+                f"{cls} is a GTK 3 app, which brings its window forward when a field takes "
+                "focus, and Hyprland's misc:focus_on_activate is on (or cannot be read), so "
+                "focusing this field would switch the human to it",
+                "to type into a window with one text field, use keyboard with window= directly",
+            )
+    if journal.dry_run():
+        return _acted(f"{_DRY} {desc} in {cls}: would be {how} through its "
+                      "accessibility action", then, window=client["address"])
+    seat = _seat_now()
     before = a11y.current_value(bus, svc, path)
     ok = a11y.grab_focus(bus, svc, path) if is_text else a11y.do_action(bus, svc, path)
     if not ok:
         bg.refuse("the app did not accept the accessibility action")
     time.sleep(0.05)  # let the app apply it before reading back
     verb = "focused" if is_text else "pressed"
-    msg = (f"{verb} {desc} through its accessibility action (no pointer, the human's focus "
-           f"untouched) in {cls}")
+    untouched, warning = _seat_report(seat)
+    paren = "no pointer, the human's focus untouched" if untouched else "no pointer"
+    msg = f"{verb} {desc} through its accessibility action ({paren}) in {cls}"
     if not any(c.get("address") == client["address"] for c in hyprctl.query("clients")):
         msg += "; the window closed"
     elif not is_text:  # focus is not a value: a field reads the same after it
@@ -1297,7 +1324,42 @@ def _click_in_background(
             )
         elif before:
             msg += "; no change seen"
-    return _acted(msg, then, window=client["address"])
+    return _acted(msg + warning, then, window=client["address"], fallback=False)
+
+
+def _seat_now() -> tuple[Any, Any] | None:
+    """The human's active window and workspace, read around a background
+    action so its result claims only what was checked; None if unreadable."""
+    try:
+        active, ws = hyprctl.batch_query(["activewindow", "activeworkspace"])
+        return (active or {}).get("address"), (ws or {}).get("id", (ws or {}).get("name"))
+    except Exception:
+        return None
+
+
+def _seat_report(before: tuple[Any, Any] | None) -> tuple[bool, str]:
+    """(untouched, warning) for a background result: it may say the human's
+    focus was untouched only when the seat read the same before and after,
+    and says what changed when it did not (an app can open or activate a
+    window of its own in response)."""
+    after = _seat_now() if before is not None else None
+    if before is None or after is None:
+        return False, ""
+    if after == before:
+        return True, ""
+    return False, (f"; WARNING: the human's focused window changed during this action (now "
+                   f"{after[0]} on workspace {after[1]}), so it may have opened or activated "
+                   "a window")
+
+
+def _focus_on_activate() -> int | None:
+    """Hyprland's misc:focus_on_activate, or None when it cannot be read."""
+    try:
+        reply = hyprctl.query("getoption misc:focus_on_activate")
+    except Exception:
+        return None
+    value = reply.get("int", reply.get("bool")) if isinstance(reply, dict) else None
+    return int(value) if isinstance(value, int | bool) else None
 
 
 _ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
@@ -1422,6 +1484,8 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
         # windows by the guarantee's scope
         if action in _HYPR_TAKES_VIEW:
             bg.refuse(_HYPR_TAKES_VIEW[action])
+        if action == "toggle_floating" and not target:
+            bg.refuse("toggle_floating with no target acts on the human's focused window")
         if action == "move_window":
             bg.require_agent_workspace(workspace)
     # confinement: any action naming a specific window must stay in scope;
@@ -2144,6 +2208,10 @@ def sequence(
             if step.get("op") == "wait_for":  # never let one wait outlast the budget
                 run["timeout_s"] = min(float(step.get("timeout_s", 10)), max(budget_left, 1.0))
             try:
+                if background is True and step.get("op") == "hypr" and (
+                    step.get("action") in _HYPR_TAKES_VIEW
+                ):
+                    bg.refuse(_HYPR_TAKES_VIEW[step["action"]])
                 if step.get("op") == "wait_for" and stream is not None:
                     res = _seq_wait_for(stream, backlog, run, budget_left)
                 else:

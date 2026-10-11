@@ -502,7 +502,8 @@ def exit_for(tool: str, result: Any) -> int:
         if tool in ("ui", "marks"):
             return EXIT_NORESULT  # no tree, no matching elements, or the read failed
         if tool == "click_ui":  # a plain string is either the click, or why there was none
-            return EXIT_OK if result.startswith("clicked ") else EXIT_NORESULT
+            delivered = result.startswith(("clicked ", "pressed ", "focused "))
+            return EXIT_OK if delivered else EXIT_NORESULT
         if tool == "sequence" and ": stopped after" in result.split("\n", 1)[0]:
             return EXIT_NORESULT
         return EXIT_OK

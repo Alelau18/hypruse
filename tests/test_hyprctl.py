@@ -7,6 +7,7 @@ from hypruse import hyprctl
 
 # bound at import time: conftest makes the module attribute fail by default
 from hypruse.hyprctl import batch_query as real_batch_query  # noqa: E402
+from hypruse.hyprctl import query as real_query  # noqa: E402
 
 FIX = json.loads((Path(__file__).parent / "fixtures" / "desktop.json").read_text())
 
@@ -105,7 +106,7 @@ def test_dispatch_ok(monkeypatch):
 def test_query_raises_on_garbage(monkeypatch):
     monkeypatch.setattr(hyprctl, "_run", lambda *a: "not json at all")
     with pytest.raises(hyprctl.HyprctlError, match="unparseable"):
-        hyprctl.query("clients")
+        real_query("clients")
 
 
 def test_batch_query_splits_concatenated_json(monkeypatch):

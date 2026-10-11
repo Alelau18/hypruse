@@ -81,7 +81,7 @@ def foreground_by_default(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_live_batch_query(monkeypatch):
-    """hyprctl.batch_query fails unless a test stubs it.
+    """hyprctl.batch_query and hyprctl.query fail unless a test stubs them.
 
     Same rule: it shells out to whatever Hyprland is running the suite, and
     a test that forgot to stub it would pass or fail on the developer's own
@@ -91,3 +91,4 @@ def no_live_batch_query(monkeypatch):
         raise hyprctl.HyprctlError("no compositor in unit tests")
 
     monkeypatch.setattr(hyprctl, "batch_query", unreachable)
+    monkeypatch.setattr(hyprctl, "query", lambda what: unreachable([what]))

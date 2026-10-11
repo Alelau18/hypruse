@@ -718,3 +718,9 @@ def test_a_ui_note_renders_as_its_own_line():
     out = verbs._render_ui([{"role": "push button", "name": "Save", "x": 1, "y": 2},
                             {"note": "0xa is not on screen"}])
     assert out.splitlines() == ['[0] push button "Save" @1,2', "note 0xa is not on screen"]
+
+
+def test_a_background_click_is_a_delivered_click():
+    assert verbs.exit_for("click_ui", "pressed push button 'Save' through its ...") == 0
+    assert verbs.exit_for("click_ui", "focused text 'City' through its ...") == 0
+    assert verbs.exit_for("click_ui", "'Save' is ambiguous (2 candidates); ...") == 4

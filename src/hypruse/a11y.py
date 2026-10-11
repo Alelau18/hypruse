@@ -404,6 +404,7 @@ def find_elements(
     absence."""
     needle = name.lower()
     results: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()  # a field found through its label is not listed twice
     stack: list[tuple[str, str]] = [(app_svc, app_path)]
     visited = 0
     while stack and visited < max_nodes and len(results) < max_results:
@@ -412,15 +413,18 @@ def find_elements(
         nm = _name(bus, svc, path)
         kids = _children(bus, svc, path)
         stack.extend(reversed(kids))  # keep document order under a LIFO stack
-        if needle and needle not in nm.lower():
+        if (needle and needle not in nm.lower()) or (svc, path) in seen:
             continue
         role_num = _role_num(bus, svc, path)  # also gates the value read below
         if needle and role_num == _LABEL_ROLE:
             # a name search: the field this label names (GTK's entries are
             # unnamed text, named only by the label beside them)
             for fs, fp in _related(bus, svc, path, _REL_LABEL_FOR):
+                if (fs, fp) in seen:
+                    continue
                 field = _element(bus, fs, fp, _role_num(bus, fs, fp), nm, actionable=True)
                 if field is not None:
+                    seen.add((fs, fp))
                     results.append(field)
             if actionable:
                 continue  # the label itself is not something to click
@@ -436,6 +440,7 @@ def find_elements(
             continue
         item = _element(bus, svc, path, role_num, nm, actionable=False)
         if item is not None:
+            seen.add((svc, path))
             results.append(item)
     truncated = visited >= max_nodes and bool(stack) and len(results) < max_results
     return results, truncated
@@ -540,6 +545,17 @@ def text_of(bus: Bus, svc: str, path: str) -> str:
         return ""
 
 
+def toolkit(bus: Bus, svc: str) -> tuple[str, str]:
+    """(ToolkitName, Version) of the app on `svc`, ("", "") when unknown.
+    GTK 3 says ("gtk", "3.24.52"), GTK 4 ("GTK", "4.22.4"), Qt ("Qt", "6.11.1")."""
+    try:
+        name = bus.prop(svc, _ROOT, "org.a11y.atspi.Application", "ToolkitName")
+        version = bus.prop(svc, _ROOT, "org.a11y.atspi.Application", "Version")
+        return str(name), str(version)
+    except A11yError:
+        return "", ""
+
+
 def insert_text(bus: Bus, svc: str, path: str, text: str) -> bool:
     """Insert `text` at the caret, as typing would, with no keyboard."""
     try:
@@ -547,11 +563,7 @@ def insert_text(bus: Bus, svc: str, path: str, text: str) -> bool:
         # The length is read differently per toolkit: GTK and the other ATK
         # apps take UTF-8 bytes (a character count cuts the text short), Qt
         # resizes the text to that many UTF-16 units (a byte count pads it)
-        try:
-            kit = bus.prop(svc, _ROOT, "org.a11y.atspi.Application", "ToolkitName")
-            qt = str(kit).lower() == "qt"
-        except A11yError:
-            qt = False
+        qt = toolkit(bus, svc)[0].lower() == "qt"
         length = len(text.encode("utf-16-le")) // 2 if qt else len(text.encode())
         return bool(
             bus.call(svc, path, _EDITABLE, "InsertText", "isi",

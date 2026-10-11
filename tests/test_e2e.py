@@ -14,6 +14,7 @@ from hypruse import hyprctl, screenshot, wire
 
 # bound at import time, so conftest's autouse stubs do not hide them
 from hypruse.hyprctl import batch_query as real_batch_query  # noqa: E402
+from hypruse.hyprctl import query as real_query  # noqa: E402
 from hypruse.trust import _compositor_locked as real_compositor_locked  # noqa: E402
 from hypruse.trust import session_locked as real_session_locked  # noqa: E402
 
@@ -28,6 +29,7 @@ needs_hyprland = pytest.mark.skipif(
 def live_batch_query(monkeypatch):
     """The real batch query: conftest makes it fail for unit tests."""
     monkeypatch.setattr(hyprctl, "batch_query", real_batch_query)
+    monkeypatch.setattr(hyprctl, "query", real_query)
 
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"

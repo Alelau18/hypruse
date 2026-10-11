@@ -15,6 +15,8 @@ from hypruse import hyprctl, journal, trust
 from hypruse import input as hinput
 from hypruse import server as srv
 
+REAL_QUERY = hyprctl.query  # bound at import: conftest stubs it for unit tests
+
 CLIENT = {
     "address": "0xabc", "class": "kitty", "title": "shell", "pid": 7,
     "at": [0, 0], "size": [800, 600], "mapped": True,
@@ -268,6 +270,7 @@ def test_the_effect_boundary_refuses_under_dry_run(monkeypatch, call):
 
 def test_reads_are_never_barriered(monkeypatch):
     monkeypatch.setenv("HYPRUSE_DRYRUN", "1")
+    monkeypatch.setattr(hyprctl, "query", REAL_QUERY)  # conftest stubs it for unit tests
     monkeypatch.setattr(hyprctl, "_run", lambda *a: '{"x": 1, "y": 2}')
     assert hyprctl.cursor_pos() == (1, 2)
 

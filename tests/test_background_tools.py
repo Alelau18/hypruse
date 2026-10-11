@@ -110,6 +110,23 @@ def wired_bg(monkeypatch):
         return None if hit in (None, active) else dict(CLIENT, address=hit)
 
     monkeypatch.setattr(srv.trust, "other_window_at", other_at)
+    # the seat as the background paths read it before and after acting
+    s["seat_after"] = None
+    seat_reads = {"n": 0}
+
+    def batch(cmds):
+        seat_reads["n"] += 1
+        if cmds == ["activewindow", "activeworkspace"]:
+            if s["seat_after"] is not None and seat_reads["n"] % 2 == 0:
+                return list(s["seat_after"])
+            return [{"address": s["active"]}, {"id": 1}]
+        return [MONS, [dict(CLIENT, xwayland=s["xwayland"])]]
+
+    monkeypatch.setattr(srv.hyprctl, "batch_query", batch)
+    s["toolkit"] = ("gtk", "3.24.52")
+    s["focus_on_activate"] = 0
+    monkeypatch.setattr(srv.a11y, "toolkit", lambda bus, svc: s["toolkit"])
+    monkeypatch.setattr(srv, "_focus_on_activate", lambda: s["focus_on_activate"])
     monkeypatch.setattr(srv.hinput, "move", lambda x, y: s["clicks"].append(("move", x, y)))
     monkeypatch.setattr(srv.hinput, "drag", lambda *a, **k: s["clicks"].append(("drag",) + a))
     monkeypatch.setattr(srv.hinput, "scroll", lambda **k: s["clicks"].append(("scroll", k)))
@@ -705,3 +722,130 @@ def test_a_single_instance_app_is_recognised_by_its_class(monkeypatch):
         {"workspace": "1", "class": "org.gnome.TextEditor"})
     assert srv._launched_window("2", "env GDK_BACKEND=wayland foot")(
         {"workspace": "1", "class": "foot"})
+
+
+# --- review fixes: the seat, focus, dry runs, sequence --------------------------
+
+
+def test_a_press_that_moved_the_humans_focus_says_so(wired_bg):
+    wired_bg["seat_after"] = ({"address": "0xa"}, {"id": 99})
+    out = str(srv.click_ui(name="Save", window="0xa"))
+    assert "focus untouched" not in out and "WARNING" in out and "0xa" in out
+
+
+def test_keys_that_moved_the_humans_focus_say_so(wired_bg):
+    wired_bg["seat_after"] = ({"address": "0xa"}, {"id": 99})
+    out = str(srv.keyboard("key", keys="ctrl+n", window="0xa"))
+    assert "focus untouched" not in out and "WARNING" in out
+
+
+def test_focusing_a_gtk3_field_is_refused_when_hyprland_focuses_on_activate(wired_bg):
+    # GTK 3 presents its window when a widget takes focus over AT-SPI, and
+    # misc:focus_on_activate turns that into a switch of the human's view
+    wired_bg["role"] = "text"
+    wired_bg["focus_on_activate"] = 1
+    with pytest.raises(srv.trust.TrustError, match="focus_on_activate"):
+        srv.click_ui(name="Name", window="0xa")
+    assert wired_bg["grabbed"] == []
+    wired_bg["toolkit"] = ("GTK", "4.22.4")
+    srv.click_ui(name="Name", window="0xa")
+    assert wired_bg["grabbed"] == [("svc", "/name")]
+
+
+def test_a_field_is_told_by_its_flag_not_its_role_name(wired_bg, monkeypatch):
+    # GTK4 calls a text field "text box"; pressing its action would activate it
+    monkeypatch.setattr(srv, "_ui_read", lambda w="", name="", actionable=True, handles=False: [
+        {"role": "text box", "name": "Name", "x": 150, "y": 80, "clickable": True,
+         "_svc": "svc", "_path": "/name", "_field": True}])
+    srv.click_ui(name="Name", window="0xa")
+    assert wired_bg["grabbed"] == [("svc", "/name")] and wired_bg["actions"] == []
+
+
+def test_a_dry_run_refuses_a_control_without_an_action_like_the_real_run(wired_bg, monkeypatch):
+    monkeypatch.setattr(srv.journal, "dry_run", lambda: True)
+    wired_bg["has_action"] = False
+    with pytest.raises(srv.trust.TrustError, match="no accessibility action"):
+        srv.click_ui(name="Save", window="0xa")
+
+
+def test_a_dry_run_types_nothing(wired_bg, monkeypatch):
+    monkeypatch.setattr(srv.journal, "dry_run", lambda: True)
+    wired_bg["fields"] = [("svc", "/name", 61)]
+    assert "DRY" in str(srv.keyboard("type", text="hi", window="0xa"))
+    wired_bg["fields"] = []
+    assert "DRY" in str(srv.keyboard("type", text="hi", window="0xa"))
+    assert wired_bg["inserted"] == [] and wired_bg["shortcuts"] == []
+
+
+def test_then_ui_after_a_background_press_that_closed_its_window_shows_no_other(
+    wired_bg, monkeypatch
+):
+    # the focused window is the human's, not the closed window's parent
+    def gone(w="", name="", actionable=True, handles=False):
+        if w == "0xa" and not handles:
+            raise ValueError("window '0xa' not found")
+        return [{"role": "push button", "name": "Save", "x": 1, "y": 1, "clickable": True,
+                 "_svc": "svc", "_path": "/save", "_field": False}]
+
+    monkeypatch.setattr(srv, "_ui_read", gone)
+    out = srv.click_ui(name="Save", window="0xa", then="ui")
+    assert "0xa" in out[-1].text and "Save" not in out[-1].text
+
+
+def test_the_keyboard_on_the_humans_own_window_stays_in_the_foreground(wired_bg):
+    wired_bg["active"] = "0xa"
+    srv.keyboard("type", text="x", window="0xa")
+    assert wired_bg["typed"] == ["x"] and wired_bg["shortcuts"] == []
+    assert ("focuswindow", "address:0xa") in wired_bg["dispatch"]
+
+
+def test_the_guarantee_keeps_click_and_keys_off_the_humans_windows(wired_bg, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    monkeypatch.setattr(srv, "_resolve_window", lambda w="": dict(CLIENT, workspace={"id": 1}))
+    with pytest.raises(srv.trust.TrustError, match="agent's workspaces"):
+        srv.click_ui(name="Save", window="0xa")
+    with pytest.raises(srv.trust.TrustError, match="agent's workspaces"):
+        srv.keyboard("type", text="x", window="0xa")
+    assert not (wired_bg["actions"] or wired_bg["grabbed"] or wired_bg["inserted"]
+                or wired_bg["shortcuts"])
+
+
+def test_confinement_still_applies_to_background_input(wired_bg, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_CONFINE", "class:kitty")
+    with pytest.raises(srv.trust.TrustError, match="confinement"):
+        srv.click_ui(name="Save", window="0xa")
+    with pytest.raises(srv.trust.TrustError, match="confinement"):
+        srv.keyboard("type", text="x", window="0xa")
+
+
+def test_an_auth_dialog_and_a_locked_session_refuse_background_input(wired_bg, monkeypatch):
+    monkeypatch.setattr(srv, "_resolve_window",
+                        lambda w="": dict(CLIENT, **{"class": "hyprpolkitagent"}))
+    with pytest.raises(srv.trust.TrustError, match="authentication"):
+        srv.click_ui(name="Save", window="0xa")
+    with pytest.raises(srv.trust.TrustError, match="authentication"):
+        srv.keyboard("type", text="x", window="0xa")
+    monkeypatch.setattr(srv, "_resolve_window", lambda w="": dict(CLIENT))
+    monkeypatch.setattr(srv.trust, "session_locked", lambda: "hyprlock")
+    with pytest.raises(srv.trust.TrustError, match="locked"):
+        srv.click_ui(name="Save", window="0xa")
+    with pytest.raises(srv.trust.TrustError, match="locked"):
+        srv.keyboard("key", keys="ctrl+s", window="0xa")
+
+
+def test_a_shifted_keysym_name_goes_through_the_layout(wired_bg):
+    srv.keyboard("key", keys="ctrl+plus", window="0xa")
+    assert wired_bg["shortcuts"] == [("CTRL SHIFT", "equal", "0xa")]  # us layout
+
+
+def test_sequence_background_refuses_steps_that_take_the_humans_view(wired_bg):
+    out = srv.sequence([{"op": "hypr", "action": "workspace", "workspace": "3"}],
+                       background=True, stop_on_change=False, then="none")
+    assert "ERROR" in str(out) and wired_bg["dispatch"] == []
+
+
+def test_the_guarantee_refuses_toggle_floating_without_a_target(wired_bg, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    with pytest.raises(srv.trust.TrustError, match="HYPRUSE_BACKGROUND"):
+        srv.hypr("toggle_floating")
+    assert wired_bg["dispatch"] == []

@@ -24,6 +24,7 @@ from hypruse import server as srv
 
 # bound at import time, so conftest's autouse stubs do not hide them
 from hypruse.hyprctl import batch_query as real_batch_query  # noqa: E402
+from hypruse.hyprctl import query as real_query  # noqa: E402
 from hypruse.trust import _compositor_locked as real_compositor_locked  # noqa: E402
 from hypruse.trust import session_locked as real_session_locked  # noqa: E402
 
@@ -51,6 +52,7 @@ def live(monkeypatch):
     test opened closed afterwards."""
     monkeypatch.setattr(hyprctl, "_provider", None)
     monkeypatch.setattr(hyprctl, "batch_query", real_batch_query)
+    monkeypatch.setattr(hyprctl, "query", real_query)
     monkeypatch.setattr(trust, "session_locked", real_session_locked)
     monkeypatch.setattr(trust, "_compositor_locked", real_compositor_locked)
     monkeypatch.delenv("HYPRUSE_BACKGROUND", raising=False)

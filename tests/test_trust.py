@@ -1117,3 +1117,12 @@ def test_use_bind_under_the_guarantee_names_it(monkeypatch):
     monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
     with pytest.raises(trust.TrustError, match="HYPRUSE_BACKGROUND"):
         trust.guard_use_bind()
+
+
+def test_a_layer_over_the_point_takes_the_pointer(monkeypatch):
+    # a launcher drawn over the window the human is not in
+    _batch(monkeypatch, MON, [_w("0xme", [0, 0], [960, 1080]), _w("0xb", [960, 0], [960, 1080])])
+    monkeypatch.setattr(trust, "_read_layers", lambda: [
+        {"namespace": "wofi", "level": "overlay", "geometry": [900, 0, 400, 400]}])
+    assert trust.other_window_at(1000, 100, "0xme") is None
+    assert trust.other_window_at(1000, 600, "0xme")["address"] == "0xb"
