@@ -58,5 +58,8 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["e2e: needs a live Hyprland session"]
-addopts = "-m 'not e2e'"
+markers = [
+    "e2e: needs a live Hyprland session",
+    "background: drives apps on the agent's workspaces in a live session",
+]
+addopts = "-m 'not e2e and not background'"
