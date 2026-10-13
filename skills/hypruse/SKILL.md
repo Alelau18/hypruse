@@ -85,8 +85,9 @@ background: their cursor, keyboard focus and workspace stay where they are.
   accessibility tree, and `keyboard ... --window ADDR` types into the
   window's text field or sends the keys to that window alone. The result
   line says which method it used and what it read back. A line ending in
-  `WARNING: the human's focused window changed` means an app took the
-  human's focus: stop and tell the user.
+  `WARNING: the human's focused window changed` means their focus moved
+  during the action (the app brought a window forward, or the human
+  switched): stop and tell the user.
 - Read a hidden window with `ui`, not a screenshot: hidden apps often stop
   drawing, so their pixels can be stale.
 - `pointer` is the human's cursor and is refused over any window but

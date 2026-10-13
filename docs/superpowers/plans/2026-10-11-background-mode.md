@@ -834,7 +834,7 @@ def test_cli_background_flags():
 
 **Files:** Modify `README.md` (a "Background mode" section with the three layers, the workspace range and fill, the limits, and the guarantee for unattended work), `ARCHITECTURE.md` (the background paths), `CHANGELOG.md` (`[Unreleased]` entry), `skills/hypruse/SKILL.md` and `skills/hypruse/references/verbs.md` (`--background`/`--foreground`, workspace range). Run the humanizer rules on every paragraph.
 
-- [ ] **Step 1: Write the docs.** **Step 2:** `grep -c "—\|–"` returns 0 on every changed doc. **Step 3: Commit** `docs: background mode`.
+- [ ] **Step 1: Write the docs.** **Step 2:** `grep -cP "\x{2014}|\x{2013}"` returns 0 on every changed doc. **Step 3: Commit** `docs: background mode`.
 
 ### Task 15: verification and release prep
 

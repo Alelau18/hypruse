@@ -358,6 +358,7 @@ specific name (an exact accessible name wins over a substring), or run
 candidates named "Delete".
 
 **A launcher holds the keyboard (exit 3).** `keyboard ... --window ADDR`
+aimed at the human's window (a window in the background still gets its keys)
 refuses with `the launcher layer 'wofi' holds the keyboard grab, so keys
 cannot reach the requested window. Drive the launcher itself (call keyboard
 without window=), or close it first (usually esc).` Do one of those two
@@ -432,7 +433,7 @@ The `now:` part, `the field now holds the typed text` and the `--then ui`
 values are the verification: they are read back from the accessibility
 tree. `(the human's focus untouched)` is checked too: if a line ends with
 `WARNING: the human's focused window changed ...`, an app brought a window
-forward, so stop and tell the user. Do not screenshot a hidden window to
+forward or the human switched, so stop and tell the user. Do not screenshot a hidden window to
 check; many apps stop drawing while hidden, so the capture can show an old
 frame.
 

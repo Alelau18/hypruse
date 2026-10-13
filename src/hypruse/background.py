@@ -7,7 +7,7 @@ HYPRUSE_BACKGROUND unset: automatic. An action on the window the human is
 in runs in the foreground; on any other window, in the background.
 HYPRUSE_BACKGROUND=1: the guarantee. Everything runs in the background on
 the agent's workspaces, and nothing may take the foreground.
-HYPRUSE_BACKGROUND=0: off, exactly 0.12's behaviour.
+HYPRUSE_BACKGROUND=0: off, 0.12's behaviour unless a call passes background=true.
 """
 
 from __future__ import annotations
@@ -91,8 +91,9 @@ def agent_workspaces() -> list[str]:
     if not out or len(out) > _MAX_WORKSPACES:
         raise trust.TrustError(
             f"HYPRUSE_AGENT_WORKSPACES={raw!r} is malformed (use 99-90, 99,98,50 or "
-            f"name:x, at most {_MAX_WORKSPACES} workspaces); launch, and every action "
-            "under HYPRUSE_BACKGROUND=1, is refused until it is fixed"
+            f"name:x, at most {_MAX_WORKSPACES} workspaces); placing an app on the agent's "
+            "workspaces, and every action under HYPRUSE_BACKGROUND=1, is refused until it is "
+            "fixed"
         )
     return out
 

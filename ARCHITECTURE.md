@@ -253,8 +253,10 @@ window-based guards cannot see. Layer surfaces never appear in
 `clients`, so a click aimed under a launcher or on-screen keyboard
 would silently land on the layer (`click_ui` refuses, `pointer` appends
 a warning naming the topmost covering surface), and a launcher holds
-the keyboard grab, so `keyboard` refuses a window-targeted type and
-annotates window-less typing with where the keys really went. A locked
+the keyboard grab, so `keyboard` refuses a type aimed at the human's
+window and annotates window-less typing with where the keys really went
+(a background window gets its keys through sendshortcut or AT-SPI, which
+the grab does not stop). A locked
 session is invisible to both: modern lockers (hyprlock, swaylock >=
 1.7) are `ext-session-lock-v1` clients rather than layer-shell ones, so
 they appear in neither `clients` nor `layers`. Hyprland reports the lock

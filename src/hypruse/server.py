@@ -91,7 +91,7 @@ or sends the keys to that window alone, and `launch` with no workspace
 opens the app on one of the agent's own workspaces ({workspaces}), out of
 the human's sight. Each result says which method it used and whether the
 human's focus stayed put; a check box, slider or field is read back, and
-a WARNING means an app took the human's focus, so stop and say so. Check
+a WARNING means the human's focus moved during it, so stop and say so. Check
 a button press or keys with `ui`. The pointer cannot work in the background,
 so it is refused over any window but the human's: press controls there
 with `click_ui`. A hidden window's screenshot can be stale (many apps stop

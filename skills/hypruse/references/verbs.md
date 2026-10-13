@@ -377,9 +377,11 @@ handles; compositor binds (`super+...`) go through `use_bind`, window and
 workspace actions through `hypr`. Refused (exit 3): a locked session, a
 window outside HYPRUSE_CONFINE, a system authentication dialog; on the
 human's window, a launcher holding the grab while `--window` names a target
-and a password field under HYPRUSE_AUTH_GUARD=strict. In the background, a
-password field (the focused one, or one among several when the window does
-not say which has focus) without `--allow-auth`, a character the keyboard
+and a password field under HYPRUSE_AUTH_GUARD=strict. In the background,
+typing (not a key combo) into a password field the tree shows (the focused
+one, one among several when the window does not say which has focus, or one
+anywhere in an app whose windows cannot be told apart) without
+`--allow-auth`, a character the keyboard
 layout has no key for when the text cannot go through the accessibility
 interface (checked before any key is sent), an XWayland window or a
 keyboard switched away from its first layout on the sendshortcut path, and
@@ -415,13 +417,15 @@ pressed check box 'Agree' through its accessibility action (no pointer, the huma
 focused text 'City' through its accessibility action (no pointer, the human's focus untouched) in yad
 ```
 
-A check box, slider or field the app did not change ends `; no change seen`,
-and a press that closed the window ends `; the window closed`. A button has
-no value to read back, so check its effect with `ui`. Refused in the
+A check box or slider the app did not change ends `; no change seen`, and a
+press that closed the window ends `; the window closed`. A button or a
+focused field has no value to read back, so check its effect with `ui`. Refused in the
 background (exit 3), besides the trust layers: a right or double click, a
 control with no accessibility action, a control in a window whose app has
 another window of the same title or size (the tree cannot tell them apart),
-and focusing a GTK 3 field while Hyprland's `misc:focus_on_activate` is on.
+focusing a field in GTK 4 (it does not allow it), and focusing a GTK 2 or 3
+field (or one whose toolkit cannot be read) while Hyprland's
+`focus_on_activate` is on for that window.
 
 An ambiguous name prints the tool's note and the candidates, and exits 4
 (`index=N` in the note is `--index N` on the CLI):

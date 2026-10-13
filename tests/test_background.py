@@ -193,7 +193,8 @@ def test_the_malformed_message_says_what_it_refuses(monkeypatch):
     monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "abc")
     with pytest.raises(trust.TrustError) as err:
         bg.agent_workspaces()
-    assert "refusing every action until" not in str(err.value) and "launch" in str(err.value)
+    assert "refusing every action until" not in str(err.value)
+    assert "placing an app" in str(err.value)
 
 
 def test_matches_a_name_selector_and_numbers():

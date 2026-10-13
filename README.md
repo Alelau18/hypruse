@@ -110,7 +110,7 @@ An agent can work in apps on workspaces you are not looking at while you keep wo
 
 It is on by default, in automatic mode. An action on the window you are in runs on your screen, as it always has. An action on any other window runs in the background:
 
-- `click_ui` presses the control through its accessibility action. A text field gets the app's own focus instead.
+- `click_ui` presses the control through its accessibility action. A text field gets the app's own focus instead (except in GTK 4, which does not allow it).
 - `keyboard` with `window=` types into the window's focused text field (or its only one) through the accessibility interface. Otherwise it sends the keys to that window alone with Hyprland's `sendshortcut`, one key at a time on your keyboard layout. Newlines, tabs and backspaces are always sent as keys.
 - `launch` with no workspace opens the app on one of the agent's own workspaces, out of your sight.
 - The pointer is your real cursor, so it cannot work in the background. It is refused where its input would land on a window other than yours, and the refusal points the agent at `click_ui`.
@@ -126,13 +126,13 @@ The guarantee overrides everything. Without it, a call's own `background` argume
 | `HYPRUSE_BACKGROUND=1` | The guarantee. The agent works only on windows on its own workspaces. The pointer, workspace switches, `focus_window`, `fullscreen`, `toggle_floating` with no target and `use_bind` are refused, `move_window` and `launch` take only the agent's workspaces (and none that is on screen), and `background=false` is refused too. |
 | `background=true` or `false` | Per call, on `click_ui`, `keyboard`, `pointer`, `launch` and `sequence` (CLI: `--background`, `--foreground`). `true` forces the background and refuses what cannot be done there; `false` asks for your screen. On `sequence` it reaches the pointer, keyboard and `click_ui` steps, and `true` also refuses a `hypr` step that would switch your workspace or focus. |
 | unset | Automatic, as above. |
-| `HYPRUSE_BACKGROUND=0` | Off: every action runs on your screen as in 0.12. (`ui` still lists editable text fields and notes a window that is off screen; see the changelog.) |
+| `HYPRUSE_BACKGROUND=0` | Off: actions run on your screen as in 0.12, unless a call passes `background=true`. (`ui` still lists editable text fields and adds its notes; see the changelog.) |
 
 The guarantee bounds hypruse's own input. It cannot bound what a program does once `launch` starts it: the command runs as given, through a shell, so keep `launch` behind your client's approval prompt even with `HYPRUSE_BACKGROUND=1`.
 
 The agent's workspaces are `HYPRUSE_AGENT_WORKSPACES`, 99 down to 90 by default, at the far end of the numbers so they stay clear of the ones you use. `A-B` counts in either direction, and a comma list (`99,98,50`) or named workspaces (`name:research`) work too. `HYPRUSE_AGENT_FILL` (default 1) is how many of the agent's apps share one workspace before the next one is used. With 1, every app gets a workspace to itself, which keeps hidden windows at their full size. A workspace in the range that holds one of your windows is skipped, so yours and the agent's never mix, and so is one you are looking at. When the whole range is full the next app goes where the agent has the fewest. A window an earlier session opened counts as the agent's when `HYPRUSE_MARK` tagged it. With `HYPRUSE_CONFINE=workspace:...`, apps open only on agent workspaces inside that scope, and on yours as before when there is none.
 
-`launch` waits for its own window: one that opens on the workspace it asked for, or one of the launched program's own class. A window you open meanwhile is left alone. An app that is already running (a browser, often) opens its new window from the running process, which ignores the workspace rule, so it appears on your screen and takes your focus until hypruse moves it; the result says so, and under the guarantee it carries a warning. Start a separate instance for the agent (for a browser, a separate profile) to avoid it.
+`launch` waits for its own window: one that opens on the workspace it asked for, or one of the launched program's own class. A window of another app that you open meanwhile is left alone; one of the same app can be taken for the launched one. An app that is already running (a browser, often) opens its new window from the running process, which ignores the workspace rule, so it appears on your screen and takes your focus until hypruse moves it; the result says so, and under the guarantee it carries a warning. Start a separate instance for the agent (for a browser, a separate profile) to avoid it.
 
 ### What you get back
 
@@ -144,12 +144,12 @@ typed 12 characters into the text field in yad through the accessibility interfa
 sent ctrl+a to 0x5648592451c0 (yad) with sendshortcut (the human's focus untouched)
 ```
 
-A press on a check box, slider or field that the app ignored reads `no change seen`. A button press or keys sent with `sendshortcut` carry no value to read back, so check their effect with `ui`. If your focused window changed during the action, the result ends with a `WARNING` naming the window that has focus now. Typed results never repeat the text, since the journal keeps every result line and typed text is only ever recorded as a length plus a digest. Screenshots are not used to confirm anything, because many apps stop drawing while hidden and a hidden window's pixels can be stale; `ui` shows its current state.
+A press on a check box or slider that the app ignored reads `no change seen`. A button press, a focused field or keys sent with `sendshortcut` carry no value to read back, so check their effect with `ui`. If your focused window changed during the action (because the app brought a window forward, or because you switched), the result ends with a `WARNING` naming the window that has focus now. Typed results never repeat the text, since the journal keeps every result line and typed text is only ever recorded as a length plus a digest. Screenshots are not used to confirm anything, because many apps stop drawing while hidden and a hidden window's pixels can be stale; `ui` shows its current state.
 
 ### Limits
 
 - Only controls the accessibility tree exposes can be pressed in the background, and only with their primary action: a right or double click is refused there. Clicking an arbitrary point in a hidden window would need a compositor plugin or an input seat of its own, which this design avoids. Apps without a tree (terminals, canvas apps, Electron and Chrome without `--force-renderer-accessibility`) can still take keys.
-- The accessibility tree tells an app's windows apart by title or size. When another window of the same app shares the target's title or size (a second window of a single-instance app, say), hypruse cannot be sure which window a control belongs to: `click_ui` refuses, and `keyboard` sends keys, which Hyprland aims at the window itself.
+- The accessibility tree tells an app's windows apart by title or size. When neither tells the target from the app's other windows (a second window of a single-instance app with the same title and size, say), or the app's accessibility connection belongs to another process than its window, hypruse cannot be sure which window a control belongs to: `click_ui` refuses, `keyboard` sends keys, which Hyprland aims at the window itself, and `ui` says its controls may be another window's.
 - A hidden window's `ui` points are where its controls sit inside it, not on your screen, and the screen there shows your own windows. `ui` ends with a note saying so, because a `pointer` click at those points would land on whatever you are looking at.
 - A GTK 3 app brings its window forward when a field takes focus over the accessibility interface. With Hyprland's `misc:focus_on_activate` on, that would switch you to it, so focusing a GTK 3 field is refused then. A per-window `focus_on_activate` rule cannot be seen; the after-check reports it.
 - A character your keyboard layout has no key for (an emoji or CJK on most layouts) can only go in through the accessibility interface. A hidden GTK window does not report which of several text fields has its focus, so in a multi-field form such text is refused before any key is sent, and so is typing into a form with a password field among several, unless `allow_auth=true`.
@@ -159,7 +159,7 @@ A press on a check box, slider or field that the app ignored reads `no change se
 - Web pages in the background need the browser bridge, which comes in a later release.
 - While the session is locked, background actions are refused like all other input.
 
-Every trust layer applies to the background paths: confinement checks the target window, the auth guard refuses a background press or key in an authentication dialog, and typing into a password field needs `allow_auth=true`. You cannot see background work, so for anything unattended set `HYPRUSE_BACKGROUND=1`: input stays on the agent's workspaces, nothing hypruse sends can take your screen, the journal keeps every result with its method, and `HYPRUSE_MARK` tells you when the agent opens a window.
+Every trust layer applies to the background paths: confinement checks the target window, the auth guard refuses a background press or key in an authentication dialog, and typing into a password field the accessibility tree shows needs `allow_auth=true` (an app with no tree cannot be checked, as in the foreground). You cannot see background work, so for anything unattended set `HYPRUSE_BACKGROUND=1`: input stays on the agent's workspaces, hypruse's own input never takes your screen (an app the agent launches can, and the result warns), the journal keeps every result with its method, and `HYPRUSE_MARK` tells you when the agent opens a window.
 
 ## Shell verbs and the agent skill
 
@@ -174,7 +174,7 @@ hypruse screenshot --window 0x55a4479a1200       # a file path, then {"geometry"
 hypruse zoom 1180 840 --window 0x55a4479a1200
 hypruse keyboard type "hello" --window 0x55a4479a1200
 hypruse wait_for title_change --match Inbox --timeout 10
-hypruse sequence '[{"op":"click_ui","name":"Search","window":"0x55a4479a1200"},{"op":"keyboard","action":"type","text":"btop"},{"op":"keyboard","action":"key","keys":"enter"}]'
+hypruse sequence '[{"op":"click_ui","name":"Search","window":"0x55a4479a1200"},{"op":"keyboard","action":"type","text":"btop","window":"0x55a4479a1200"},{"op":"keyboard","action":"key","keys":"enter","window":"0x55a4479a1200"}]'
 ```
 
 The contract is built for a program reading the output: the verbs are the tool names, a tool's `action` is a positional sub-verb (`pointer click 800 60`, `hypr workspace 3`, `clipboard read`), output is compact plain text (one line per fact, `--json` for the raw result as one line), a capture prints its file path and coordinate metadata rather than bytes, and errors are one line on stderr with a meaningful exit code: 0 delivered, 1 error, 2 usage, 3 refused by a trust layer (or by read-only mode), 4 ran but found nothing to act on (a `wait_for` timeout, no accessibility tree, an ambiguous name). `hypruse --help` lists every verb and `hypruse <verb> --help` its flags; `--dry-run` rehearses an acting verb. A verb starts in a few hundred milliseconds: the MCP stack is never imported on that path.

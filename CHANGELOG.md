@@ -21,8 +21,9 @@ with no compositor plugin.
   the keyboard layout (AZERTY and AltGr characters included).
 - **Results that say what happened.** Each background result names its
   method and reads the human's focused window and workspace before and
-  after: it says their focus was untouched only when it was, and ends with
-  a `WARNING` when an app took it. A check box, slider or field is read
+  after (with a short settle for an app that reacts a beat later): it says
+  their focus was untouched only when it was, and ends with a `WARNING`
+  when it moved. A check box, slider or field is read
   back from the accessibility tree; typed results never repeat the text.
   A refusal gives the reason and what to do instead.
 - **The agent's workspaces.** `launch` with no workspace opens the app
@@ -32,8 +33,10 @@ with no compositor plugin.
   apps to a workspace (default 1). It skips one that holds the human's
   windows or is on screen, counts a window an earlier session tagged
   `hypruse-owned` as the agent's, and stays inside
-  `HYPRUSE_CONFINE=workspace:...`. It waits for its own window, never one
-  the human opens meanwhile.
+  `HYPRUSE_CONFINE=workspace:...`. It waits for its own window (one on its
+  workspace or of the launched program's class, past wrappers such as
+  `uwsm app --` or `flatpak run`), and says when the window took the
+  human's focus.
 - **The guarantee, `HYPRUSE_BACKGROUND=1`.** Input is confined to the
   windows on the agent's workspaces, and to `HYPRUSE_CONFINE`'s scope too
   when both are set. The pointer, workspace switches, `focus_window`,
@@ -46,12 +49,15 @@ with no compositor plugin.
   `click_ui` steps and, when true, refuses a `hypr` step that takes the
   human's view), and `--background` / `--foreground` on the CLI verbs.
 - **Background refusals.** A right or double click; a control with no
-  accessibility action; a control in a window whose app has another window
-  of the same title or size, which the accessibility tree cannot tell
-  apart; focusing a GTK 3 field while `misc:focus_on_activate` is on; a
-  password field among several text fields without `allow_auth`; and, on
-  the `sendshortcut` path, a character the layout has no key for, an
-  XWayland window, or a keyboard switched away from its first layout.
+  accessibility action; a control in a window the accessibility tree
+  cannot tell apart from the app's other windows (by title and size, and
+  by the process its accessibility connection belongs to: the same
+  process, a parent or child, one Flatpak instance or one app scope);
+  focusing a GTK 4 field (GTK 4 does not allow it), or a GTK 2 or 3 field
+  while `focus_on_activate` is on for that window; a password field the
+  tree shows, without `allow_auth`; and, on the `sendshortcut` path, a
+  character the layout has no key for, an XWayland window, or a keyboard
+  switched away from its first layout.
 - A live suite, `pytest -m background`, that drives yad forms on the
   agent's workspaces and checks the human's active window, workspace and
   cursor after every step, and the compositor's focus and workspace events.
