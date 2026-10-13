@@ -6,6 +6,7 @@ import pytest
 from hypruse import server as srv
 
 REAL_UI_READ = srv._ui_read  # bound before the fixture stubs it
+REAL_PROVEN_FRAME = srv._proven_frame
 
 CLIENT = {"address": "0xa", "class": "gedit", "title": "doc", "at": [100, 50],
           "size": [800, 600], "pid": 42, "workspace": {"id": 99}, "monitor": 0,
@@ -73,9 +74,8 @@ def wired_bg(monkeypatch):
                         lambda bus, pid, title="", size=None: ("app", "/root"))
     monkeypatch.setattr(srv.a11y, "window_frame",
                         lambda bus, svc, path, title="", size=None: (svc, path))
-    monkeypatch.setattr(srv.a11y, "window_frame_for",
-                        lambda bus, svc, path, title, size, peers:
-                        (svc, path) if s["frame_sure"] else None)
+    monkeypatch.setattr(srv, "_proven_frame",
+                        lambda bus, client, app: app if s["frame_sure"] else None)
     monkeypatch.setattr(srv.a11y, "focused_text", lambda bus, svc, path: s["focused_text"])
     s["fields"] = []
     monkeypatch.setattr(srv.a11y, "editable_fields", lambda bus, svc, path: s["fields"])
@@ -863,3 +863,32 @@ def test_the_guarantee_refuses_toggle_floating_without_a_target(wired_bg, monkey
     with pytest.raises(srv.trust.TrustError, match="HYPRUSE_BACKGROUND"):
         srv.hypr("toggle_floating")
     assert wired_bg["dispatch"] == []
+
+
+def test_an_unproven_window_with_a_password_field_anywhere_refuses_typing(wired_bg):
+    wired_bg["frame_sure"] = False
+    wired_bg["fields"] = [("svc", "/user", 79), ("svc", "/pw", 40)]
+    with pytest.raises(srv.trust.TrustError, match="password"):
+        srv.keyboard("type", text="hunter2", window="0xa")
+    assert wired_bg["shortcuts"] == []
+
+
+def test_ui_of_an_unproven_window_says_its_controls_may_be_anothers(wired_bg, monkeypatch):
+    monkeypatch.setattr(srv.a11y, "find_elements", lambda bus, s_, p, name="", actionable=True: (
+        [{"role": "push button", "name": "Save", "extent": (10, 10, 20, 20),
+          "clickable": True, "svc": s_, "path": p + "/save"}], False))
+    wired_bg["frame_sure"] = False
+    assert "another window" in REAL_UI_READ("0xa")[-1]["note"]
+    wired_bg["frame_sure"] = True
+    assert all("note" not in e for e in REAL_UI_READ("0xa"))
+
+
+def test_a_root_from_another_app_instance_proves_nothing(monkeypatch):
+    # app_for_pid matches a multi-process app by title across every process
+    class Bus:
+        def conn_pid(self, svc):
+            return 777
+
+    monkeypatch.setattr(srv.a11y, "same_app", lambda a, b: False)
+    client = dict(CLIENT)
+    assert REAL_PROVEN_FRAME(Bus(), client, ("other", "/root")) is None

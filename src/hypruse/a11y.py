@@ -149,6 +149,66 @@ def apps(bus: Bus) -> list[tuple[str, str]]:
     return [(svc, path) for svc, path in children]
 
 
+def _ppid(pid: int) -> int | None:
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                if line.startswith("PPid:"):
+                    return int(line.split()[1]) or None
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _flatpak_instance(pid: int) -> str | None:
+    """The Flatpak instance id of a sandboxed process, or None."""
+    try:
+        with open(f"/proc/{pid}/root/.flatpak-info") as f:
+            for line in f:
+                if line.startswith("instance-id="):
+                    return line.split("=", 1)[1].strip() or None
+    except OSError:
+        pass
+    return None
+
+
+def _cgroup(pid: int) -> str | None:
+    try:
+        with open(f"/proc/{pid}/cgroup") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def same_app(conn_pid: int | None, window_pid: int | None) -> bool:
+    """Whether an accessibility connection's process belongs to the same
+    app instance as a window's process: the same process, one an ancestor
+    of the other, one Flatpak instance (the bus sees Flatpak's D-Bus proxy,
+    not the app), or one systemd scope or service of the app's own (uwsm
+    and Flatpak start each app in one). A session-wide cgroup proves
+    nothing. Used before acting on an object found under another process's
+    root, which is how a multi-process app is matched by title."""
+    if not conn_pid or not window_pid:
+        return False
+    if conn_pid == window_pid:
+        return True
+    for a, b in ((conn_pid, window_pid), (window_pid, conn_pid)):
+        p: int | None = a
+        for _ in range(32):
+            p = _ppid(p) if p else None
+            if p is None or p <= 1:
+                break
+            if p == b:
+                return True
+    fa, fb = _flatpak_instance(conn_pid), _flatpak_instance(window_pid)
+    if fa is not None and fa == fb:
+        return True
+    ca, cb = _cgroup(conn_pid), _cgroup(window_pid)
+    leaf = (ca or "").rsplit("/", 1)[-1]
+    return ca is not None and ca == cb and leaf.startswith("app-") and (
+        leaf.endswith(".scope") or leaf.endswith(".service"))
+
+
 def app_for_pid(
     bus: Bus, pid: int, title: str = "", size: tuple[int, int] | None = None
 ) -> tuple[str, str] | None:

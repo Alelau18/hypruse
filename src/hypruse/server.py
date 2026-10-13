@@ -429,6 +429,26 @@ def _peers(client: dict[str, Any]) -> list[tuple[str, tuple[int, int]]] | None:
     return None
 
 
+def _proven_frame(
+    bus: a11y.Bus, client: dict[str, Any], app: tuple[str, str] | None
+) -> tuple[str, str] | None:
+    """The accessibility toplevel that is provably this client's window, or
+    None. The root must belong to the window's own app instance (a
+    multi-process app is matched by title across every process), and the
+    frame must be told apart from the app's other windows."""
+    if app is None or not a11y.same_app(bus.conn_pid(app[0]), client.get("pid")):
+        return None
+    peers = _peers(client)
+    if peers is None:
+        return None
+    return a11y.window_frame_for(
+        bus, app[0], app[1], client.get("title", ""), tuple(client["size"]), peers)
+
+
+_UNSURE = ("its accessibility tree cannot tell which window is {addr} (another window of "
+           "{cls} could match it, or its accessibility connection is another process's)")
+
+
 def _ui_read(
     window: str = "", name: str = "", actionable: bool = True, handles: bool = False
 ) -> list[Any] | str:
@@ -444,13 +464,10 @@ def _ui_read(
         if app is None:
             return f"{cls} exposes no accessibility tree; use screenshot + zoom instead"
         frame = a11y.window_frame(bus, app[0], app[1], title, tuple(client["size"]))
-        exact = None
-        if handles:  # a background press acts on the control itself: prove the frame
-            peers = _peers(client)
-            if peers is not None:
-                exact = a11y.window_frame_for(
-                    bus, app[0], app[1], title, tuple(client["size"]), peers)
-            frame = exact or frame
+        # a background press acts on the control itself, and a reading after
+        # one must be of this window, not a same-titled one: prove the frame
+        exact = _proven_frame(bus, client, app)
+        frame = exact or frame
         elements, truncated = a11y.find_elements(
             bus, frame[0], frame[1], name=name, actionable=actionable
         )
@@ -487,6 +504,9 @@ def _ui_read(
         what = f"matching {name!r}" if name else "actionable"
         tail = " (stopped after a large tree; try a name filter)" if truncated else ""
         return f"no {what} elements in {cls}{tail}"
+    if exact is None and not handles:
+        out.append({"note": "these controls may be another window's: "
+                            + _UNSURE.format(addr=client["address"], cls=cls)})
     return out
 
 
@@ -1157,22 +1177,22 @@ def _keyboard_in_background(
             bus = a11y.connect()
             title, size = client.get("title", ""), tuple(client["size"])
             app = a11y.app_for_pid(bus, client.get("pid"), title, size)
-            peers = _peers(client) if app is not None else []
-            frame = None
-            if app is not None and peers is not None:
-                frame = a11y.window_frame_for(bus, app[0], app[1], title, size, peers)
+            frame = _proven_frame(bus, client, app)
             unsure = app is not None and frame is None
             if frame is not None:
                 field = a11y.focused_text(bus, *frame)
                 if field is None:  # GTK reports no focus inside an inactive window
                     fields = a11y.editable_fields(bus, *frame)
                     field = fields[0] if len(fields) == 1 else None
+            elif unsure:  # whatever window it is, a password field anywhere counts
+                fields = a11y.editable_fields(bus, *app)
         except a11y.A11yError:
             field, fields = None, []  # no accessibility: keys are the way in
         password = (field is not None and field[2] == a11y.PASSWORD_ROLE) or (
             field is None and any(f[2] == a11y.PASSWORD_ROLE for f in fields))
         if password and not allow_auth:
             where = ("the focused field" if field is not None
+                     else "a text field it cannot place" if unsure
                      else f"one of its {len(fields)} text fields, and it does not say which "
                      "has its focus,")
             raise trust.TrustError(
@@ -1200,8 +1220,7 @@ def _keyboard_in_background(
         elif field is not None:
             why = "its text field did not accept accessibility text"
         elif unsure:
-            why = (f"{cls} has another window that shares this one's title or size, so its "
-                   "accessibility tree cannot tell which text field is this window's")
+            why = _UNSURE.format(addr=addr, cls=cls)
         elif fields:
             why = f"{cls} does not say which of its {len(fields)} text fields has its focus"
         else:
@@ -1281,11 +1300,8 @@ def _click_in_background(
     trust.guard_session_lock(True, allow_auth)
     cls = client.get("class", "")
     if control.get("_unsure"):
-        bg.refuse(
-            f"{cls} has another window that shares this one's title or size, so its "
-            f"accessibility tree cannot tell which window is {client['address']}, and a press "
-            "could land in the other one"
-        )
+        bg.refuse(_UNSURE.format(addr=client["address"], cls=cls)
+                  + ", and a press could land in the other window")
     svc, path = control.get("_svc"), control.get("_path")
     if not isinstance(svc, str) or not isinstance(path, str):
         bg.refuse("this control was not resolved through the accessibility tree")

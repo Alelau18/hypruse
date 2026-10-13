@@ -639,3 +639,44 @@ def test_the_effect_calls_refuse_in_a_dry_run(monkeypatch):
         with pytest.raises(Exception, match="(?i)dry"):
             call()
     assert a11y.text_of(bus, *entry) == ""
+
+
+# --- whose accessibility connection is it -------------------------------------
+
+
+def _procs(monkeypatch, ppid=None, flatpak=None, cgroup=None):
+    monkeypatch.setattr(a11y, "_ppid", lambda pid: (ppid or {}).get(pid))
+    monkeypatch.setattr(a11y, "_flatpak_instance", lambda pid: (flatpak or {}).get(pid))
+    monkeypatch.setattr(a11y, "_cgroup", lambda pid: (cgroup or {}).get(pid))
+
+
+def test_the_same_process_is_the_same_app(monkeypatch):
+    _procs(monkeypatch)
+    assert a11y.same_app(42, 42)
+
+
+def test_a_parent_or_child_process_is_the_same_app(monkeypatch):
+    _procs(monkeypatch, ppid={11: 10, 10: 1, 12: 11})
+    assert a11y.same_app(10, 12) and a11y.same_app(12, 10)
+
+
+def test_one_flatpak_instance_is_the_same_app(monkeypatch):
+    # the accessibility bus sees Flatpak's xdg-dbus-proxy, not the app
+    _procs(monkeypatch, ppid={5: 1, 6: 1}, flatpak={5: "3619740238", 6: "3619740238"})
+    assert a11y.same_app(5, 6)
+    _procs(monkeypatch, ppid={5: 1, 6: 1}, flatpak={5: "1", 6: "2"})
+    assert not a11y.same_app(5, 6)
+
+
+def test_one_dedicated_app_scope_is_the_same_app(monkeypatch):
+    scope = "0::/user.slice/user@1000.service/app.slice/app-Hyprland-foot@x.scope"
+    _procs(monkeypatch, ppid={5: 1, 6: 1}, cgroup={5: scope, 6: scope})
+    assert a11y.same_app(5, 6)
+    shared = "0::/user.slice/user-1000.slice/session-2.scope"  # every app of the session
+    _procs(monkeypatch, ppid={5: 1, 6: 1}, cgroup={5: shared, 6: shared})
+    assert not a11y.same_app(5, 6)
+
+
+def test_unrelated_processes_are_not_the_same_app(monkeypatch):
+    _procs(monkeypatch, ppid={5: 1, 6: 1})
+    assert not a11y.same_app(5, 6) and not a11y.same_app(None, 6)
