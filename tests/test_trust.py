@@ -1123,6 +1123,17 @@ def test_a_layer_over_the_point_takes_the_pointer(monkeypatch):
     # a launcher drawn over the window the human is not in
     _batch(monkeypatch, MON, [_w("0xme", [0, 0], [960, 1080]), _w("0xb", [960, 0], [960, 1080])])
     monkeypatch.setattr(trust, "_read_layers", lambda: [
-        {"namespace": "wofi", "level": "overlay", "geometry": [900, 0, 400, 400]}])
+        {"namespace": "wofi", "kind": "launcher", "level": "overlay",
+         "geometry": [900, 0, 400, 400]}])
     assert trust.other_window_at(1000, 100, "0xme") is None
     assert trust.other_window_at(1000, 600, "0xme")["address"] == "0xb"
+
+
+def test_a_layer_that_may_take_no_input_does_not_let_the_pointer_through(monkeypatch):
+    # a full-screen overlay that is listed but transparent to input would
+    # let the click land on the window beneath
+    _batch(monkeypatch, MON, [_w("0xme", [0, 0], [960, 1080]), _w("0xb", [960, 0], [960, 1080])])
+    monkeypatch.setattr(trust, "_read_layers", lambda: [
+        {"namespace": "hyprshade", "kind": "", "level": "overlay",
+         "geometry": [0, 0, 1920, 1080]}])
+    assert trust.other_window_at(1000, 100, "0xme")["address"] == "0xb"

@@ -480,10 +480,8 @@ def other_window_at(x: float, y: float, active: str | None) -> dict[str, Any] | 
         monitors, clients = _click_scene()
     except Exception:
         return None
-    layers = _read_layers() or []
-    top = _level_rank("top")
-    if any(_surface_covers(s, x, y) and _level_rank(s.get("level", "")) >= top for s in layers):
-        return None  # a launcher, bar or popup over the point takes the input
+    if _topmost_covering(_read_layers() or [], x, y) is not None:
+        return None  # a launcher or on-screen keyboard over the point takes the input
     visible = hyprctl.visible_workspaces(monitors)
     under = [
         c

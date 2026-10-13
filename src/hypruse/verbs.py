@@ -591,6 +591,8 @@ def _render_dict(tool: str, d: dict[str, Any]) -> str:
                 f"workspace {_ws(d.get('workspace'))}")
         if d.get("note"):
             line += f"\nnote {_safe(d['note'])}"
+        if d.get("warning"):
+            line += f"\nwarning {_safe(d['warning'])}"
         return line
     return " ".join(f"{k}={_scalar(v)}" for k, v in d.items())
 

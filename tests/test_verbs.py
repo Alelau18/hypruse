@@ -724,3 +724,9 @@ def test_a_background_click_is_a_delivered_click():
     assert verbs.exit_for("click_ui", "pressed push button 'Save' through its ...") == 0
     assert verbs.exit_for("click_ui", "focused text 'City' through its ...") == 0
     assert verbs.exit_for("click_ui", "'Save' is ambiguous (2 candidates); ...") == 4
+
+
+def test_the_launch_warning_is_printed():
+    out = verbs.render("launch", {"address": "0x1", "class": "foot", "title": "~",
+                                  "workspace": 99, "note": "n", "warning": "careful"})
+    assert out.splitlines()[-1] == "warning careful"

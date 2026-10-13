@@ -1519,6 +1519,7 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
     refused because they change the human's view, and move_window moves
     only to the agent's own workspaces."""
     safety.touch(f"hypr:{action}")
+    workspace = workspace.strip()
     # every argument is checked before any guard runs and before anything
     # is dispatched, so a bad call cannot half-run and a dry run raises
     # exactly what the real call would
@@ -1546,6 +1547,10 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
             bg.refuse("toggle_floating with no target acts on the human's focused window")
         if action == "move_window":
             bg.require_agent_workspace(workspace)
+            if any(bg.matches(workspace, ws)
+                   for ws in _shown_workspaces(hyprctl.query("monitors"))):
+                bg.refuse(f"workspace {workspace} is on screen, so the window would show in the "
+                          "human's sight")
     # confinement: any action naming a specific window must stay in scope;
     # fullscreen/toggle_floating with no target hit the ACTIVE window, so
     # resolve and guard that too, and check the seat has not moved under us
@@ -1608,10 +1613,18 @@ def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
+_WRAPPERS = frozenset({
+    "env", "setsid", "nohup", "exec", "uwsm", "uwsm-app", "app", "systemd-run", "flatpak",
+    "run", "gtk-launch", "sh", "bash", "dash", "zsh", "fish", "dbus-run-session",
+})
+
+
 def _program(command: str) -> str:
-    """The program a launch command runs, past `env` and VAR=value words."""
-    for word in command.split():
-        if word == "env" or ("=" in word and not word.startswith("-")):
+    """The program a launch command runs, past the usual wrappers (uwsm app
+    --, setsid, flatpak run, sh -c '...'), their flags and VAR=value words.
+    A Flatpak id (org.mozilla.firefox) still contains the app's class."""
+    for word in command.replace("'", " ").replace('"', " ").split():
+        if word in _WRAPPERS or word.startswith("-") or "=" in word:
             continue
         return os.path.basename(word)
     return ""
@@ -1638,7 +1651,15 @@ def _launched_window(workspace: str, command: str) -> Callable[[dict[str, Any]],
         return prog in c or c in prog or (len(last) >= 3 and (last in prog or prog in last))
 
     def accept(win: dict[str, Any]) -> bool:
-        return bool(on_it(win.get("workspace")) or same_app(str(win.get("class", ""))))
+        if on_it(win.get("workspace")) or same_app(str(win.get("class", ""))):
+            return True
+        # an event names the workspace by NAME, which a workspace rule's
+        # default name can make differ from its number: ask for the record
+        if not isinstance(win.get("workspace"), dict) and win.get("address"):
+            with contextlib.suppress(Exception):
+                c = _client_by_address(win["address"])
+                return bool(c and on_it(c.get("workspace")))
+        return False
 
     return accept
 
@@ -1699,6 +1720,7 @@ def launch(
     # open the app on the next agent workspace that is off screen
     # (background=false refuses under the guarantee, here); the guarantee
     # takes no other workspace, and none the human can see
+    workspace = workspace.strip()
     to_agent = bg.decide(False, background)
     mode = bg.mode()
     note = ""
@@ -1706,7 +1728,7 @@ def launch(
         bg.require_agent_workspace(
             _workspace(workspace), "leave workspace out to use the next free agent workspace"
         )
-        if mode == bg.GUARANTEE and any(
+        if (mode == bg.GUARANTEE or background is True) and any(
             bg.matches(workspace, ws) for ws in _shown_workspaces(hyprctl.query("monitors"))
         ):
             bg.refuse(
@@ -1716,9 +1738,10 @@ def launch(
             )
     elif to_agent:
         allowed = _confine_allows()
-        if mode != bg.GUARANTEE and allowed is not None and not any(
-            allowed(sel) for sel in bg.agent_workspaces()
-        ):
+        if allowed is not None and not any(allowed(sel) for sel in bg.agent_workspaces()):
+            if mode == bg.GUARANTEE:
+                bg.refuse("HYPRUSE_CONFINE=workspace:... holds none of the agent's workspaces, "
+                          "so no app can open where the agent may work")
             note = (
                 "HYPRUSE_CONFINE holds none of the agent's workspaces, so it opened on the "
                 "human's workspace as before background mode"
@@ -1730,8 +1753,9 @@ def launch(
             )
             note = (
                 f"opened on workspace {workspace}, one of the agent's "
-                "(HYPRUSE_AGENT_WORKSPACES), out of the human's sight; pass "
-                "background=false to open it on the human's workspace"
+                "(HYPRUSE_AGENT_WORKSPACES), out of the human's sight"
+                + ("" if mode == bg.GUARANTEE
+                   else "; pass background=false to open it on the human's workspace")
             )
     rule = f"[workspace {_workspace(workspace)} silent] " if workspace else ""
     if journal.dry_run():
@@ -1783,12 +1807,20 @@ def launch(
     active_after = _active_address() if rule else None
     if moved and active_after != active_before:
         result["note"] += f" (the focused window is now {active_after})"
-    if mode == bg.OFF or not rule or moved or active_after != active_before:
-        # the launch moved the seat (the new window took focus, ours moved
-        # it, or Hyprland dropped the silent rule for the workspace on
-        # screen): re-baseline the seat guard. A launch that left the seat
-        # alone does not, so a change since the last action stays the
-        # human's for the guard to see. Off mode keeps 0.12's behaviour.
+    took = bool(rule) and not moved and active_after == win["address"]
+    if took:  # Hyprland dropped the silent rule (the workspace was on screen)
+        result["note"] = (result["note"] + "; " if result.get("note") else "") + (
+            "it opened on screen and took the human's keyboard focus")
+        if mode == bg.GUARANTEE:
+            result["warning"] = (
+                "this broke HYPRUSE_BACKGROUND=1: the new window took the human's keyboard "
+                "focus; tell the human"
+            )
+    if mode == bg.OFF or not rule or moved or took:
+        # the launch moved the seat (the new window took focus, or ours
+        # moved it): re-baseline the seat guard. Any other change since the
+        # last action is the human's, for the guard to see. Off mode keeps
+        # 0.12's behaviour.
         trust.remember_seat()
     return result
 
@@ -2272,10 +2304,12 @@ def sequence(
             if step.get("op") == "wait_for":  # never let one wait outlast the budget
                 run["timeout_s"] = min(float(step.get("timeout_s", 10)), max(budget_left, 1.0))
             try:
-                if background is True and step.get("op") == "hypr" and (
-                    step.get("action") in _HYPR_TAKES_VIEW
-                ):
-                    bg.refuse(_HYPR_TAKES_VIEW[step["action"]])
+                if background is True and step.get("op") == "hypr":
+                    if step.get("action") in _HYPR_TAKES_VIEW:
+                        bg.refuse(_HYPR_TAKES_VIEW[step["action"]])
+                    if step.get("action") == "toggle_floating" and not step.get("target"):
+                        bg.refuse("toggle_floating with no target acts on the human's "
+                                  "focused window")
                 if step.get("op") == "wait_for" and stream is not None:
                     res = _seq_wait_for(stream, backlog, run, budget_left)
                 else:

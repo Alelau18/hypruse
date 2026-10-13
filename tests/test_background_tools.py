@@ -965,3 +965,80 @@ def test_sequence_then_ui_reads_the_window_its_steps_named(wired_bg, monkeypatch
     srv.sequence([{"op": "click_ui", "name": "Save", "window": "0xa"}],
                  stop_on_change=False, then="ui")
     assert seen[-1] == "0xa"
+
+
+# --- launch, the guarantee and hypr, second pass --------------------------------
+
+
+def test_a_focus_change_that_was_not_the_new_window_stays_the_humans(launch_fake):
+    # under HYPRUSE_STRICT, re-baselining here would absorb the human's change
+    launch_fake["active"][:] = ["0xhuman", "0xother"]
+    srv.launch("foot")
+    assert launch_fake["seat"] == 0
+
+
+def test_a_launched_window_that_took_focus_says_so(launch_fake):
+    launch_fake["active"][:] = ["0xhuman", "0xnew"]
+    out = srv.launch("foot", workspace="3")
+    assert "took the human's keyboard focus" in out["note"] and launch_fake["seat"] == 1
+
+
+def test_under_the_guarantee_a_window_that_took_focus_is_a_warning(launch_fake, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    launch_fake["active"][:] = ["0xhuman", "0xnew"]
+    assert "HYPRUSE_BACKGROUND" in srv.launch("foot")["warning"]
+
+
+def test_the_guarantee_note_does_not_offer_background_false(launch_fake, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    assert "background=false" not in srv.launch("foot")["note"]
+
+
+def test_a_workspace_with_spaces_is_still_checked(launch_fake, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    launch_fake["monitors"] = [dict(MONS[0], activeWorkspace={"id": 98, "name": "98"})]
+    with pytest.raises(srv.trust.TrustError, match="on screen"):
+        srv.launch("foot", workspace=" 98 ")
+
+
+def test_background_true_refuses_an_explicit_workspace_on_screen(launch_fake):
+    launch_fake["monitors"] = [dict(MONS[0], activeWorkspace={"id": 3, "name": "3"})]
+    with pytest.raises(srv.trust.TrustError, match="on screen"):
+        srv.launch("foot", workspace="3", background=True)
+    srv.launch("foot", workspace="3")  # an explicit request without it, as before
+
+
+def test_a_disjoint_confinement_under_the_guarantee_says_why(launch_fake, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    monkeypatch.setenv("HYPRUSE_CONFINE", "workspace:3")
+    with pytest.raises(srv.trust.TrustError, match="HYPRUSE_CONFINE"):
+        srv.launch("foot")
+
+
+def test_the_guarantee_moves_windows_only_to_agent_workspaces_off_screen(wired_bg, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    monkeypatch.setattr(srv.hyprctl, "query", lambda what: (
+        [dict(MONS[0], activeWorkspace={"id": 98, "name": "98"})] if what == "monitors"
+        else [dict(CLIENT)]))
+    with pytest.raises(srv.trust.TrustError, match="on screen"):
+        srv.hypr("move_window", target="0xa", workspace="98")
+
+
+def test_sequence_background_refuses_toggle_floating_without_a_target(wired_bg):
+    out = srv.sequence([{"op": "hypr", "action": "toggle_floating"}],
+                       background=True, stop_on_change=False, then="none")
+    assert "ERROR" in str(out) and wired_bg["dispatch"] == []
+
+
+def test_a_wrapped_command_is_recognised_by_the_program_it_runs():
+    for command in ("uwsm app -- firefox", "setsid -f firefox", "flatpak run org.mozilla.firefox",
+                    "sh -c 'firefox --new-window'", "gtk-launch firefox"):
+        assert srv._launched_window("2", command)({"workspace": "1", "class": "firefox"}), command
+
+
+def test_a_landing_is_recognised_by_the_workspace_id_too(monkeypatch):
+    # a workspace with a default name reports that name in the event, not 99
+    monkeypatch.setattr(srv, "_client_by_address",
+                        lambda a: {"address": a, "workspace": {"id": 99, "name": "agent"}})
+    accept = srv._launched_window("99", "foot")
+    assert accept({"address": "0xf", "workspace": "agent", "class": "zz"})
