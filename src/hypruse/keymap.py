@@ -16,7 +16,8 @@ import functools
 # level 0 plain, 1 Shift, 2 AltGr (ISO_Level3_Shift, Mod5 in Hyprland's
 # names), 3 Shift+AltGr
 _LEVEL_MODS = ("", "SHIFT", "MOD5", "SHIFT MOD5")
-_CONTROL = {"\n": "Return", "\r": "Return", "\t": "Tab", "\b": "BackSpace"}
+_CONTROL = {"\n": "Return", "\r": "Return", "\t": "Tab", "\b": "BackSpace",
+            "\x1b": "Escape", "\x7f": "Delete"}
 CONTROL_CHARS = frozenset(_CONTROL)  # typed as keys, never inserted as text
 
 
@@ -91,7 +92,7 @@ class Keymap:
         if name in self._bases:
             return ("", name)
         lib = _lib()
-        if lib is None:
+        if lib is None or name.startswith("KP_"):  # a keypad key is not its main-row twin
             return None
         sym = lib.xkb_keysym_from_name(name.encode(), 0)
         ch = lib.xkb_keysym_to_utf32(sym) if sym else 0

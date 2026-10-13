@@ -126,7 +126,7 @@ def wired_bg(monkeypatch):
     s["toolkit"] = ("gtk", "3.24.52")
     s["focus_on_activate"] = 0
     monkeypatch.setattr(srv.a11y, "toolkit", lambda bus, svc: s["toolkit"])
-    monkeypatch.setattr(srv, "_focus_on_activate", lambda: s["focus_on_activate"])
+    monkeypatch.setattr(srv, "_focus_on_activate", lambda addr="": s["focus_on_activate"])
     monkeypatch.setattr(srv.hinput, "move", lambda x, y: s["clicks"].append(("move", x, y)))
     monkeypatch.setattr(srv.hinput, "drag", lambda *a, **k: s["clicks"].append(("drag",) + a))
     monkeypatch.setattr(srv.hinput, "scroll", lambda **k: s["clicks"].append(("scroll", k)))
@@ -634,8 +634,10 @@ def test_newlines_and_tabs_are_keys_even_with_a_text_field(wired_bg):
 
 def test_a_key_that_fails_partway_says_how_many_landed(wired_bg):
     wired_bg["fail_after"] = 2
-    with pytest.raises(srv.hyprctl.HyprctlError, match="sent 2 of 4 keys"):
+    with pytest.raises(srv.hyprctl.HyprctlError, match="sent 2 of 4 keys") as err:
         srv.keyboard("type", text="abcd", window="0xa")
+    # Hyprland's own error names the key, a character of the typed text
+    assert "window gone" not in str(err.value)
 
 
 def test_launch_never_opens_on_an_agent_workspace_the_human_is_viewing(launch_fake):
@@ -761,7 +763,7 @@ def test_focusing_a_gtk3_field_is_refused_when_hyprland_focuses_on_activate(wire
     with pytest.raises(srv.trust.TrustError, match="focus_on_activate"):
         srv.click_ui(name="Name", window="0xa")
     assert wired_bg["grabbed"] == []
-    wired_bg["toolkit"] = ("GTK", "4.22.4")
+    wired_bg["toolkit"] = ("Qt", "6.11.1")  # Qt does not present its window
     srv.click_ui(name="Name", window="0xa")
     assert wired_bg["grabbed"] == [("svc", "/name")]
 
@@ -892,3 +894,74 @@ def test_a_root_from_another_app_instance_proves_nothing(monkeypatch):
     monkeypatch.setattr(srv.a11y, "same_app", lambda a, b: False)
     client = dict(CLIENT)
     assert REAL_PROVEN_FRAME(Bus(), client, ("other", "/root")) is None
+
+
+def test_a_gtk4_field_cannot_take_focus_and_the_rehearsal_says_so(wired_bg, monkeypatch):
+    # GTK 4 answers GrabFocus with NOT_SUPPORTED
+    wired_bg["role"] = "text"
+    wired_bg["toolkit"] = ("GTK", "4.22.4")
+    with pytest.raises(srv.trust.TrustError, match="GTK 4"):
+        srv.click_ui(name="Name", window="0xa")
+    monkeypatch.setattr(srv.journal, "dry_run", lambda: True)
+    with pytest.raises(srv.trust.TrustError, match="GTK 4"):
+        srv.click_ui(name="Name", window="0xa")
+    assert wired_bg["grabbed"] == []
+
+
+@pytest.mark.parametrize("toolkit", [("gtk", "3.24.52"), ("GAIL", "2.24"), ("", "")])
+def test_focusing_is_refused_where_the_window_could_come_forward(wired_bg, toolkit):
+    # GTK 3 and 2 present their window; an unreadable toolkit fails closed
+    wired_bg["role"] = "text"
+    wired_bg["toolkit"] = toolkit
+    wired_bg["focus_on_activate"] = 1
+    with pytest.raises(srv.trust.TrustError, match="focus_on_activate"):
+        srv.click_ui(name="Name", window="0xa")
+
+
+def test_the_window_rule_for_focus_on_activate_is_read(monkeypatch):
+    monkeypatch.setattr(srv.hyprctl, "query", lambda what: (
+        {"focus_on_activate": True} if what.startswith("getprop address:0xa")
+        else {"option": "misc:focus_on_activate", "int": 0}))
+    assert srv.__dict__["_focus_on_activate"]("0xa") == 1
+    assert srv.__dict__["_focus_on_activate"]() == 0
+
+
+def test_a_rehearsed_press_reads_plainly(wired_bg, monkeypatch):
+    monkeypatch.setattr(srv.journal, "dry_run", lambda: True)
+    out = str(srv.click_ui(name="Save", window="0xa"))
+    assert "would press push button 'Save' in gedit through its accessibility action" in out
+
+
+def test_escape_and_delete_are_keys_too(wired_bg):
+    wired_bg["focused_text"] = ("svc", "/name", 79)
+    srv.keyboard("type", text="a\x1b", window="0xa")
+    assert wired_bg["inserted"] == [] and wired_bg["shortcuts"][-1] == ("", "Escape", "0xa")
+
+
+def test_typing_a_password_with_consent_is_not_read_back(wired_bg):
+    wired_bg["focused_text"] = ("svc", "/pw", 40)
+    out = str(srv.keyboard("type", text="hunter2", window="0xa", allow_auth=True))
+    assert "password field" in out and "not read back" in out
+
+
+def test_then_ui_says_gone_only_when_the_window_is(wired_bg, monkeypatch):
+    def fails(w="", name="", actionable=True, handles=False):
+        if not handles:
+            raise ValueError("busctl timed out")
+        return [{"role": "push button", "name": "Save", "x": 1, "y": 1, "clickable": True,
+                 "_svc": "svc", "_path": "/save", "_field": False}]
+
+    monkeypatch.setattr(srv, "_ui_read", fails)
+    out = srv.click_ui(name="Save", window="0xa", then="ui")
+    assert "timed out" in out[-1].text and "gone" not in out[-1].text
+
+
+def test_sequence_then_ui_reads_the_window_its_steps_named(wired_bg, monkeypatch):
+    seen = []
+    monkeypatch.setattr(srv, "_ui_read", lambda w="", name="", actionable=True, handles=False:
+                        seen.append(w) or [{"role": "push button", "name": "Save", "x": 1,
+                                            "y": 1, "clickable": True, "_svc": "svc",
+                                            "_path": "/save", "_field": False}])
+    srv.sequence([{"op": "click_ui", "name": "Save", "window": "0xa"}],
+                 stop_on_change=False, then="ui")
+    assert seen[-1] == "0xa"

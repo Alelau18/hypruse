@@ -33,3 +33,8 @@ def test_control_characters_map_to_their_keys():
     m = keymap.Keymap("us")
     assert m.chord("\n") == ("", "Return")
     assert m.chord("\t") == ("", "Tab")
+
+
+def test_a_keypad_name_is_not_turned_into_a_main_row_key():
+    # KP_1 is not "1": on AZERTY that would be Shift and ampersand
+    assert keymap.for_layout("fr").chord_for_key("KP_1") is None
