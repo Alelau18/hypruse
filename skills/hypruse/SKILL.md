@@ -88,6 +88,9 @@ background: their cursor, keyboard focus and workspace stay where they are.
   `WARNING: the human's focused window changed` means their focus moved
   during the action (the app brought a window forward, or the human
   switched): stop and tell the user.
+- Keys (`keyboard key`, or text that goes key by key) reach the control
+  the app itself has focused, not the field text went into: run
+  `click_ui FIELD --window ADDR` first, then send the keys.
 - Read a hidden window with `ui`, not a screenshot: hidden apps often stop
   drawing, so their pixels can be stale.
 - `pointer` is the human's cursor and is refused over any window but

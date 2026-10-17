@@ -363,8 +363,8 @@ In the background:
 
 ```
 typed 12 characters into the text field in yad through the accessibility interface (the human's focus untouched); the field now holds the typed text (12 characters)
-sent 5 keys to 0x564859226b80 (yad) with sendshortcut (the human's focus untouched)
-sent ctrl+a to 0x564859226b80 (yad) with sendshortcut (the human's focus untouched)
+sent 5 keys to 0x564859226b80 (yad) with sendshortcut, to the control the app has focused (the human's focus untouched)
+sent ctrl+a to 0x564859226b80 (yad) with sendshortcut, to the control the app has focused (the human's focus untouched)
 ```
 
 Exit codes: 0, 1, 2, 3.
@@ -388,6 +388,9 @@ keyboard switched away from its first layout on the sendshortcut path, and
 no `--window` under HYPRUSE_BACKGROUND=1. Typed text never appears in a
 result: the field is described as holding the typed text, or not, and `ui`
 shows its value. Newlines, tabs and backspaces are always sent as keys.
+Keys reach the control the app itself has focused, which in the background
+is not the field text went into through accessibility: `click_ui` the field
+first.
 `type` of a secret is never right unless the user asked for it explicitly.
 
 ## click_ui

@@ -950,7 +950,10 @@ def keyboard(
     the keys in the background, with the human's focus left alone: text
     goes into its text field through the accessibility interface, or key
     by key through Hyprland's sendshortcut (a character the keyboard layout
-    has no key for is refused on that path). Without `window`, keys go to
+    has no key for is refused on that path). Keys sent that way, and key
+    combos, go to the control the app itself has focused, which is not the
+    field text went into through accessibility: focus a field first with
+    click_ui. Without `window`, keys go to
     the focused window. `background` true or false forces one way. This
     drives shortcuts the focused application handles
     (ctrl+t, ctrl+l). It does NOT trigger Hyprland's own keybinds
@@ -1284,8 +1287,10 @@ def _keyboard_in_background(
                 "(the window may have closed)") from None
     untouched, warning = _seat_report(seat)
     paren = " (the human's focus untouched)" if untouched else ""
-    return _acted(f"sent {what} to {addr} ({cls}) with sendshortcut{paren}{warning}",
-                  then, window=addr, fallback=False)
+    # keys land on whatever control the app has focused, which in a hidden
+    # window is not the field text went into through accessibility
+    return _acted(f"sent {what} to {addr} ({cls}) with sendshortcut, to the control the app "
+                  f"has focused{paren}{warning}", then, window=addr, fallback=False)
 
 
 def _read_back(before: str, after: str, text: str) -> str:

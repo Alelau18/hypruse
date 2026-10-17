@@ -111,7 +111,7 @@ An agent can work in apps on workspaces you are not looking at while you keep wo
 It is on by default, in automatic mode. An action on the window you are in runs on your screen, as it always has. An action on any other window runs in the background:
 
 - `click_ui` presses the control through its accessibility action. A text field gets the app's own focus instead (except in GTK 4, which does not allow it).
-- `keyboard` with `window=` types into the window's focused text field (or its only one) through the accessibility interface. Otherwise it sends the keys to that window alone with Hyprland's `sendshortcut`, one key at a time on your keyboard layout. Newlines, tabs and backspaces are always sent as keys.
+- `keyboard` with `window=` types into the window's focused text field (or its only one) through the accessibility interface. Otherwise it sends the keys to that window alone with Hyprland's `sendshortcut`, one key at a time on your keyboard layout. Newlines, tabs and backspaces are always sent as keys. Keys go to the control the app itself has focused, which is not necessarily the field text went into, so the agent focuses a field with `click_ui` before sending keys to it.
 - `launch` with no workspace opens the app on one of the agent's own workspaces, out of your sight.
 - The pointer is your real cursor, so it cannot work in the background. It is refused where its input would land on a window other than yours, and the refusal points the agent at `click_ui`.
 
@@ -141,7 +141,7 @@ Every background result says how it was done, whether your focused window and wo
 ```
 pressed check box 'Agree' through its accessibility action (no pointer, the human's focus untouched) in yad; now: checked=true
 typed 12 characters into the text field in yad through the accessibility interface (the human's focus untouched); the field now holds the typed text (12 characters)
-sent ctrl+a to 0x5648592451c0 (yad) with sendshortcut (the human's focus untouched)
+sent ctrl+a to 0x5648592451c0 (yad) with sendshortcut, to the control the app has focused (the human's focus untouched)
 ```
 
 A press on a check box or slider that the app ignored reads `no change seen`. A button press, a focused field or keys sent with `sendshortcut` carry no value to read back, so check their effect with `ui`. If your focused window changed during the action (because the app brought a window forward, or because you switched), the result ends with a `WARNING` naming the window that has focus now. Typed results never repeat the text, since the journal keeps every result line and typed text is only ever recorded as a length plus a digest. Screenshots are not used to confirm anything, because many apps stop drawing while hidden and a hidden window's pixels can be stale; `ui` shows its current state.
