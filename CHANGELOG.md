@@ -58,6 +58,12 @@ with no compositor plugin.
   tree shows, without `allow_auth`; and, on the `sendshortcut` path, a
   character the layout has no key for, an XWayland window, or a keyboard
   switched away from its first layout.
+- When no listed control matches a name, `click_ui` and `ui` find a
+  named element of any role that has an accessibility action, such as a
+  row in a web app's list, and `ui` shows the action's name. Some actions
+  only focus: Qt WebEngine's rows offer `SetFocus` and nothing else. In
+  the background such a press reads as focused, not pressed, and says
+  whether the app took the focus, since keys sent next go to it.
 - A live suite, `pytest -m background`, that drives yad forms on the
   agent's workspaces and checks the human's active window, workspace and
   cursor after every step, and the compositor's focus and workspace events.
@@ -82,6 +88,24 @@ with no compositor plugin.
   the launched program's class, instead of the first window that opens
   anywhere, and re-baselines the `HYPRUSE_STRICT` seat guard only when it
   moved the seat (always with `HYPRUSE_BACKGROUND=0`).
+- Accessibility reads go over one D-Bus connection that stays open,
+  instead of starting a `busctl` process for every call. That is about
+  nine times faster: reading ZapZap's 904-element tree took 41 s, and a
+  name search over all of it now takes 3.3 s. A walk reads up to 2000
+  elements instead of 400. `busctl` still finds the bus, and takes over
+  for an address the connection cannot use.
+
+### Fixed
+- A walk read an element twice when the toolkit lists it under two
+  parents, as Qt WebEngine does, and spent its budget on the copies. It
+  now reads each once.
+- A walk cut short says so: `ui` adds a note even when it found
+  something, and stops suggesting a name filter, which reads the same
+  elements. The background keyboard path no longer treats the one field
+  it found as the window's only one when the walk did not finish.
+- A call the app never answered used to read as an element with no name
+  or no children. It now fails the read, while a call the app refuses
+  (an element that is gone) still reads as "not there".
 
 ## [0.12.1] - 2026-10-11
 

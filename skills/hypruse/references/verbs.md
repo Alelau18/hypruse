@@ -205,7 +205,10 @@ an entry or a spinner's number, `percent` a slider's position, `checked` a
 box or toggle. Password fields never report contents and many dropdowns
 expose no value, so screenshot when a rendered value matters. Indices go
 stale after any change; re-read before using one. A very large tree stops
-early with "(stopped after a large tree; try a name filter)".
+after 2000 elements and says so; a name filter reads the same elements, so
+it does not get further. When no control matches a name, a named element
+of another role that has an accessibility action (a web app's list row) is
+listed with that action's name, as `action=`.
 
 ## marks
 
@@ -420,6 +423,9 @@ pressed check box 'Agree' through its accessibility action (no pointer, the huma
 focused text 'City' through its accessibility action (no pointer, the human's focus untouched) in yad
 ```
 
+An element whose only action focuses it (Qt WebEngine's list rows) reads
+as `focused ... through its accessibility action 'SetFocus'`, and says
+whether the app now reports it focused: keys sent next go to it only then.
 A check box or slider the app did not change ends `; no change seen`, and a
 press that closed the window ends `; the window closed`. A button or a
 focused field has no value to read back, so check its effect with `ui`. Refused in the

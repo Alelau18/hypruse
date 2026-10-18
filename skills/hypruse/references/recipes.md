@@ -347,9 +347,10 @@ says `not found, call desktop() for current addresses` (exit 1), re-read.
 and Electron/Chrome started without `--force-renderer-accessibility` expose
 little or nothing. Fall back to `screenshot --window`, `zoom`, `pointer`
 (recipe 2). A tree that exists but prints `no actionable elements` may still
-hold what you need under `ui --all` or a `--name` filter, and a huge tree
-that says "stopped after a large tree" wants `--name`. `busctl` missing or
-no AT-SPI bus reads as `accessibility read failed: ...`; tell the owner.
+hold what you need under `ui --all` or a `--name` filter. A huge tree says
+it stopped after reading 2000 elements, and `--name` reads the same ones,
+so it does not get further. `busctl` missing or no AT-SPI bus reads as
+`accessibility read failed: ...`; tell the owner.
 
 **Ambiguous names (exit 4).** `click_ui` lists the candidates in `ui` line
 form. Pick one with `--index I` (0-based into that list), use a more

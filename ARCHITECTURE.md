@@ -23,11 +23,14 @@ src/hypruse/
   wire.py        raw Wayland client for zwlr_virtual_pointer_v1
   input.py       pointer orchestration (movecursor + wire) and wtype keyboard
   screenshot.py  grim capture: monitor / window / region + coord metadata
-  a11y.py        AT-SPI accessibility-tree reader over D-Bus (busctl): named
+  a11y.py        AT-SPI accessibility-tree reader over D-Bus: named
                  controls, current values, exact coords, and focused-role
                  lookup; backs ui, marks, click_ui, then='ui', and the
                  auth-guard password-field check; also the background
                  primitives (DoAction, GrabFocus, InsertText, read-back)
+  dbuswire.py    minimal D-Bus client for the accessibility bus: one socket
+                 per process, EXTERNAL auth, one method call at a time;
+                 busctl finds the bus and takes over when it cannot connect
   background.py  background mode: the policy (HYPRUSE_BACKGROUND, the
                  background= argument, the automatic rule) and the agent's
                  workspace range (HYPRUSE_AGENT_WORKSPACES / _FILL)
@@ -330,7 +333,9 @@ approves would not be the plan that runs.
 ## Testing tiers
 
 1. **Unit** (CI): pure functions, wire encoders/parsers, combo parsing,
-   region parsing, state trimming against fixtures.
+   region parsing, state trimming against fixtures. The D-Bus client runs
+   against a private dbus-daemon it starts. conftest keeps every unit test
+   off the live compositor and the desktop's accessibility bus.
 2. **Live seat-safe** (`pytest -m e2e`): real session, zero input events,
    including a virtual-pointer create/destroy handshake.
 3. **Live background** (`pytest -m background`, hands-off): opens yad

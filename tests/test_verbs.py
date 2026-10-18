@@ -361,12 +361,15 @@ def test_ui_and_binds_render_as_lines(stub, capsys):
          "value": "report.txt"},
         {"role": "check box", "name": "Remember", "x": 1, "y": 2, "clickable": True,
          "checked": True, "percent": 50},
+        {"role": "table cell", "name": "Yasser", "x": 3, "y": 4, "clickable": True,
+         "action": "SetFocus"},
     ])
     assert verbs.main(["ui"]) == 0
     assert capsys.readouterr().out == (
         '[0] push button "Save" @1204,88\n'
         '[1] text "Name" @900,140 value="report.txt" not-clickable\n'
         '[2] check box "Remember" @1,2 percent=50 checked=true\n'
+        '[3] table cell "Yasser" @3,4 action=SetFocus\n'
     )
     stub("binds", [{"combo": "SUPER+Q", "action": "exec", "arg": "kitty",
                     "description": "terminal"},

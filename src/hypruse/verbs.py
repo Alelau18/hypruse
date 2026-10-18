@@ -636,6 +636,8 @@ def _render_ui(items: list[dict[str, Any]], key: str = "") -> str:
             line += f" percent={e['percent']}"
         if "checked" in e:
             line += f" checked={json.dumps(e['checked'])}"
+        if "action" in e:
+            line += f" action={_safe(e['action'])}"
         if e.get("clickable") is False:
             line += " not-clickable"
         lines.append(line)
