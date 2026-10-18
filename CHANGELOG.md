@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-18
+
 Background mode: an agent works in apps on workspaces the human is not
 looking at while the human keeps working on their own, on stock Hyprland
 with no compositor plugin.
