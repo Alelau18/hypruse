@@ -448,13 +448,51 @@ def _clickable_now(states: set[int]) -> bool:
     return _STATE_SENSITIVE in states or _STATE_ENABLED in states
 
 
+# How many elements one walk of a window reads before it stops
+WALK_BUDGET = 400
+
+
+class _Walk:
+    """Depth-first over a subtree in document order, each object once, at
+    most `max_nodes` of them. Iterating yields (svc, path); `skip()` during
+    an iteration step leaves that object's children out. `truncated` says
+    afterwards whether objects were left unread, so a caller can tell
+    "not there" from "not reached". Each object once, because a toolkit can
+    list one under two parents (Qt WebEngine does with a web page's
+    subtrees), and walking the copy spends the budget twice."""
+
+    def __init__(self, bus: Bus, root: tuple[str, str], max_nodes: int):
+        self._bus, self._root, self._max = bus, root, max_nodes
+        self._skip = False
+        self.truncated = False
+
+    def skip(self) -> None:
+        self._skip = True
+
+    def __iter__(self):
+        stack: list[tuple[str, str]] = [self._root]
+        done: set[tuple[str, str]] = set()
+        while stack:
+            node = stack.pop()
+            if node in done:
+                continue
+            if len(done) >= self._max:
+                self.truncated = True
+                return
+            done.add(node)
+            self._skip = False
+            yield node
+            if not self._skip:  # reversed keeps document order under a LIFO stack
+                stack.extend(reversed(_children(self._bus, *node)))
+
+
 def find_elements(
     bus: Bus,
     app_svc: str,
     app_path: str,
     name: str = "",
     actionable: bool = True,
-    max_nodes: int = 400,
+    max_nodes: int = WALK_BUDGET,
     max_results: int = 60,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Depth-first over a window's subtree, returning (matching elements,
@@ -467,14 +505,11 @@ def find_elements(
     needle = name.lower()
     results: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()  # a field found through its label is not listed twice
-    stack: list[tuple[str, str]] = [(app_svc, app_path)]
-    visited = 0
-    while stack and visited < max_nodes and len(results) < max_results:
-        svc, path = stack.pop()
-        visited += 1
+    walk = _Walk(bus, (app_svc, app_path), max_nodes)
+    for svc, path in walk:
+        if len(results) >= max_results:
+            break
         nm = _name(bus, svc, path)
-        kids = _children(bus, svc, path)
-        stack.extend(reversed(kids))  # keep document order under a LIFO stack
         if (needle and needle not in nm.lower()) or (svc, path) in seen:
             continue
         role_num = _role_num(bus, svc, path)  # also gates the value read below
@@ -504,8 +539,7 @@ def find_elements(
         if item is not None:
             seen.add((svc, path))
             results.append(item)
-    truncated = visited >= max_nodes and bool(stack) and len(results) < max_results
-    return results, truncated
+    return results, walk.truncated and len(results) < max_results
 
 
 def _related(bus: Bus, svc: str, path: str, rel_type: int) -> list[tuple[str, str]]:
@@ -548,22 +582,21 @@ def _element(
     }
 
 
-def focused_role(bus: Bus, app_svc: str, app_path: str, max_nodes: int = 200) -> int | None:
+def focused_role(
+    bus: Bus, app_svc: str, app_path: str, max_nodes: int = WALK_BUDGET
+) -> int | None:
     """The AtspiRole number of the element that currently holds keyboard
     focus in this window, or None if none is found within the node budget.
     Bounded because it runs before typing: a fast, best-effort check for the
     auth guard, not an exhaustive walk. Prunes into non-showing subtrees so
     it does not spend the budget on hidden pages."""
-    stack: list[tuple[str, str]] = [(app_svc, app_path)]
-    visited = 0
-    while stack and visited < max_nodes:
-        svc, path = stack.pop()
-        visited += 1
+    walk = _Walk(bus, (app_svc, app_path), max_nodes)
+    for svc, path in walk:
         states = _states(bus, svc, path)
         if _STATE_FOCUSED in states:
             return _role_num(bus, svc, path)
-        if _STATE_SHOWING in states or (svc, path) == (app_svc, app_path):
-            stack.extend(reversed(_children(bus, svc, path)))
+        if _STATE_SHOWING not in states and (svc, path) != (app_svc, app_path):
+            walk.skip()
     return None
 
 
@@ -638,42 +671,34 @@ def insert_text(bus: Bus, svc: str, path: str, text: str) -> bool:
 
 
 def focused_text(
-    bus: Bus, app_svc: str, app_path: str, max_nodes: int = 200
+    bus: Bus, app_svc: str, app_path: str, max_nodes: int = WALK_BUDGET
 ) -> tuple[str, str, int] | None:
     """(svc, path, role) of the element holding the app's own keyboard focus
     in this window when it is a text field (password fields included, so a
     caller can refuse them), else None. Walks every child within the
     budget: a hidden window's subtree may not report SHOWING."""
-    stack: list[tuple[str, str]] = [(app_svc, app_path)]
-    visited = 0
-    while stack and visited < max_nodes:
-        svc, path = stack.pop()
-        visited += 1
+    for svc, path in _Walk(bus, (app_svc, app_path), max_nodes):
         if _STATE_FOCUSED in _states(bus, svc, path):
             role = _role_num(bus, svc, path)
             return (svc, path, role) if role in _TEXT_ROLES | {PASSWORD_ROLE} else None
-        stack.extend(reversed(_children(bus, svc, path)))
     return None
 
 
 def editable_fields(
-    bus: Bus, app_svc: str, app_path: str, max_nodes: int = 200
-) -> list[tuple[str, str, int]]:
-    """(svc, path, role) of every editable text field in this window, in
-    document order. GTK reports no keyboard focus inside a window that is
-    not active, so a background caller uses this when focused_text finds
-    nothing: a window with exactly one field has one place for text."""
+    bus: Bus, app_svc: str, app_path: str, max_nodes: int = WALK_BUDGET
+) -> tuple[list[tuple[str, str, int]], bool]:
+    """((svc, path, role) of every editable text field in this window, in
+    document order; whether the walk read the whole window). GTK reports no
+    keyboard focus inside a window that is not active, so a background
+    caller uses this when focused_text finds nothing: a window with exactly
+    one field has one place for text, which a walk cut short cannot show."""
     out: list[tuple[str, str, int]] = []
-    stack: list[tuple[str, str]] = [(app_svc, app_path)]
-    visited = 0
-    while stack and visited < max_nodes:
-        svc, path = stack.pop()
-        visited += 1
+    walk = _Walk(bus, (app_svc, app_path), max_nodes)
+    for svc, path in walk:
         role = _role_num(bus, svc, path)
         if role in _TEXT_ROLES | {PASSWORD_ROLE} and _STATE_EDITABLE in _states(bus, svc, path):
             out.append((svc, path, role))
-        stack.extend(reversed(_children(bus, svc, path)))
-    return out
+    return out, not walk.truncated
 
 
 def do_action(bus: Bus, svc: str, path: str, index: int = 0) -> bool:

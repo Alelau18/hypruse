@@ -78,7 +78,9 @@ def wired_bg(monkeypatch):
                         lambda bus, client, app: app if s["frame_sure"] else None)
     monkeypatch.setattr(srv.a11y, "focused_text", lambda bus, svc, path: s["focused_text"])
     s["fields"] = []
-    monkeypatch.setattr(srv.a11y, "editable_fields", lambda bus, svc, path: s["fields"])
+    s["fields_complete"] = True
+    monkeypatch.setattr(srv.a11y, "editable_fields",
+                        lambda bus, svc, path: (s["fields"], s["fields_complete"]))
     texts = {"field": ""}
 
     def insert(bus, svc, path, text):
@@ -292,6 +294,17 @@ def test_a_hidden_window_with_one_field_gets_accessibility_text(wired_bg):
     wired_bg["fields"] = [("svc", "/name", 61)]
     srv.keyboard("type", text="hello", window="0xa")
     assert wired_bg["inserted"] == [("svc", "/name", "hello")] and wired_bg["shortcuts"] == []
+
+
+def test_one_field_in_a_walk_cut_short_is_not_the_only_field(wired_bg):
+    # a large window may hold more fields past the elements read, so the
+    # one found first is not provably where the text belongs
+    wired_bg["fields"] = [("svc", "/name", 61)]
+    wired_bg["fields_complete"] = False
+    srv.keyboard("type", text="hi", window="0xa")
+    assert wired_bg["inserted"] == [] and len(wired_bg["shortcuts"]) == 2
+    with pytest.raises(srv.trust.TrustError, match="more elements than hypruse reads"):
+        srv.keyboard("type", text="上", window="0xa")
 
 
 def test_several_fields_and_no_focus_report_fall_back_to_keys(wired_bg):

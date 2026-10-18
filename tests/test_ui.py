@@ -102,7 +102,20 @@ def test_ui_drops_elements_outside_the_window(wired):
 def test_ui_truncation_is_surfaced(wired):
     wired.setattr(srv.a11y, "app_for_pid", lambda *a: ("a", "/root"))
     wired.setattr(srv.a11y, "find_elements", lambda *a, **k: ([], True))  # truncated
-    assert "large tree" in srv.ui(window="0xw", name="Deep")
+    out = srv.ui(window="0xw", name="Deep")
+    # a name filter reads the same elements, so it is no way past the cut
+    assert f"stopped after reading {srv.a11y.WALK_BUDGET} elements" in out
+    assert "name filter" not in out
+
+
+def test_ui_says_a_listing_was_cut_short(wired):
+    wired.setattr(srv.a11y, "app_for_pid", lambda *a: ("a", "/root"))
+    wired.setattr(srv.a11y, "find_elements", lambda *a, **k: (
+        [{"role": "button", "name": "Near", "extent": (10, 20, 80, 40), "clickable": True}],
+        True))
+    out = srv.ui(window="0xw")
+    assert [e.get("name") for e in out if "name" in e] == ["Near"]
+    assert any("stopped after reading" in e.get("note", "") for e in out)
 
 
 def test_ui_mid_walk_error_falls_back(wired):

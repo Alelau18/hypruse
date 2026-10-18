@@ -500,13 +500,18 @@ def _ui_read(
         elif handles:  # another window of the app could own this control
             item["_unsure"] = True
         out.append(item)
+    # a name filter reads the same elements, so it is no way past the cut
+    cut = (f"it stopped after reading {a11y.WALK_BUDGET} elements of a large tree, so "
+           f"{'a match' if name else 'more controls'} may lie beyond them")
     if not out:
         what = f"matching {name!r}" if name else "actionable"
-        tail = " (stopped after a large tree; try a name filter)" if truncated else ""
+        tail = f" ({cut})" if truncated else ""
         return f"no {what} elements in {cls}{tail}"
     if exact is None and not handles:
         out.append({"note": "these controls may be another window's: "
                             + _UNSURE.format(addr=client["address"], cls=cls)})
+    if truncated and not handles:
+        out.append({"note": cut})
     return out
 
 
@@ -1185,7 +1190,7 @@ def _keyboard_in_background(
     layout = hyprctl.active_layout()
     kmap = keymap.for_layout(*layout)
     if action == "type":
-        field, fields, unsure = None, [], False
+        field, fields, unsure, complete = None, [], False, True
         bus = None
         try:
             bus = a11y.connect()
@@ -1196,10 +1201,11 @@ def _keyboard_in_background(
             if frame is not None:
                 field = a11y.focused_text(bus, *frame)
                 if field is None:  # GTK reports no focus inside an inactive window
-                    fields = a11y.editable_fields(bus, *frame)
-                    field = fields[0] if len(fields) == 1 else None
+                    fields, complete = a11y.editable_fields(bus, *frame)
+                    # one field among the elements read is not the only one
+                    field = fields[0] if len(fields) == 1 and complete else None
             elif unsure:  # whatever window it is, a password field anywhere counts
-                fields = a11y.editable_fields(bus, *app)
+                fields, complete = a11y.editable_fields(bus, *app)
         except a11y.A11yError:
             field, fields = None, []  # no accessibility: keys are the way in
         password = (field is not None and field[2] == a11y.PASSWORD_ROLE) or (
@@ -1237,6 +1243,9 @@ def _keyboard_in_background(
             why = "its text field did not accept accessibility text"
         elif unsure:
             why = _UNSURE.format(addr=addr, cls=cls)
+        elif not complete:
+            why = (f"{cls} has more elements than hypruse reads ({a11y.WALK_BUDGET}), and its "
+                   "focused text field was not among them")
         elif fields:
             why = f"{cls} does not say which of its {len(fields)} text fields has its focus"
         else:

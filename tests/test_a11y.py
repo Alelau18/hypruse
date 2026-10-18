@@ -227,6 +227,51 @@ def test_max_nodes_truncation_is_signalled():
     assert els == [] and truncated is True
 
 
+def _shared_subtree():
+    # Qt WebEngine lists one web document under two parents: the same
+    # object reached twice
+    root, a, b, doc = ("app", "/root"), ("app", "/a"), ("app", "/b"), ("app", "/doc")
+    ok, last = ("app", "/ok"), ("app", "/last")
+    nodes = {
+        root: {"role": 23, "name": "w", "children": [a, b, last]},
+        a: {"role": 39, "name": "", "children": [doc], "states": ALL_STATES},
+        b: {"role": 39, "name": "", "children": [doc], "states": ALL_STATES},
+        doc: {"role": 95, "name": "", "children": [ok], "states": ALL_STATES},
+        ok: {"role": 43, "name": "OK", "extent": (0, 0, 9, 9), "states": ALL_STATES,
+             "children": []},
+        last: {"role": 43, "name": "Last", "extent": (0, 20, 9, 9), "states": ALL_STATES,
+               "children": []},
+    }
+    return FakeBus(nodes), root
+
+
+def test_an_object_reached_twice_is_walked_once():
+    # walking the copy spent the budget twice over: six objects, six visits
+    bus, root = _shared_subtree()
+    reads = []
+    call = bus.call
+    bus.call = lambda svc, path, iface, method, *sig: (
+        reads.append((path, method)), call(svc, path, iface, method, *sig))[1]
+    els, truncated = a11y.find_elements(bus, *root, max_nodes=6)
+    assert [e["name"] for e in els] == ["OK", "Last"]
+    assert truncated is False
+    children = [p for p, m in reads if m == "GetChildren"]
+    assert sorted(children) == sorted(set(children))  # the copy is not read again
+
+
+def test_the_field_walks_visit_each_object_once():
+    bus, root = _shared_subtree()
+    focused = ("app", "/ok")
+    bus.nodes[focused]["states"] = ALL_STATES | {a11y._STATE_FOCUSED}
+    bus.nodes[("app", "/last")]["role"] = 79
+    bus.nodes[("app", "/last")]["states"] = ALL_STATES | {a11y._STATE_EDITABLE}
+    assert a11y.editable_fields(bus, *root, max_nodes=6) == ([("app", "/last", 79)], True)
+    assert a11y.focused_role(bus, *root, max_nodes=6) == 43
+    bus.nodes[focused]["states"] = ALL_STATES
+    bus.nodes[("app", "/last")]["states"] |= {a11y._STATE_FOCUSED}
+    assert a11y.focused_text(bus, *root, max_nodes=6) == ("app", "/last", 79)
+
+
 def test_element_without_component_is_skipped():
     # GetExtents raising (no Component interface) drops the element quietly
     nodes = {
@@ -522,7 +567,23 @@ def test_editable_fields_lists_only_editable_text():
         ro: {"role": 61, "name": "", "children": [], "states": ALL_STATES},
         b: {"role": 79, "name": "", "children": [], "states": ed},
     }
-    assert a11y.editable_fields(FakeBus(nodes), *root) == [("app", "/a", 61), ("app", "/b", 79)]
+    assert a11y.editable_fields(FakeBus(nodes), *root) == (
+        [("app", "/a", 61), ("app", "/b", 79)], True)
+
+
+def test_editable_fields_says_when_it_stopped_short():
+    # a window with one field in its first elements and another past the
+    # budget must not pass for a window with one field
+    root, a, pad, b = ("app", "/root"), ("app", "/a"), ("app", "/pad"), ("app", "/b")
+    ed = ALL_STATES | {a11y._STATE_EDITABLE}
+    nodes = {
+        root: {"role": 23, "name": "w", "children": [a, pad], "states": set()},
+        a: {"role": 61, "name": "", "children": [], "states": ed},
+        pad: {"role": 39, "name": "", "children": [b], "states": set()},
+        b: {"role": 79, "name": "", "children": [], "states": ed},
+    }
+    assert a11y.editable_fields(FakeBus(nodes), *root, max_nodes=3) == (
+        [("app", "/a", 61)], False)
 
 
 
