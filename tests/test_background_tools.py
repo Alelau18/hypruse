@@ -236,7 +236,7 @@ def test_an_action_that_only_focuses_says_so_and_reads_the_focus_back(wired_bg):
     wired_bg["focused_after"] = True
     out = str(srv.click_ui(name="Save", window="0xa"))
     assert out.startswith("focused ") and "SetFocus" in out
-    assert "it now has the app's focus" in out
+    assert "the app now reports it focused" in out and "not pressed" in out
     assert wired_bg["actions"] == [("svc", "/save")]
 
 

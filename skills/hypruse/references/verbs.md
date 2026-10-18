@@ -425,7 +425,9 @@ focused text 'City' through its accessibility action (no pointer, the human's fo
 
 An element whose only action focuses it (Qt WebEngine's list rows) reads
 as `focused ... through its accessibility action 'SetFocus'`, and says
-whether the app now reports it focused: keys sent next go to it only then.
+whether the app now reports it focused. That does not show what a key sent
+next will do (Enter on a focused Qt WebEngine row did not open it), so
+check with `ui`.
 A check box or slider the app did not change ends `; no change seen`, and a
 press that closed the window ends `; the window closed`. A button or a
 focused field has no value to read back, so check its effect with `ui`. Refused in the

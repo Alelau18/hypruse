@@ -92,10 +92,11 @@ background: their cursor, keyboard focus and workspace stay where they are.
   the app itself has focused, not the field text went into: run
   `click_ui FIELD --window ADDR` first, then send the keys.
 - In a web app, a list row (a chat, a mail) is found by name when it has
-  an accessibility action. If the result says `focused ... 'SetFocus'`,
-  the row has the app's focus but is not opened: send Enter with
-  `keyboard key enter --window ADDR` only when the result says it now has
-  the app's focus.
+  an accessibility action. A result of `focused ... 'SetFocus'` means the
+  row was focused, not opened. A key sent next goes to whatever the app
+  has focused, and may do nothing: in testing, Enter on a focused Qt
+  WebEngine row did not open it. Check the effect with `ui` before going
+  on, and tell the user when a row will not open in the background.
 - Read a hidden window with `ui`, not a screenshot: hidden apps often stop
   drawing, so their pixels can be stale.
 - `pointer` is the human's cursor and is refused over any window but

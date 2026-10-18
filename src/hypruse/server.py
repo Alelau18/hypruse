@@ -1060,8 +1060,8 @@ def click_ui(
     the control back; a control with no action is refused there. When no
     control matches, a name also finds an element in another role that has
     an action (a web app's list row); if its action only focuses it, the
-    result says so and whether the app took the focus, since keys sent to
-    the window next go to it.
+    result says so and whether the app reports it focused, which does not
+    show what a key sent next will do: check with `ui`.
     `background` true or false forces one way (false takes over the human's
     screen). Pass exactly one of
     `name` (matched against `window`'s controls, exact accessible name
@@ -1385,11 +1385,10 @@ def _click_in_background(
     msg = f"{verb} {desc} through {how} ({paren}) in {cls}"
     if not any(c.get("address") == client["address"] for c in hyprctl.query("clients")):
         msg += "; the window closed"
-    elif focus_only:  # keys sent next go to the app's focused control
-        msg += ("; it now has the app's focus, so keys sent to the window go to it"
-                if a11y.is_focused(bus, svc, path) else
-                "; the app does not report it focused, so keys sent to the window may go "
-                "to another control")
+    elif focus_only:  # what the app reports, not proof a key reaches it or acts
+        msg += ("; the app now reports it focused (it is not pressed; check what a key "
+                "does with ui)" if a11y.is_focused(bus, svc, path) else
+                "; the app does not report it focused")
     elif not is_text:  # focus is not a value: a field reads the same after it
         after = a11y.current_value(bus, svc, path)
         if after != before:

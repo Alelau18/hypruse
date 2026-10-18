@@ -63,7 +63,9 @@ with no compositor plugin.
   row in a web app's list, and `ui` shows the action's name. Some actions
   only focus: Qt WebEngine's rows offer `SetFocus` and nothing else. In
   the background such a press reads as focused, not pressed, and says
-  whether the app took the focus, since keys sent next go to it.
+  whether the app reports the element focused. That does not open the
+  row, and Enter sent to a focused Qt WebEngine row did not open it
+  either.
 - A live suite, `pytest -m background`, that drives yad forms on the
   agent's workspaces and checks the human's active window, workspace and
   cursor after every step, and the compositor's focus and workspace events.
