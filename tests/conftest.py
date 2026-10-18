@@ -9,7 +9,7 @@ test that wants the interesting state opts in explicitly.
 
 import pytest
 
-from hypruse import hyprctl, journal, server, trust
+from hypruse import a11y, dbuswire, hyprctl, journal, server, trust
 
 
 @pytest.fixture(autouse=True)
@@ -97,3 +97,22 @@ def no_live_batch_query(monkeypatch):
 
     monkeypatch.setattr(hyprctl, "batch_query", unreachable)
     monkeypatch.setattr(hyprctl, "query", lambda what: unreachable([what]))
+
+
+@pytest.fixture(autouse=True)
+def no_live_accessibility(monkeypatch):
+    """a11y.connect() fails unless a test stubs it, and no D-Bus socket
+    opens through the shared connection.
+
+    Same rule: on a developer's desktop the accessibility bus carries
+    their open apps, a chat app's messages included, and a test that
+    reached it would read, or press, whatever is open there.
+    """
+    def no_bus():
+        raise a11y.A11yError("no accessibility bus in unit tests")
+
+    def no_socket(address):
+        raise dbuswire.Unreachable("no D-Bus sockets in unit tests")
+
+    monkeypatch.setattr(a11y, "connect", no_bus)
+    monkeypatch.setattr(dbuswire, "connection", no_socket)

@@ -342,7 +342,7 @@ def test_element_without_component_is_skipped():
     class NoCompBus(FakeBus):
         def call(self, svc, path, iface, method, *sig):
             if method == "GetExtents":
-                raise a11y.A11yError("no Component")
+                raise a11y.CallRefused("no Component")
             return super().call(svc, path, iface, method, *sig)
 
     els, _ = a11y.find_elements(NoCompBus(nodes), "app", "/root", actionable=True)

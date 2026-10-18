@@ -21,11 +21,18 @@ import shutil
 import subprocess
 from typing import Any
 
-from hypruse import journal
+from hypruse import dbuswire, journal
 
 
 class A11yError(RuntimeError):
-    """The accessibility bus is unreachable or a busctl call failed."""
+    """The accessibility bus is unreachable, or a call to it failed."""
+
+
+class CallRefused(A11yError):
+    """The app answered with an error: the object is gone, or lacks that
+    interface. The readers below take it as "not there". Any other
+    A11yError (no answer in time, a broken connection) propagates, so a
+    failure is never reported as an empty name or a childless element."""
 
 
 _ACCESSIBLE = "org.a11y.atspi.Accessible"
@@ -100,7 +107,7 @@ def _busctl(address: str, verb: str, *args: str) -> Any:
     except subprocess.TimeoutExpired as exc:
         raise A11yError(f"busctl {verb} timed out (unresponsive app?)") from exc
     if proc.returncode != 0:
-        raise A11yError(f"busctl {verb} failed: {proc.stderr.strip() or proc.stdout.strip()}")
+        raise CallRefused(f"busctl {verb} failed: {proc.stderr.strip() or proc.stdout.strip()}")
     try:
         return json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
@@ -117,25 +124,73 @@ def bus_address() -> str:
     return str(data[0])
 
 
+# busctl-style string arguments, typed for the wire
+_INT_TYPES = frozenset("ynqiuxth")
+
+
+def _typed(sig: str, args: tuple[str, ...]) -> list[Any]:
+    types = dbuswire.split_signature(sig)
+    if len(types) != len(args):
+        raise A11yError(f"signature {sig!r} takes {len(types)} arguments, got {len(args)}")
+    out: list[Any] = []
+    for t, v in zip(types, args, strict=True):
+        if t in _INT_TYPES:
+            out.append(int(v))
+        elif t == "b":
+            out.append(str(v).lower() in ("true", "yes", "1"))
+        elif t == "d":
+            out.append(float(v))
+        elif t in ("s", "o", "g"):
+            out.append(str(v))
+        else:
+            raise A11yError(f"cannot pass a {t!r} argument")
+    return out
+
+
 class Bus:
     """A connection to the a11y bus: every AT-SPI object is a (service,
-    object-path) pair reached with these two calls."""
+    object-path) pair reached with these two calls. They go over one
+    socket held open for the process (dbuswire), or through busctl when
+    that cannot connect."""
 
     def __init__(self, address: str):
         self.address = address
+        self._busctl = False  # set once the socket could not be reached
+
+    def _wire(self) -> dbuswire.Connection | None:
+        if self._busctl:
+            return None
+        try:
+            return dbuswire.connection(self.address)
+        except dbuswire.Unreachable:
+            self._busctl = True
+            return None
 
     def call(self, svc: str, path: str, iface: str, method: str, *sig_args: str) -> list[Any]:
-        """Return the method's out-args as a list (data[0] is the first)."""
-        return _busctl(self.address, "call", svc, path, iface, method, *sig_args)["data"]
+        """Return the method's out-args as a list (data[0] is the first).
+        `sig_args` is busctl's form: the signature, then each argument as a
+        string."""
+        wire = self._wire()
+        if wire is None:
+            return _busctl(self.address, "call", svc, path, iface, method, *sig_args)["data"]
+        sig, args = (sig_args[0], sig_args[1:]) if sig_args else ("", ())
+        try:
+            return wire.call(svc, path, iface, method, sig, _typed(sig, args))
+        except dbuswire.CallError as exc:
+            raise CallRefused(f"{method} failed: {exc}") from None
+        except dbuswire.DBusError as exc:
+            raise A11yError(f"{method} failed: {exc}") from None
 
     def prop(self, svc: str, path: str, iface: str, name: str) -> Any:
-        """A property value (busctl returns it directly, not list-wrapped)."""
-        return _busctl(self.address, "get-property", svc, path, iface, name)["data"]
+        """A property value (not list-wrapped)."""
+        if self._wire() is None:
+            return _busctl(self.address, "get-property", svc, path, iface, name)["data"]
+        return self.call(svc, path, "org.freedesktop.DBus.Properties", "Get", "ss", iface, name)[0]
 
     def conn_pid(self, svc: str) -> int | None:
         try:
             return int(self.call(*_DBUS, "GetConnectionUnixProcessID", "s", svc)[0])
-        except (A11yError, ValueError, IndexError):
+        except (CallRefused, ValueError, IndexError):
             return None
 
 
@@ -334,28 +389,28 @@ def window_frame_for(
 def _name(bus: Bus, svc: str, path: str) -> str:
     try:
         return str(bus.prop(svc, path, _ACCESSIBLE, "Name") or "")
-    except A11yError:
+    except CallRefused:
         return ""
 
 
 def _role_num(bus: Bus, svc: str, path: str) -> int:
     try:
         return int(bus.call(svc, path, _ACCESSIBLE, "GetRole")[0])
-    except (A11yError, IndexError, ValueError):
+    except (CallRefused, IndexError, ValueError):
         return -1
 
 
 def _role_name(bus: Bus, svc: str, path: str) -> str:
     try:
         return str(bus.call(svc, path, _ACCESSIBLE, "GetRoleName")[0])
-    except (A11yError, IndexError):
+    except (CallRefused, IndexError):
         return ""
 
 
 def _children(bus: Bus, svc: str, path: str) -> list[tuple[str, str]]:
     try:
         return [(cs, cp) for cs, cp in bus.call(svc, path, _ACCESSIBLE, "GetChildren")[0]]
-    except (A11yError, IndexError, ValueError):
+    except (CallRefused, IndexError, ValueError):
         return []
 
 
@@ -368,7 +423,7 @@ def _window_extents(bus: Bus, svc: str, path: str) -> tuple[int, int, int, int] 
     try:
         x, y, w, h = bus.call(svc, path, _COMPONENT, "GetExtents", "u", str(COORD_WINDOW))[0]
         x, y, w, h = int(x), int(y), int(w), int(h)
-    except (A11yError, IndexError, ValueError):
+    except (CallRefused, IndexError, ValueError):
         return None
     if w <= 0 or h <= 0:
         return None
@@ -380,7 +435,7 @@ def _window_extents(bus: Bus, svc: str, path: str) -> tuple[int, int, int, int] 
 def _states(bus: Bus, svc: str, path: str) -> set[int]:
     try:
         words = bus.call(svc, path, _ACCESSIBLE, "GetState")[0]
-    except (A11yError, IndexError):
+    except (CallRefused, IndexError):
         return set()
     out: set[int] = set()
     for wi, word in enumerate(words):
@@ -395,7 +450,7 @@ def _interfaces(bus: Bus, svc: str, path: str) -> set[str]:
     called where they exist (calling them blind raises UnknownMethod)."""
     try:
         return {i.rsplit(".", 1)[-1] for i in bus.call(svc, path, _ACCESSIBLE, "GetInterfaces")[0]}
-    except (A11yError, IndexError, TypeError):
+    except (CallRefused, IndexError, TypeError):
         return set()
 
 
@@ -420,7 +475,7 @@ def element_value(bus: Bus, svc: str, path: str, role: int, states: set[int]) ->
             end = min(count, _MAX_TEXT)
             text = str(bus.call(svc, path, _TEXT, "GetText", "ii", "0", str(end))[0])
             return {"value": text + ("..." if count > end else "")}
-        except (A11yError, IndexError, ValueError, TypeError):
+        except (CallRefused, IndexError, ValueError, TypeError):
             return {}
     if role in _VALUE_ROLES:
         if "Value" not in _interfaces(bus, svc, path):
@@ -429,7 +484,7 @@ def element_value(bus: Bus, svc: str, path: str, role: int, states: set[int]) ->
             current = float(bus.prop(svc, path, _VALUE, "CurrentValue"))
             low = float(bus.prop(svc, path, _VALUE, "MinimumValue"))
             high = float(bus.prop(svc, path, _VALUE, "MaximumValue"))
-        except (A11yError, ValueError, TypeError):
+        except (CallRefused, ValueError, TypeError):
             return {}
         out: dict[str, Any] = {"value": current}
         if high > low:  # raw units are toolkit-specific; a percent is readable
@@ -449,7 +504,7 @@ def _clickable_now(states: set[int]) -> bool:
 
 
 # How many elements one walk of a window reads before it stops
-WALK_BUDGET = 400
+WALK_BUDGET = 2000
 
 
 class _Walk:
@@ -556,7 +611,7 @@ def _related(bus: Bus, svc: str, path: str, rel_type: int) -> list[tuple[str, st
     """The targets of one AT-SPI relation type (LABEL_FOR, LABELLED_BY)."""
     try:
         rels = bus.call(svc, path, _ACCESSIBLE, "GetRelationSet")[0]
-    except (A11yError, IndexError):
+    except (CallRefused, IndexError):
         return []
     out: list[tuple[str, str]] = []
     for kind, targets in rels:
@@ -618,7 +673,7 @@ def current_value(bus: Bus, svc: str, path: str) -> dict[str, Any]:
     for reading a background action back; {} when it carries none."""
     try:
         return element_value(bus, svc, path, _role_num(bus, svc, path), _states(bus, svc, path))
-    except A11yError:
+    except CallRefused:
         return {}
 
 
@@ -632,7 +687,7 @@ def action_name(bus: Bus, svc: str, path: str, index: int = 0) -> str:
     "Press", "SetFocus"), or "" when it cannot be read."""
     try:
         return str(bus.call(svc, path, _ACTION, "GetName", "i", str(index))[0])
-    except (A11yError, IndexError):
+    except (CallRefused, IndexError):
         return ""
 
 
@@ -647,7 +702,7 @@ def has_action(bus: Bus, svc: str, path: str) -> bool:
     AT-SPI, not a method."""
     try:
         return int(bus.prop(svc, path, _ACTION, "NActions")) > 0
-    except (A11yError, IndexError, ValueError):
+    except (CallRefused, IndexError, ValueError):
         return False
 
 
@@ -657,7 +712,7 @@ def grab_focus(bus: Bus, svc: str, path: str) -> bool:
     journal.refuse_if_dry("grab_focus")
     try:
         return bool(bus.call(svc, path, _COMPONENT, "GrabFocus")[0])
-    except (A11yError, IndexError):
+    except (CallRefused, IndexError):
         return False
 
 
@@ -666,7 +721,7 @@ def text_of(bus: Bus, svc: str, path: str) -> str:
     try:
         n = int(bus.prop(svc, path, _TEXT, "CharacterCount"))
         return str(bus.call(svc, path, _TEXT, "GetText", "ii", "0", str(n))[0])
-    except (A11yError, IndexError, ValueError):
+    except (CallRefused, IndexError, ValueError):
         return ""
 
 
@@ -677,7 +732,7 @@ def toolkit(bus: Bus, svc: str) -> tuple[str, str]:
         name = bus.prop(svc, _ROOT, "org.a11y.atspi.Application", "ToolkitName")
         version = bus.prop(svc, _ROOT, "org.a11y.atspi.Application", "Version")
         return str(name), str(version)
-    except A11yError:
+    except CallRefused:
         return "", ""
 
 
@@ -695,7 +750,7 @@ def insert_text(bus: Bus, svc: str, path: str, text: str) -> bool:
             bus.call(svc, path, _EDITABLE, "InsertText", "isi",
                      str(max(caret, 0)), text, str(length))[0]
         )
-    except (A11yError, IndexError, ValueError):
+    except (CallRefused, IndexError, ValueError):
         return False
 
 
@@ -736,5 +791,5 @@ def do_action(bus: Bus, svc: str, path: str, index: int = 0) -> bool:
     journal.refuse_if_dry("do_action")
     try:
         return bool(bus.call(svc, path, _ACTION, "DoAction", "i", str(index))[0])
-    except (A11yError, IndexError):
+    except (CallRefused, IndexError):
         return False

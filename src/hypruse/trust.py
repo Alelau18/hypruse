@@ -920,8 +920,8 @@ def _auth_guard_on() -> bool:
 
 
 def _auth_strict() -> bool:
-    # the password-field check walks the a11y tree (busctl subprocesses per
-    # node), too costly for every keystroke, so it is opt-in
+    # the password-field check walks the a11y tree, a call or two per
+    # element, too costly for every keystroke, so it is opt-in
     return os.environ.get("HYPRUSE_AUTH_GUARD", "1").lower() in ("strict", "2", "field", "fields")
 
 
