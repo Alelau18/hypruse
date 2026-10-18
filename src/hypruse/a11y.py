@@ -504,6 +504,7 @@ def find_elements(
     absence."""
     needle = name.lower()
     results: list[dict[str, Any]] = []
+    fallback: list[dict[str, Any]] = []  # named, with an action, in a role not listed
     seen: set[tuple[str, str]] = set()  # a field found through its label is not listed twice
     walk = _Walk(bus, (app_svc, app_path), max_nodes)
     for svc, path in walk:
@@ -527,6 +528,14 @@ def find_elements(
                 continue  # the label itself is not something to click
         editable = role_num in _TEXT_ROLES and _STATE_EDITABLE in _states(bus, svc, path)
         if actionable and role_num not in ACTIONABLE_ROLE_NUMS and not editable:
+            # a name can still find a control in a role the list leaves out (a
+            # web app's list row or cell) when it has an action, but only when
+            # no listed control matches: a name that found one keeps finding it
+            if needle and len(fallback) < max_results and _has_actions(bus, svc, path):
+                item = _element(bus, svc, path, role_num, nm, actionable=False)
+                if item is not None:
+                    item["action"] = action_name(bus, svc, path)
+                    fallback.append(item)
             continue
         if editable and not nm:
             nm = next((_name(bus, ls, lp) for ls, lp in
@@ -539,6 +548,7 @@ def find_elements(
         if item is not None:
             seen.add((svc, path))
             results.append(item)
+    results = results or fallback
     return results, walk.truncated and len(results) < max_results
 
 
@@ -610,6 +620,25 @@ def current_value(bus: Bus, svc: str, path: str) -> dict[str, Any]:
         return element_value(bus, svc, path, _role_num(bus, svc, path), _states(bus, svc, path))
     except A11yError:
         return {}
+
+
+def _has_actions(bus: Bus, svc: str, path: str) -> bool:
+    # the interface first: NActions on an object without one is an error
+    return "Action" in _interfaces(bus, svc, path) and has_action(bus, svc, path)
+
+
+def action_name(bus: Bus, svc: str, path: str, index: int = 0) -> str:
+    """The name of an element's action, as the toolkit gives it ("click",
+    "Press", "SetFocus"), or "" when it cannot be read."""
+    try:
+        return str(bus.call(svc, path, _ACTION, "GetName", "i", str(index))[0])
+    except (A11yError, IndexError):
+        return ""
+
+
+def is_focused(bus: Bus, svc: str, path: str) -> bool:
+    """Whether the element reports the app's own keyboard focus."""
+    return _STATE_FOCUSED in _states(bus, svc, path)
 
 
 def has_action(bus: Bus, svc: str, path: str) -> bool:

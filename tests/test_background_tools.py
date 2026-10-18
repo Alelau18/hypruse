@@ -63,6 +63,10 @@ def wired_bg(monkeypatch):
     monkeypatch.setattr(srv.hinput, "type_text", lambda t: s["typed"].append(t))
     monkeypatch.setattr(srv.a11y, "connect", lambda: object())
     monkeypatch.setattr(srv.a11y, "has_action", lambda bus, svc, path: s["has_action"])
+    s["action_name"], s["focused_after"] = "click", False
+    monkeypatch.setattr(srv.a11y, "action_name",
+                        lambda bus, svc, path, index=0: s["action_name"])
+    monkeypatch.setattr(srv.a11y, "is_focused", lambda bus, svc, path: s["focused_after"])
     monkeypatch.setattr(srv.a11y, "do_action",
                         lambda bus, svc, path, index=0: s["actions"].append((svc, path)) or True)
     monkeypatch.setattr(srv.a11y, "grab_focus",
@@ -218,6 +222,35 @@ def test_a_mark_from_an_unproven_frame_is_refused_in_the_background(wired_bg, mo
     with pytest.raises(srv.trust.TrustError, match="cannot tell"):
         srv.click_ui(mark=1)
     assert wired_bg["actions"] == []
+
+
+def test_a_press_says_it_pressed_and_claims_no_focus(wired_bg):
+    out = str(srv.click_ui(name="Save", window="0xa"))
+    assert out.startswith("pressed ") and "focused" not in out.split(";")[0]
+
+
+def test_an_action_that_only_focuses_says_so_and_reads_the_focus_back(wired_bg):
+    # Qt WebEngine's list rows offer SetFocus and nothing else: the row is
+    # focused, not opened, and keys sent next go to it only if it took focus
+    wired_bg["action_name"] = "SetFocus"
+    wired_bg["focused_after"] = True
+    out = str(srv.click_ui(name="Save", window="0xa"))
+    assert out.startswith("focused ") and "SetFocus" in out
+    assert "it now has the app's focus" in out
+    assert wired_bg["actions"] == [("svc", "/save")]
+
+
+def test_a_focus_the_app_does_not_confirm_is_reported(wired_bg):
+    wired_bg["action_name"] = "SetFocus"
+    out = str(srv.click_ui(name="Save", window="0xa"))
+    assert "does not report it focused" in out
+
+
+def test_a_dry_run_of_a_focus_action_says_focus(wired_bg, monkeypatch):
+    monkeypatch.setattr(srv.journal, "dry_run", lambda: True)
+    wired_bg["action_name"] = "SetFocus"
+    out = str(srv.click_ui(name="Save", window="0xa"))
+    assert "would focus" in out and wired_bg["actions"] == []
 
 
 def test_focusing_a_text_field_does_not_claim_no_change(wired_bg):

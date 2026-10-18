@@ -112,6 +112,8 @@ class FakeBus:
         if method == "DoAction":
             node["done"] = True
             return [True]
+        if method == "GetName":  # Action.GetName(index)
+            return [node.get("actions", ["click"])[int(sig[1])]]
         if method == "GetRelationSet":
             return [[[t, [list(x) for x in targets]] for t, targets in node.get("relations", [])]]
         if method == "GrabFocus":
@@ -270,6 +272,63 @@ def test_the_field_walks_visit_each_object_once():
     bus.nodes[focused]["states"] = ALL_STATES
     bus.nodes[("app", "/last")]["states"] |= {a11y._STATE_FOCUSED}
     assert a11y.focused_text(bus, *root, max_nodes=6) == ("app", "/last", 79)
+
+
+_ACTION_IFACES = ["org.a11y.atspi.Accessible", "org.a11y.atspi.Action",
+                  "org.a11y.atspi.Component"]
+
+
+def _chat_list(with_button=False):
+    # a web app's list row: the row and its cells carry the chat's text as
+    # their names, and only one cell has an action (Qt WebEngine: SetFocus)
+    root, row, cell, label = ("app", "/root"), ("app", "/row"), ("app", "/cell"), ("app", "/lbl")
+    btn = ("app", "/btn")
+    nodes = {
+        root: {"role": 23, "name": "w", "children": [btn, row] if with_button else [row]},
+        row: {"role": 90, "name": "Yasser Hajbi 19:09 hello", "children": [cell],
+              "extent": (0, 100, 400, 60), "states": ALL_STATES},
+        cell: {"role": 56, "name": "Yasser Hajbi 19:09 hello", "children": [label],
+               "extent": (0, 100, 400, 60), "states": ALL_STATES, "ifaces": _ACTION_IFACES,
+               "actions": ["SetFocus"]},
+        label: {"role": 29, "name": "Yasser Hajbi", "children": [],
+                "extent": (60, 100, 100, 20), "states": ALL_STATES},
+        btn: {"role": 43, "name": "Call Yasser", "children": [],
+              "extent": (300, 0, 40, 40), "states": ALL_STATES},
+    }
+    return FakeBus(nodes), root
+
+
+def test_a_named_element_with_an_action_is_found_when_no_control_matches():
+    bus, root = _chat_list()
+    els, _ = a11y.find_elements(bus, *root, name="yasser hajbi")
+    assert [(e["path"], e["action"]) for e in els] == [("/cell", "SetFocus")]
+
+
+def test_a_listed_control_is_preferred_over_an_element_with_an_action():
+    # every name that found a control before finds the same one now
+    bus, root = _chat_list(with_button=True)
+    els, _ = a11y.find_elements(bus, *root, name="yasser")
+    assert [e["path"] for e in els] == ["/btn"]
+
+
+def test_elements_with_actions_are_not_listed_without_a_name():
+    bus, root = _chat_list()
+    assert a11y.find_elements(bus, *root)[0] == []
+
+
+def test_an_element_whose_action_list_is_empty_is_not_offered():
+    bus, root = _chat_list()
+    bus.nodes[("app", "/cell")]["n_actions"] = 0
+    assert a11y.find_elements(bus, *root, name="yasser hajbi")[0] == []
+
+
+def test_action_name_and_focus_are_read():
+    bus, _ = _chat_list()
+    cell = ("app", "/cell")
+    assert a11y.action_name(bus, *cell) == "SetFocus"
+    assert a11y.is_focused(bus, *cell) is False
+    bus.nodes[cell]["states"] = ALL_STATES | {a11y._STATE_FOCUSED}
+    assert a11y.is_focused(bus, *cell) is True
 
 
 def test_element_without_component_is_skipped():

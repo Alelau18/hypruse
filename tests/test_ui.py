@@ -108,6 +108,14 @@ def test_ui_truncation_is_surfaced(wired):
     assert "name filter" not in out
 
 
+def test_ui_names_the_action_of_an_element_found_by_it(wired):
+    wired.setattr(srv.a11y, "app_for_pid", lambda *a: ("a", "/root"))
+    wired.setattr(srv.a11y, "find_elements", lambda *a, **k: (
+        [{"role": "table cell", "name": "Yasser", "extent": (10, 20, 80, 40),
+          "clickable": True, "action": "SetFocus"}], False))
+    assert srv.ui(window="0xw", name="Yasser")[0]["action"] == "SetFocus"
+
+
 def test_ui_says_a_listing_was_cut_short(wired):
     wired.setattr(srv.a11y, "app_for_pid", lambda *a: ("a", "/root"))
     wired.setattr(srv.a11y, "find_elements", lambda *a, **k: (

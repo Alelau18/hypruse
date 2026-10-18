@@ -491,7 +491,7 @@ def _ui_read(
             "y": y,
             "clickable": e["clickable"],
         }
-        for key in ("value", "percent", "checked"):  # present only where it applies
+        for key in ("value", "percent", "checked", "action"):  # only where it applies
             if key in e:
                 item[key] = e[key]
         if handles and exact is not None:  # what a background press needs
@@ -522,7 +522,10 @@ def ui(window: str = "", name: str = "", actionable: bool = True) -> list[Any] |
     screenshot and no pixel guessing. `window` is an address from desktop
     (default: the focused window). `name` filters to elements whose
     accessible name contains it (case-insensitive); `actionable` (default)
-    keeps only interactive roles (buttons, entries, menu items, ...).
+    keeps only interactive roles (buttons, entries, menu items, ...); with
+    a `name` that matches none of those, it keeps named elements in other
+    roles that have an accessibility action (a web app's list row), with
+    the action's name as `action`.
     Returns [{role, name, x, y, clickable}] where x,y is the click point:
     focus the window, then click it with `pointer` (the window must be
     visible to receive the click, and focusing can move it, so read again
@@ -1054,7 +1057,11 @@ def click_ui(
     guarantees). On any other window it runs in the background: the
     control's accessibility action presses it (a text field gets the app's
     own focus), the human's cursor and focus stay put, and the result reads
-    the control back; a control with no action is refused there.
+    the control back; a control with no action is refused there. When no
+    control matches, a name also finds an element in another role that has
+    an action (a web app's list row); if its action only focuses it, the
+    result says so and whether the app took the focus, since keys sent to
+    the window next go to it.
     `background` true or false forces one way (false takes over the human's
     screen). Pass exactly one of
     `name` (matched against `window`'s controls, exact accessible name
@@ -1340,6 +1347,11 @@ def _click_in_background(
     bus = a11y.connect()
     if not is_text and not a11y.has_action(bus, svc, path):
         bg.refuse("this control has no accessibility action")
+    # an action that only focuses (Qt WebEngine's list rows offer just
+    # SetFocus) does not press: the result must not say it did
+    action = "" if is_text else a11y.action_name(bus, svc, path)
+    focus_only = "focus" in action.lower()
+    how = f"its accessibility action {action!r}" if focus_only else "its accessibility action"
     if is_text:
         kit, version = a11y.toolkit(bus, svc)
         kit = kit.lower()
@@ -1358,8 +1370,8 @@ def _click_in_background(
                 instead,
             )
     if journal.dry_run():
-        verb_ = "focus" if is_text else "press"
-        return _acted(f"{_DRY} {verb_} {desc} in {cls} through its accessibility action",
+        verb_ = "focus" if is_text or focus_only else "press"
+        return _acted(f"{_DRY} {verb_} {desc} in {cls} through {how}",
                       then, window=client["address"])
     seat = _seat_now()
     before = a11y.current_value(bus, svc, path)
@@ -1367,12 +1379,17 @@ def _click_in_background(
     if not ok:
         bg.refuse("the app did not accept the accessibility action")
     time.sleep(0.05)  # let the app apply it before reading back
-    verb = "focused" if is_text else "pressed"
+    verb = "focused" if is_text or focus_only else "pressed"
     untouched, warning = _seat_report(seat)
     paren = "no pointer, the human's focus untouched" if untouched else "no pointer"
-    msg = f"{verb} {desc} through its accessibility action ({paren}) in {cls}"
+    msg = f"{verb} {desc} through {how} ({paren}) in {cls}"
     if not any(c.get("address") == client["address"] for c in hyprctl.query("clients")):
         msg += "; the window closed"
+    elif focus_only:  # keys sent next go to the app's focused control
+        msg += ("; it now has the app's focus, so keys sent to the window go to it"
+                if a11y.is_focused(bus, svc, path) else
+                "; the app does not report it focused, so keys sent to the window may go "
+                "to another control")
     elif not is_text:  # focus is not a value: a field reads the same after it
         after = a11y.current_value(bus, svc, path)
         if after != before:
@@ -2419,7 +2436,10 @@ _READONLY_DOCS = {
     address from desktop (default: the focused window). `name` filters to
     elements whose accessible name contains it (case-insensitive);
     `actionable` (default) keeps only interactive roles (buttons, entries,
-    menu items, ...). Returns [{role, name, x, y, clickable}]. Controls
+    menu items, ...); with a `name` that matches none of those, it keeps
+    named elements in other roles that have an accessibility action (a web
+    app's list row), with the action's name as `action`. Returns
+    [{role, name, x, y, clickable}]. Controls
     that carry a CURRENT VALUE also report it: `value` (text typed into an
     entry, or a slider/spinner number), `percent` for a slider's position,
     `checked` for a box or toggle. Password fields never report contents,
