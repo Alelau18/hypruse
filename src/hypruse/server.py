@@ -823,7 +823,9 @@ def _acted(msg: str, then: str, window: str = "", fallback: bool = True) -> list
     without spending a second round-trip. `then='desktop'` appends a
     semantic snapshot (~30 ms, a few hundred tokens, best for window/focus
     changes); `'screenshot'` appends a stable capture of the focused
-    monitor (best for visual changes); `'ui'` appends the accessible
+    monitor (best for visual changes), or of `window` itself after a
+    background action (fallback=False), whose window the human's monitor
+    does not show; `'ui'` appends the accessible
     elements of `window` (the acted-on window when the caller knows it,
     else the focused one) with their CURRENT values (a few hundred exact
     tokens instead of an image: best after typing or toggling in an app
@@ -842,7 +844,14 @@ def _acted(msg: str, then: str, window: str = "", fallback: bool = True) -> list
             return _observe_failed(msg, then, exc)
     if then == "screenshot":
         try:
-            return [head, *_deliver_capture(stable=True)]
+            if window and not fallback:
+                # a background action: the focused monitor shows the
+                # human's own work, not the window that was acted on. The
+                # window's own capture (grim -T) says when it is not on
+                # screen and may be stale.
+                return [head, *_deliver_capture(window=window, stable=True)]
+            return [head, *_deliver_capture(
+                stable=True, extra={"view": "the focused monitor, as the human sees it"})]
         except Exception as exc:
             return _observe_failed(msg, then, exc)
     if then == "ui":

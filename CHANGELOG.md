@@ -37,6 +37,13 @@ All notable changes to this project are documented here. The format follows
   releases it.
 
 ### Fixed
+- **`then='screenshot'` after a background action shows that window.** It
+  captured the focused monitor, which shows the human's own work, not the
+  window acted on. A background `click_ui`, a background `keyboard`, and a
+  `sequence` whose steps named a window now capture that window (`grim -T`,
+  which marks a hidden window `visible: false` and possibly stale); other
+  captures say in their metadata (`view`) that they show the human's
+  focused monitor.
 - **A background field focus could switch the human's workspace.** The
   GTK 2/3 refusal read `hyprctl getprop ... focus_on_activate`, which
   prints false whenever no window rule sets it, as the setting being off.

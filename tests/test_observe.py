@@ -448,3 +448,22 @@ def test_an_unknown_then_is_refused_before_acting(monkeypatch):
     with pytest.raises(ValueError, match="unknown then 'image'"):
         srv.pointer("click", x=1, y=2, then="image")
     assert clicked == []
+
+
+def test_a_background_screenshot_shows_the_acted_on_window(monkeypatch):
+    # the human's monitor shows their own work, not the hidden window
+    seen = []
+    monkeypatch.setattr(srv, "_deliver_capture",
+                        lambda **kw: seen.append(kw) or [TextContent(type="text", text="IMG")])
+    srv._acted("pressed", "screenshot", window="0xa", fallback=False)
+    assert seen == [{"window": "0xa", "stable": True}]
+
+
+def test_a_foreground_screenshot_says_it_is_the_humans_monitor(monkeypatch):
+    seen = []
+    monkeypatch.setattr(srv, "_deliver_capture",
+                        lambda **kw: seen.append(kw) or [TextContent(type="text", text="IMG")])
+    srv._acted("clicked", "screenshot", window="0xa")  # fallback: a foreground click_ui
+    srv._acted("clicked", "screenshot")
+    assert [kw.get("window") for kw in seen] == [None, None]
+    assert all(kw["extra"]["view"].startswith("the focused monitor") for kw in seen)
