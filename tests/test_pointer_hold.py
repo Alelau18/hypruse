@@ -468,3 +468,28 @@ def test_a_drag_in_flight_is_not_a_down_waiting_for_its_up(monkeypatch):
     monkeypatch.setattr(hinput, "_down", None)
     hinput.check_down("left")  # no raise
     assert hinput.held_button() is None
+
+
+def test_a_hold_from_before_the_sequence_is_left_alone(tool, monkeypatch):
+    monkeypatch.setattr(srv.events, "EventStream", lambda: (_ for _ in ()).throw(
+        srv.events.EventError("no socket")))
+    released = []
+    monkeypatch.setattr(hinput, "release_held", _releases(released))
+    srv.pointer("down")  # the caller's own hold, from an earlier call
+    out = srv.sequence([{"op": "pointer", "action": "move", "x": 5, "y": 5},
+                        {"op": "pointer", "action": "fling"}], then="none")
+    assert released == [] and hinput.held_button() == "left" and "released" not in out
+
+
+def test_a_button_released_and_pressed_again_in_the_run_is_released(tool, monkeypatch):
+    # the hold before the run and after it are the same button, but the
+    # press that is left is the run's own
+    monkeypatch.setattr(srv.events, "EventStream", lambda: (_ for _ in ()).throw(
+        srv.events.EventError("no socket")))
+    released = []
+    monkeypatch.setattr(hinput, "release_held", _releases(released))
+    srv.pointer("down")
+    out = srv.sequence([{"op": "pointer", "action": "up"},
+                        {"op": "pointer", "action": "down", "x": 9, "y": 9},
+                        {"op": "pointer", "action": "fling"}], then="none")
+    assert released == ["left"] and "released the left button a step had pressed" in out

@@ -2612,7 +2612,9 @@ def sequence(
 
     results: list[str] = []
     stopped: str | None = None
-    held_before = hinput.held_button()
+    # the button a step of THIS run pressed and nothing released since: a
+    # hold from before the sequence is the caller's, a re-press is ours
+    pressed_here: str | None = None
     prev_expected: set[str] = set()
     backlog: list[tuple[str, dict[str, Any]]] = []  # drained events a wait step may consume
     deadline = time.monotonic() + _SEQ_BUDGET
@@ -2667,7 +2669,15 @@ def sequence(
                 elif step.get("op") == "wait_for" and stream is not None:
                     res = _seq_wait_for(stream, backlog, run, budget_left)
                 else:
-                    res = _dispatch_step(run)
+                    before_step = hinput.held_button()
+                    try:
+                        res = _dispatch_step(run)
+                    finally:
+                        after_step = hinput.held_button()
+                        if after_step is None:
+                            pressed_here = None
+                        elif after_step != before_step:
+                            pressed_here = after_step
             except Exception as exc:
                 results.append(f"[{i}] {step.get('op')}: ERROR {exc}")
                 stopped = f"step {i} raised: {exc}"
@@ -2697,7 +2707,7 @@ def sequence(
             stream.close()
 
     held = hinput.held_button()
-    if stopped is not None and held and held != held_before:
+    if stopped is not None and held and held == pressed_here:
         # a step pressed a button and the step that would release it never
         # ran: finish what was started rather than leave the human's
         # pointer stuck down
