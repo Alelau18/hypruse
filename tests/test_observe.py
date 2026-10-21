@@ -182,6 +182,14 @@ def test_pointer_warns_under_a_focus_stealing_layer(monkeypatch, action, extra):
     assert "rofi" in out and "not to any window beneath" in out
 
 
+def test_pointer_drag_passes_its_pace_through(monkeypatch):
+    _pointer_wired(monkeypatch, lambda x, y: None)
+    seen = []
+    monkeypatch.setattr(srv.hinput, "drag", lambda *a, **k: seen.append((a, k)))
+    srv.pointer("drag", x=1, y=2, to_x=3, to_y=4, duration_ms=500, steps=25)
+    assert seen == [((1, 2, 3, 4), {"button": "left", "duration_ms": 500, "steps": 25})]
+
+
 def test_pointer_click_is_silent_without_a_covering_layer(monkeypatch):
     _pointer_wired(monkeypatch, lambda x, y: None)
     assert srv.pointer("click", x=600, y=350) == "click ok; cursor now at (600, 350)"

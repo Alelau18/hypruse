@@ -153,6 +153,10 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("to_x", type=float, metavar="TO_X")
     a.add_argument("to_y", type=float, metavar="TO_Y")
     a.add_argument("--button", choices=("left", "right", "middle"), default=_S)
+    a.add_argument("--duration-ms", dest="duration_ms", type=float, default=_S, metavar="MS",
+                   help="how long the path takes, 0-5000, default 200")
+    a.add_argument("--steps", type=int, default=_S, metavar="N",
+                   help="moves along the path, 1-100, default 12")
     a = ps.add_parser("scroll", help="scroll DY notches (positive: content down), DX sideways")
     a.add_argument("dy", type=float, metavar="DY")
     # no type=float here: argparse before 3.12.7 (gh-80259) runs an omitted

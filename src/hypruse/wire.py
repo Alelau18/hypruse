@@ -299,6 +299,22 @@ class VirtualPointer:
         if self._pos is not None:
             self._pos = (self._pos[0] + dx, self._pos[1] + dy)
 
+    def nudge(self) -> None:
+        """A net-zero relative motion: +1,0 in one frame, then -1,0 in the next.
+
+        A cursor warp (the compositor's movecursor) repositions the cursor
+        without sending wl_pointer.motion to every client: XWayland, Wine and
+        GameMaker games in particular never hear about it, so hover and drag
+        do nothing there. Two real motion events at the target point are what
+        a physical mouse would have sent, and they cancel out, so the cursor
+        ends where the warp put it. Two frames, not one: a client sums the
+        motion inside one frame, and a frame that sums to zero is no motion."""
+        for dx in (1, -1):
+            body = struct.pack("<Iii", _now_ms(), to_fixed(dx), 0)
+            self._send(self._pointer, PTR_MOTION, body)
+            self._send(self._pointer, PTR_FRAME)
+        self._roundtrip()
+
     def move_to(self, x: float, y: float) -> None:
         """Absolute positioning, built out of relative motion.
 

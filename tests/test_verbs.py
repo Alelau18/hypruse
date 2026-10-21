@@ -130,6 +130,11 @@ def test_only_passed_flags_reach_the_tool():
     assert kwargs_of("pointer", "drag", "1", "2", "3", "4", "--allow-auth") == {
         "action": "drag", "x": 1.0, "y": 2.0, "to_x": 3.0, "to_y": 4.0, "allow_auth": True,
     }
+    assert kwargs_of("pointer", "drag", "1", "2", "3", "4", "--duration-ms", "900",
+                     "--steps", "30") == {
+        "action": "drag", "x": 1.0, "y": 2.0, "to_x": 3.0, "to_y": 4.0,
+        "duration_ms": 900.0, "steps": 30,
+    }
     assert kwargs_of("pointer", "scroll", "3") == {"action": "scroll", "scroll_dy": 3.0}
     assert kwargs_of("pointer", "scroll", "-2", "1", "--at", "10", "20") == {
         "action": "scroll", "scroll_dy": -2.0, "scroll_dx": 1.0, "x": 10.0, "y": 20.0,

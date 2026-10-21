@@ -129,6 +129,12 @@ running inside the compositor.
   [hyprwm/Hyprland#6749](https://github.com/hyprwm/Hyprland/issues/6749).
   On a named seat it goes over the wire instead, because that dispatcher
   moves the one cursor the human owns.
+- **Motion** after every warp: a net-zero relative wiggle (+1 then -1, in
+  two frames) on the virtual pointer. A warp sends no `wl_pointer.motion`
+  to XWayland or Wine clients, so without it hover did nothing there and a
+  drag looked like a press and a release with nothing between; a drag is
+  therefore a warp plus wiggle at every step. `HYPRUSE_POINTER_NUDGE=0`
+  turns it off.
 - **Buttons/axis** via a virtual pointer created over the raw wire
   (`wire.py` is ~250 lines: registry scan, bind, button/axis/frame, sync
   barrier, wl_display.error surfacing). No daemon, no uinput, no root.

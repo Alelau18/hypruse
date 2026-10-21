@@ -86,6 +86,18 @@ def test_pointer_drag(dry):
     assert dry == []
 
 
+def test_pointer_drag_with_its_pace(dry):
+    out = plan(srv.pointer("drag", x=1, y=2, to_x=3, to_y=4, duration_ms=800, steps=40))
+    assert "from (1, 2) to (3, 4) over 800 ms in 40 steps" in out
+    assert dry == []
+
+
+def test_pointer_drag_bounds_refuse_in_rehearsal_too(dry):
+    with pytest.raises(hinput.InputError, match="steps"):
+        srv.pointer("drag", x=1, y=2, to_x=3, to_y=4, steps=0)
+    assert dry == []
+
+
 def test_pointer_scroll(dry):
     assert "would scroll dy=3" in plan(srv.pointer("scroll", scroll_dy=3, x=5, y=6))
     assert dry == []

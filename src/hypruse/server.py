@@ -859,18 +859,24 @@ def pointer(
     scroll_dy: float = 0,
     scroll_dx: float = 0,
     double: bool = False,
+    duration_ms: float = hinput.DRAG_DURATION_MS,
+    steps: int = hinput.DRAG_STEPS,
     then: str = "none",
     allow_auth: bool = False,
     background: bool | None = None,
 ) -> list[Any] | str:
     """Mouse in global coordinates. action='move' (x,y) | 'click' (optional
     x,y first; button left/right/middle; double=true) | 'drag' (x,y →
-    to_x,to_y holding button) | 'scroll' (scroll_dy notches, positive =
-    content down; optional x,y first). `then` appends the result to this
-    call so you skip a round-trip: 'desktop' a fresh snapshot, 'screenshot'
-    a stable capture, 'ui' the focused window's elements with current
-    values, 'none' (default) nothing. `allow_auth=true` overrides the
-    refusal to click over a system authentication dialog. The pointer is
+    to_x,to_y holding button, over `duration_ms` (default 200, max 5000)
+    in `steps` moves (default 12, max 100); slow it down for an app that
+    samples the mouse per frame) | 'scroll' (scroll_dy notches, positive =
+    content down; optional x,y first). Every cursor move is a warp plus a
+    tiny real motion, so games under XWayland or Wine see hover and drags.
+    `then` appends the result to this call so you skip a round-trip:
+    'desktop' a fresh snapshot, 'screenshot' a stable capture, 'ui' the
+    focused window's elements with current values, 'none' (default)
+    nothing. `allow_auth=true` overrides the refusal to click over a
+    system authentication dialog. The pointer is
     the human's own cursor, so it never runs in the background: it is
     refused where the input would land on a window other than the one the
     human is in (press controls there with click_ui), unless
@@ -917,12 +923,16 @@ def pointer(
         if None in (x, y, to_x, to_y):
             raise ValueError("drag needs x, y, to_x, to_y")
         hinput.check_button(button)
+        hinput.check_drag(duration_ms, steps)
         trust.guard_pointer(x, y, allow_auth)
         trust.guard_pointer(to_x, to_y, allow_auth)  # the drag ends elsewhere; guard that too
         note = note or _layer_note(x, y)
         plan = f"drag {button} from {_at(x, y)} to {_at(to_x, to_y)}"
+        if (duration_ms, steps) != (hinput.DRAG_DURATION_MS, hinput.DRAG_STEPS):
+            plan += f" over {duration_ms:g} ms in {steps} steps"
         if not dry:
-            hinput.drag(x, y, to_x, to_y, button=button)  # type: ignore[arg-type]
+            hinput.drag(x, y, to_x, to_y, button=button,  # type: ignore[arg-type]
+                        duration_ms=duration_ms, steps=steps)
     elif action == "scroll":
         hinput.check_scroll(scroll_dy, scroll_dx)
         hinput.check_xy(x, y)

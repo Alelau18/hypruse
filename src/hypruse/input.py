@@ -1,10 +1,12 @@
 """Synthetic input.
 
 Pointer: positioning goes through the compositor's cursor dispatcher (global
-logical coordinates, authoritative on any monitor layout); only button and
+logical coordinates, authoritative on any monitor layout); button and
 axis events go through the virtual-pointer wire client. This split
 sidesteps the known multi-monitor mapping bugs of absolute virtual-pointer
-motion (hyprwm/Hyprland#6749).
+motion (hyprwm/Hyprland#6749). A warp is not motion, though, so every warp
+is followed by a net-zero relative wiggle on the wire (VirtualPointer.nudge)
+that clients which ignore warps (XWayland, Wine) see as the mouse moving.
 
 Keyboard: wtype, which uploads its own XKB keymap over
 zwp_virtual_keyboard_v1, text lands layout-correct including unicode,
@@ -14,6 +16,7 @@ with no uinput scancode guessing.
 from __future__ import annotations
 
 import contextlib
+import os
 import shutil
 import subprocess
 import threading
@@ -240,6 +243,12 @@ _check_button = check_button  # the private names predate the dry run
 _check_xy = check_xy
 
 
+def _nudge_on() -> bool:
+    """HYPRUSE_POINTER_NUDGE=0 turns the post-warp motion off (on by default)."""
+    return os.environ.get("HYPRUSE_POINTER_NUDGE", "1").strip().lower() not in (
+        "0", "false", "no", "off")
+
+
 def move(x: float, y: float) -> None:
     journal.refuse_if_dry("move")
     with _seat_lock:
@@ -249,12 +258,20 @@ def move(x: float, y: float) -> None:
         def run(p: VirtualPointer) -> bool:
             if not p.on_named_seat:
                 return False
-            p.move_to(x, y)
+            p.move_to(x, y)  # relative motion already: clients see it move
             return True
 
         if _with_pointer(run):
             return
         hyprctl.dispatch("movecursor", str(int(round(x))), str(int(round(y))))
+        if _nudge_on():
+            # a warp is not motion: XWayland, Wine and GameMaker clients never
+            # see it, so hover and drag did nothing there. A net-zero wiggle
+            # through the virtual pointer is real motion at the target. The
+            # cursor is already where it was asked to be, so a wire failure
+            # here costs only the hover, not the move.
+            with contextlib.suppress(WireError):
+                _with_pointer(lambda p: p.nudge())
 
 
 def click(
@@ -273,9 +290,36 @@ def click(
         _with_pointer(lambda p: p.click(button, double=double))
 
 
-def drag(x1: float, y1: float, x2: float, y2: float, button: str = "left") -> None:
+DRAG_STEPS = 12
+DRAG_DURATION_MS = 200.0
+MAX_DRAG_STEPS = 100
+MAX_DRAG_MS = 5000.0
+
+
+def check_drag(duration_ms: float, steps: int) -> None:
+    """Bounds for a drag's path. A drag holds a button down for its whole
+    duration, so it is capped like everything else that holds the seat."""
+    whole = isinstance(steps, int | float) and not isinstance(steps, bool) and steps == int(steps)
+    if not whole or not 1 <= steps <= MAX_DRAG_STEPS:
+        raise InputError(f"drag steps must be a whole number from 1 to {MAX_DRAG_STEPS}")
+    if not 0 <= duration_ms <= MAX_DRAG_MS:
+        raise InputError(f"drag duration_ms must be from 0 to {MAX_DRAG_MS:.0f}")
+
+
+def drag(
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    button: str = "left",
+    duration_ms: float = DRAG_DURATION_MS,
+    steps: int = DRAG_STEPS,
+) -> None:
     journal.refuse_if_dry("drag")
     _check_button(button)
+    check_drag(duration_ms, steps)
+    steps = int(steps)
+    pause = duration_ms / 1000 / steps
 
     def run(p: VirtualPointer) -> None:
         global _held_button
@@ -286,10 +330,15 @@ def drag(x1: float, y1: float, x2: float, y2: float, button: str = "left") -> No
         _held_button = button
         p.button(button, PRESSED)
         try:
-            steps = 12
+            # every step is a warp plus real motion (move's nudge): a path
+            # of bare warps showed a game the press and the release with no
+            # motion between them, which no app reads as a drag
             for i in range(1, steps + 1):
-                move(x1 + (x2 - x1) * i / steps, y1 + (y2 - y1) * i / steps)
-                time.sleep(0.015)
+                if i == steps:  # exactly the target, not a float near it
+                    move(x2, y2)
+                else:
+                    move(x1 + (x2 - x1) * i / steps, y1 + (y2 - y1) * i / steps)
+                time.sleep(pause)
         finally:
             p.button(button, RELEASED)
             _held_button = None

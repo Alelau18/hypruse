@@ -132,3 +132,29 @@ def test_scroll_messages_both_axes_one_frame():
     _, axis_h, _, discrete_h = struct.unpack("<IIii", msgs[2][1])
     assert (axis_h, discrete_h) == (wire.AXIS_HORIZONTAL, -2)
     assert wire.BUTTONS["middle"] == 0x112
+
+
+def test_nudge_is_two_frames_of_opposite_motion():
+    """+1 then -1, each in its own frame (a client sums one frame's motion,
+    so a single frame summing to zero would be no motion), one roundtrip."""
+    sent, trips = [], []
+
+    class FakePointer(wire.VirtualPointer):
+        def __init__(self):
+            self._pointer = 42
+            self._pos = None
+
+        def _send(self, obj, opcode, body=b""):
+            sent.append((obj, opcode, body))
+
+        def _roundtrip(self, collect_globals=False):
+            trips.append(len(sent))
+            return []
+
+    FakePointer().nudge()
+    assert [op for _, op, _ in sent] == [
+        wire.PTR_MOTION, wire.PTR_FRAME, wire.PTR_MOTION, wire.PTR_FRAME]
+    assert all(obj == 42 for obj, _, _ in sent)
+    deltas = [struct.unpack("<Iii", body)[1:] for _, op, body in sent if op == wire.PTR_MOTION]
+    assert deltas == [(256, 0), (-256, 0)]
+    assert trips == [4]

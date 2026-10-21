@@ -305,13 +305,18 @@ wait subscribed is not caught: look at `desktop`. Use this instead of
 ```
 hypruse pointer move X Y
 hypruse pointer click [X Y] [--button left|right|middle] [--double] [--allow-auth]
-hypruse pointer drag X Y TO_X TO_Y [--button B] [--allow-auth]
+hypruse pointer drag X Y TO_X TO_Y [--button B] [--duration-ms MS] [--steps N] [--allow-auth]
 hypruse pointer scroll DY [DX] [--at X Y] [--allow-auth]
 ```
 
 Plus `--background` / `--foreground`, `--then`, `--dry-run`, `--json`. Coordinates are global logical pixels.
 `click` and `scroll` without a point act at the current cursor. `DY > 0`
-scrolls content down (discrete wheel notches).
+scrolls content down (discrete wheel notches). Every cursor move is a warp
+followed by a one-pixel there-and-back motion, so apps that ignore warps
+(XWayland, Wine and GameMaker games) still see the pointer move and hover.
+`drag` holds the button across `--steps` moves (1-100, default 12) spread
+over `--duration-ms` (0-5000, default 200) and ends exactly on `TO_X TO_Y`;
+slow it down for an app that samples the mouse once per frame.
 
 Output:
 

@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **Pointer motion apps can see.** A cursor move was a compositor warp,
+  which XWayland, Wine and GameMaker clients never receive as motion, so
+  hover did nothing in games and agents fell back to `ydotool mousemove`.
+  Every warp is now followed by a net-zero one-pixel motion on the virtual
+  pointer (+1 then -1, in two frames), so the client under the cursor sees
+  the mouse arrive. `HYPRUSE_POINTER_NUDGE=0` turns it off.
+- **Drags that games see as drags.** A drag was 12 warps with the button
+  held, so a game saw a press and a release with no motion between. Every
+  step is now a warp plus real motion, the path ends exactly on the target,
+  and `pointer(action='drag')` takes `duration_ms` (0-5000, default 200)
+  and `steps` (1-100, default 12); the CLI takes `--duration-ms` and
+  `--steps`.
+
 ## [0.13.0] - 2026-10-18
 
 Background mode: an agent works in apps on workspaces the human is not
