@@ -2383,6 +2383,14 @@ def wait_for(event: str, match: str = "", timeout_s: float = 10) -> dict[str, An
                     gone = targets - _close_targets("", hyprctl.query("clients"))
                     if gone:
                         return {"event": "closewindow", "address": min(gone), "already": True}
+            if event == "window_open" and needle:
+                # likewise a window that mapped between the pre-check's
+                # query and the subscription: its openwindow went unheard
+                again = None
+                with contextlib.suppress(Exception):
+                    again = _already_satisfied(event, needle)
+                if again is not None:
+                    return again
             hit = stream.wait_for(names, matcher, timeout_s)
     except events.EventError as exc:
         return f"event socket unavailable: {exc}"

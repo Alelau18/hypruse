@@ -341,3 +341,15 @@ def test_any_one_of_several_matches_closing_satisfies(clients, monkeypatch):
     stream = ScriptedStream([("closewindow", {"address": "0xe"})])
     monkeypatch.setattr(srv.events, "EventStream", lambda: stream)
     assert srv.wait_for("window_close", match="open file")["address"] == "0xe"
+
+
+def test_a_window_that_maps_while_subscribing_is_already(clients, monkeypatch):
+    srv._note_clients()
+
+    def subscribe():
+        clients["clients"] = [KITTY, LG]  # mapped after the pre-check's query
+        return ScriptedStream([])
+
+    monkeypatch.setattr(srv.events, "EventStream", subscribe)
+    out = srv.wait_for("window_open", match="lg-remote")
+    assert out["already"] is True and out["address"] == "0xB"
