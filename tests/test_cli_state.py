@@ -152,3 +152,16 @@ def test_the_file_name_is_sanitised(monkeypatch):
     assert cli_state.path().parent.name == "hypruse"
     monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "")
     assert cli_state.path().name == "cli-state-none.json"
+
+
+def test_known_windows_from_two_verbs_are_merged():
+    cli_state.set_flag("known_clients", ["0xa"])
+    cli_state.save()
+    cli_state.restore()  # this verb starts
+    on_disk = json.loads(cli_state.path().read_text())
+    on_disk["flags"]["known_clients"] = ["0xa", "0xb"]  # another verb saw 0xb meanwhile
+    cli_state.path().write_text(json.dumps(on_disk))
+    cli_state.set_flag("known_clients", ["0xa", "0xc"])  # this one saw 0xc
+    cli_state.save()
+    assert json.loads(cli_state.path().read_text())["flags"]["known_clients"] == [
+        "0xa", "0xb", "0xc"]

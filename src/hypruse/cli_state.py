@@ -141,9 +141,13 @@ def _merge(current: dict[str, Any], mine: dict[str, Any]) -> dict[str, Any]:
     # only the flags this process changed: a long wait_for must not write
     # back a held button or a window list another verb has since updated
     old_flags = _restored.get("flags") or {}
-    flags.update(
-        {k: v for k, v in mine["flags"].items() if k not in old_flags or old_flags[k] != v}
-    )
+    changed = {k: v for k, v in mine["flags"].items() if k not in old_flags or old_flags[k] != v}
+    # the windows the agent has seen: a union, like the owned-set, so two
+    # verbs that each refreshed it do not drop each other's windows
+    known = changed.get("known_clients")
+    if isinstance(known, list) and isinstance(flags.get("known_clients"), list):
+        changed["known_clients"] = sorted(set(flags["known_clients"]) | set(known))
+    flags.update(changed)
     return {
         "trust": {"owned": sorted(owned), "seat": seat, "notify_ts": notify_ts},
         "marks": marks,
