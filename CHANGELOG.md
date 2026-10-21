@@ -35,7 +35,9 @@ All notable changes to this project are documented here. The format follows
   button; an `up` elsewhere is guarded like a move.
   The CLI has `pointer down [X Y] [--button B]`, `pointer up [X Y]
   [--button B]` and `pointer click ... --hold-ms N`; a shell `down`
-  carries over to the next verb, and `hypruse stop` releases it. A
+  carries over to the next verb, and `hypruse stop` releases it. The MCP
+  server records its own `down` and `up` in that instance's CLI state when
+  the file exists, so a shell verb run beside it sees the same hold. A
   `sequence` that stops before the step that releases a button it pressed
   releases it.
 

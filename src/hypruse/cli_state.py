@@ -155,6 +155,31 @@ def _merge(current: dict[str, Any], mine: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def set_flag_in_file(name: str, value: Any) -> None:
+    """Set one flag in this instance's state file, when there is one,
+    without loading the rest into this process. For the MCP server, which
+    keeps its own state in memory, so that a CLI verb run beside it (a
+    `pointer down`, `hypruse stop`) sees a hold the server made or ended.
+    Best effort, like save()."""
+    target = path()
+    if not target.exists():
+        return
+    with (
+        contextlib.suppress(OSError, TypeError, ValueError),
+        open(target.with_suffix(".lock"), "w") as guard,
+    ):
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        state = load()
+        if not state:
+            return
+        flags = state.get("flags") if isinstance(state.get("flags"), dict) else {}
+        state["flags"] = {**flags, name: value}
+        state["updated"] = time.time()
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state))
+        tmp.replace(target)
+
+
 def save() -> None:
     """Write the current state atomically, merged with whatever another verb
     saved meanwhile. Best effort: this file is a convenience across calls,

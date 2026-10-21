@@ -974,6 +974,21 @@ def _pointer_policy(
 _POINTER_ACTIONS = ("move", "click", "down", "up", "drag", "scroll")
 
 
+def _sync_cli_hold() -> None:
+    """Tell the CLI's state file about a hold this server made or ended. A
+    shell verb run beside the server reads its hold from there: without
+    this, a `pointer down` from the shell would be allowed over the
+    server's hold, and `hypruse stop` would release a button the server
+    already let go, or miss one it holds. The CLI's own verbs write the
+    file themselves."""
+    if _plain_blocks:
+        return
+    from hypruse import cli_state
+
+    with contextlib.suppress(Exception):
+        cli_state.set_flag_in_file("held_button", hinput.held_button())
+
+
 @journal.journaled("act")
 def pointer(
     action: str,
@@ -1020,6 +1035,7 @@ def pointer(
     # the session locked, the cursor drifted over another window) would
     # strand the button down. An `up` elsewhere is a move first and is
     # guarded like one.
+    held_at_start = hinput.held_button()
     ending_hold = (action == "up" and x is None and y is None
                    and hinput.held_button() is not None and hinput.held_button() == button)
     if not ending_hold:
@@ -1115,6 +1131,8 @@ def pointer(
         raise ValueError(f"unknown action {action!r}: {'|'.join(_POINTER_ACTIONS)}")
     if dry:
         return _acted(f"{_DRY} {plan}{note}", then)
+    if hinput.held_button() != held_at_start:
+        _sync_cli_hold()
     trust.remember_seat()
     held = hinput.held_button()
     tail = f"; the {held} button is held down until pointer action='up'" if held else ""
@@ -2720,6 +2738,7 @@ def sequence(
         # ran: finish what was started rather than leave the human's
         # pointer stuck down
         if hinput.release_held():
+            _sync_cli_hold()
             stopped += f"; released the {held} button a step had pressed"
         else:
             stopped += (f"; the {held} button a step pressed is still held (its release "
@@ -2911,6 +2930,7 @@ def main() -> None:
     session.ensure_session_env()
     safety.init()
     safety.on_shutdown(hinput.release_held)  # kill switch mid-drag: release first
+    safety.on_shutdown(_sync_cli_hold)  # and say so to a CLI verb run beside us
     journal.start(__version__)  # HYPRUSE_JOURNAL: open the session record
     safety.on_shutdown(journal.stop)  # closed on the SIGTERM path too
     trust.init_marking()  # HYPRUSE_MARK: install the agent-owned border rule

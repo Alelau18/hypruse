@@ -493,3 +493,38 @@ def test_a_button_released_and_pressed_again_in_the_run_is_released(tool, monkey
                         {"op": "pointer", "action": "down", "x": 9, "y": 9},
                         {"op": "pointer", "action": "fling"}], then="none")
     assert released == ["left"] and "released the left button a step had pressed" in out
+
+
+# --- the server's holds reach a CLI verb run beside it -----------------------------------
+
+
+@pytest.fixture
+def state_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "test")
+    return tmp_path
+
+
+def test_the_servers_down_and_up_update_an_existing_cli_state(tool, state_dir):
+    cli_state.restore()
+    cli_state.set_flag("marking_installed", True)
+    cli_state.save()  # a CLI verb ran on this instance before
+    srv.pointer("down", button="right")
+    flags = cli_state.load()["flags"]
+    assert flags["held_button"] == "right" and flags["marking_installed"] is True
+    srv.pointer("up", button="right")
+    assert cli_state.load()["flags"]["held_button"] is None
+
+
+def test_no_cli_state_file_is_created_for_the_server(tool, state_dir):
+    srv.pointer("down")
+    assert not cli_state.path().exists()
+
+
+def test_a_cli_verb_does_not_go_through_the_server_sync(tool, state_dir, monkeypatch):
+    # verbs.run writes the flag itself, after the tool, under its own merge
+    monkeypatch.setattr(srv, "_plain_blocks", True)
+    cli_state.restore()
+    cli_state.save()
+    srv.pointer("down")
+    assert cli_state.load()["flags"].get("held_button") is None
