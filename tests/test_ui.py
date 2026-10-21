@@ -146,3 +146,38 @@ def test_resolve_window_errors(monkeypatch):
     )
     with pytest.raises(ValueError, match="not found"):
         srv._resolve_window("0xz")
+
+
+# --- Chromium and Electron: a tree only with a flag ------------------------------
+
+
+@pytest.mark.parametrize("cls", ["chromium", "Google-chrome", "net.imput.helium",
+                                 "Brave-browser", "Code", "code-oss", "VSCodium", "electron"])
+def test_no_tree_in_a_chromium_app_says_how_to_get_one(wired, cls):
+    wired.setattr(srv.hyprctl, "query", lambda cmd: [
+        {"address": "0xw", "pid": 42, "at": [0, 0], "size": [400, 200], "class": cls,
+         "title": "T"}] if cmd == "clients" else {"address": "0xw"})
+    wired.setattr(srv.a11y, "app_for_pid", lambda bus, pid, title, size=None: None)
+    out = srv.ui(window="0xw")
+    assert "--force-renderer-accessibility" in out and "screenshot + zoom" in out
+
+
+def test_no_matching_controls_in_a_chromium_app_gets_the_hint_too(wired):
+    # the mined case: helium had a bare frame, so the name search found nothing
+    wired.setattr(srv.hyprctl, "query", lambda cmd: [
+        {"address": "0xw", "pid": 42, "at": [0, 0], "size": [400, 200], "class": "helium",
+         "title": "T"}] if cmd == "clients" else {"address": "0xw"})
+    wired.setattr(srv.a11y, "app_for_pid", lambda bus, pid, title, size=None: ("a", "/root"))
+    wired.setattr(srv.a11y, "find_elements", lambda *a, **k: ([], False))
+    out = srv.ui(window="0xw", name="archivo")
+    assert out.startswith("no matching 'archivo' elements in helium; helium looks like")
+
+
+@pytest.mark.parametrize("cls", ["yad", "kitty", "org.gnome.Nautilus", "codeblocks"])
+def test_other_apps_keep_the_plain_answer(wired, cls):
+    wired.setattr(srv.hyprctl, "query", lambda cmd: [
+        {"address": "0xw", "pid": 42, "at": [0, 0], "size": [400, 200], "class": cls,
+         "title": "T"}] if cmd == "clients" else {"address": "0xw"})
+    wired.setattr(srv.a11y, "app_for_pid", lambda bus, pid, title, size=None: None)
+    assert srv.ui(window="0xw") == (
+        f"{cls} exposes no accessibility tree; use screenshot + zoom instead")

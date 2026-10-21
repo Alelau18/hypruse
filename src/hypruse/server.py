@@ -518,6 +518,26 @@ def _proven_frame(
         bus, app[0], app[1], client.get("title", ""), tuple(client["size"]), peers)
 
 
+# Chromium and every Electron app build their web content's accessibility
+# tree only when something asks for it at startup, so without the flag the
+# tree is a bare frame. Matched on the window class: browsers by name, VS
+# Code by its classes (Code, code-oss, code-url-handler, VSCodium).
+_CHROMIUM_CLASS = re.compile(
+    r"chrom|helium|brave|electron|vivaldi|msedge|opera|vscodium|^code(-oss|-insiders"
+    r"|-url-handler)?$",
+    re.IGNORECASE,
+)
+
+
+def _no_tree_hint(cls: str) -> str:
+    """Why a Chromium or Electron window shows no controls, and the fix."""
+    if not _CHROMIUM_CLASS.search(cls or ""):
+        return ""
+    return (f"; {cls} looks like a Chromium or Electron app, which exposes its controls only "
+            "when started with --force-renderer-accessibility: relaunch it with that flag to "
+            "use the accessibility tree, else use screenshot + zoom")
+
+
 _UNSURE = ("its accessibility tree cannot tell which window is {addr} (another window of "
            "{cls} could match it, or its accessibility connection is another process's)")
 
@@ -535,7 +555,9 @@ def _ui_read(
         bus = a11y.connect()
         app = a11y.app_for_pid(bus, client.get("pid"), title, tuple(client["size"]))
         if app is None:
-            return f"{cls} exposes no accessibility tree; use screenshot + zoom instead"
+            hint = _no_tree_hint(cls)
+            return f"{cls} exposes no accessibility tree" + (
+                hint or "; use screenshot + zoom instead")
         frame = a11y.window_frame(bus, app[0], app[1], title, tuple(client["size"]))
         # a background press acts on the control itself, and a reading after
         # one must be of this window, not a same-titled one: prove the frame
@@ -579,7 +601,7 @@ def _ui_read(
     if not out:
         what = f"matching {name!r}" if name else "actionable"
         tail = f" ({cut})" if truncated else ""
-        return f"no {what} elements in {cls}{tail}"
+        return f"no {what} elements in {cls}{tail}{_no_tree_hint(cls)}"
     if exact is None and not handles:
         out.append({"note": "these controls may be another window's: "
                             + _UNSURE.format(addr=client["address"], cls=cls)})

@@ -37,6 +37,11 @@ All notable changes to this project are documented here. The format follows
   releases it.
 
 ### Fixed
+- **Say how to get a tree from Chromium and Electron.** When `ui`,
+  `click_ui` or `marks` find no tree, or no matching controls, in a window
+  whose class looks like Chromium, Chrome, Helium, Brave, Electron or VS
+  Code, the answer adds that the app exposes its controls only when
+  started with `--force-renderer-accessibility`, else screenshot + zoom.
 - **Sleeping monitors and window flags.** `desktop` marks windows that are
   `xwayland`, `fullscreen`, `pinned` or `hidden` (each only when true, to
   keep the snapshot small) and monitors in DPMS sleep (`dpms: off`). A
