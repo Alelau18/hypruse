@@ -130,3 +130,25 @@ def test_a_flag_this_process_did_not_change_keeps_the_files_value():
     cli_state.save()
     flags = json.loads(cli_state.path().read_text())["flags"]
     assert flags["held_button"] is None and flags["known_clients"] == ["0xa"]
+
+
+def test_each_compositor_instance_keeps_its_own_file(monkeypatch):
+    _remember_everything()
+    cli_state.save()
+    monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "sig-b")
+    cli_state._flags = {}
+    cli_state.restore()
+    cli_state.set_flag("marking_installed", False)
+    cli_state.save()  # a verb under the other instance writes its own file
+    monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "sig-a")
+    cli_state.restore()
+    assert cli_state.flag("marking_installed") is True  # sig-a's state survived
+    assert srv.marks_state() == MARKS
+
+
+def test_the_file_name_is_sanitised(monkeypatch):
+    monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "../../etc/x y")
+    assert cli_state.path().name == "cli-state-_.._etc_x_y.json"
+    assert cli_state.path().parent.name == "hypruse"
+    monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "")
+    assert cli_state.path().name == "cli-state-none.json"

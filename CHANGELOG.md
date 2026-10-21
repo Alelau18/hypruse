@@ -37,6 +37,11 @@ All notable changes to this project are documented here. The format follows
   releases it.
 
 ### Fixed
+- **CLI state per compositor instance.** The shell verbs kept one
+  `cli-state.json` per user, which a verb under another Hyprland instance
+  (a nested test compositor) overwrote, discarding the other's marks,
+  owned windows and seat baseline. It is now
+  `cli-state-<instance signature>.json`.
 - **Session discovery picks one live compositor.** With the session
   variables stripped, a crashed instance's leftover socket file counted as
   live, and `WAYLAND_DISPLAY` was picked on its own (by name, so

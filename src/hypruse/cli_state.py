@@ -9,11 +9,11 @@ against, `HYPRUSE_CONFINE=launched` refuses every action after the launch
 guard is a no-op until something remembered a seat), which is the one that
 fails OPEN and is why this module exists.
 
-The state is keyed by the compositor instance: window addresses are heap
-pointers inside one Hyprland process, so anything remembered under another
-instance is discarded. Losing the file is safe in the other direction too:
-every consumer degrades to "nothing remembered", which is more refusal,
-not less.
+The state is kept per compositor instance, one file each: window
+addresses are heap pointers inside one Hyprland process, so anything
+remembered under another instance is meaningless there. Losing the file
+is safe in the other direction too: every consumer degrades to "nothing
+remembered", which is more refusal, not less.
 
 Verbs overlap (a background `wait_for` beside a `launch`), so a save is a
 merge under a lock, not a rewrite: each process writes back only what it
@@ -26,6 +26,7 @@ import contextlib
 import fcntl
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -46,7 +47,13 @@ def _dir() -> Path:
 
 
 def path() -> Path:
-    return _dir() / "cli-state.json"
+    """One file per compositor instance. A single shared file was rewritten
+    by whichever instance's verb ran last (load() discards another
+    instance's state), so two Hyprland sessions under one user (a nested
+    test compositor beside the desktop) wiped each other's marks, owned
+    windows and seat baseline."""
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", _instance()).strip(".") or "none"
+    return _dir() / f"cli-state-{name}.json"
 
 
 def _instance() -> str:
