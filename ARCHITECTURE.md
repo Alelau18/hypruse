@@ -143,10 +143,17 @@ running inside the compositor.
   We shell out instead of reimplementing keymap upload; that wheel is
   round already.
 
-A click's press and release always happen inside one tool call. A drag
-holds a button across ~200 ms of cursor moves, so the SIGTERM path (what
-the kill switch sends) runs a registered cleanup that releases any held
-button first. Either way the process can die mid-run without stranding a
+A click's press and release happen inside one tool call. A drag holds a
+button across ~200 ms of cursor moves, a `hold_ms` click for up to 10 s,
+and `pointer down` until a later `pointer up`, so each records the held
+button before pressing it and the SIGTERM path (what the kill switch sends)
+runs a registered cleanup that releases it first. Only one button is held
+at a time (a second `down` is refused), so that cleanup never has one it
+does not know about. A shell `pointer down` ends its process with the
+button still down: the hold goes into `cli_state`, the next verb adopts it
+(its own SIGTERM cleanup releases it, its `up` clears it), and `hypruse
+stop` releases it when no verb is left to signal. A `sequence` that stops
+before the step that would release a button it pressed releases it itself. Either way the process can die mid-run without stranding a
 button, which is what makes both `hypruse stop` (graceful: signals the
 beacon pid, releases the button, clears the beacon) and the blunter
 `pkill -f hypruse` safe panic actions at any moment.
@@ -315,7 +322,7 @@ checks and every `trust.guard_*` call, then returns the plan it was about
 to execute; a rehearsal whose refusals differ from the real run would be
 worth nothing, so the guards stay exactly where they are. Underneath,
 `journal.refuse_if_dry` raises at the effect boundary itself (`input`'s
-six delivery functions, `hyprctl.dispatch`, `clipboard.write`, and the
+eight delivery functions, `hyprctl.dispatch`, `clipboard.write`, and the
 accessibility effects `a11y.do_action`, `grab_focus` and `insert_text`), so a path
 nobody thought of fails loudly with nothing delivered instead of quietly
 acting during what the caller was told was a simulation.

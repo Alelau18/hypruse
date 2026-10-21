@@ -147,6 +147,14 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("coords", nargs="*", type=float, metavar="X Y")
     a.add_argument("--button", choices=("left", "right", "middle"), default=_S)
     a.add_argument("--double", action="store_true", default=_S)
+    a.add_argument("--hold-ms", dest="hold_ms", type=float, default=_S, metavar="MS",
+                   help="keep the button down this long before releasing, up to 10000")
+    a = ps.add_parser("down", help="press a button at X Y (or at the cursor) and keep it held")
+    a.add_argument("coords", nargs="*", type=float, metavar="X Y")
+    a.add_argument("--button", choices=("left", "right", "middle"), default=_S)
+    a = ps.add_parser("up", help="release a button at X Y, or at the cursor")
+    a.add_argument("coords", nargs="*", type=float, metavar="X Y")
+    a.add_argument("--button", choices=("left", "right", "middle"), default=_S)
     a = ps.add_parser("drag", help="drag from X Y to TO_X TO_Y")
     a.add_argument("x", type=float)
     a.add_argument("y", type=float)
@@ -297,12 +305,12 @@ def normalize(verb: str, ns: argparse.Namespace) -> tuple[dict[str, Any], dict[s
         if "timeout" in d:
             d["timeout_s"] = d.pop("timeout")
     elif verb == "pointer":
-        if d["action"] == "click":
+        if d["action"] in ("click", "down", "up"):
             coords = d.pop("coords")
             if len(coords) == 2:
                 d["x"], d["y"] = coords
             elif coords:
-                raise Usage("click takes X Y, or nothing to click at the cursor")
+                raise Usage(f"{d['action']} takes X Y, or nothing to act at the cursor")
         elif d["action"] == "scroll":
             d["scroll_dy"] = d.pop("dy")
             if "dx" in d:
@@ -408,6 +416,9 @@ def run(tool: str, kwargs: dict[str, Any], *, json_out: bool = False,
     journal.set_source("cli")
     journal.start(__version__, source="cli")
     cli_state.restore()
+    # a `pointer down` outlives its process: adopt it, so this verb's
+    # SIGTERM cleanup releases it and a `pointer up` here clears it
+    hinput.restore_held(cli_state.flag("held_button"))
     if tool == "launch" and trust.marking_on() and not cli_state.flag("marking_installed"):
         trust.init_marking()  # once per compositor instance, not per call
         cli_state.set_flag("marking_installed", True)
@@ -420,6 +431,7 @@ def run(tool: str, kwargs: dict[str, Any], *, json_out: bool = False,
     except Exception as exc:  # IPC, capture, a11y, wire: one line, not a traceback
         return _fail("error", f"{type(exc).__name__}: {exc}", EXIT_ERROR)
     finally:
+        cli_state.set_flag("held_button", hinput.held_button())
         cli_state.save()
         if lock is not None:
             lock.close()

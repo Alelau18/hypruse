@@ -58,8 +58,9 @@ def wired_bg(monkeypatch):
                         lambda mods, key, addr: s["shortcuts"].append((mods, key, addr)))
     monkeypatch.setattr(srv.hyprctl, "active_layout", lambda: ("us", "", ""))
     monkeypatch.setattr(srv.hyprctl, "layout_group", lambda: (0, 1))
-    monkeypatch.setattr(srv.hinput, "click",
-                        lambda x, y, button="left", double=False: s["clicks"].append((x, y)))
+    monkeypatch.setattr(
+        srv.hinput, "click",
+        lambda x, y, button="left", double=False, hold_ms=0: s["clicks"].append((x, y)))
     monkeypatch.setattr(srv.hinput, "type_text", lambda t: s["typed"].append(t))
     monkeypatch.setattr(srv.a11y, "connect", lambda: object())
     monkeypatch.setattr(srv.a11y, "has_action", lambda bus, svc, path: s["has_action"])

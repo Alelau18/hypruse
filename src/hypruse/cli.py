@@ -7,7 +7,7 @@ the record an agent leaves behind:
     hypruse doctor   diagnose the environment, exit 0 only if all green
     hypruse init     register hypruse in detected MCP clients (asks per
                      client, backs up configs), then run doctor
-    hypruse stop     emergency stop, releasing anything a drag holds
+    hypruse stop     emergency stop, releasing anything a drag or a down holds
     hypruse journal  read back what an agent did (HYPRUSE_JOURNAL)
     hypruse replay   re-issue a journal's actions, dry by default
     hypruse skill    install the Agent Skill that teaches the verbs
@@ -293,6 +293,10 @@ def stop() -> int:
     from hypruse import safety
 
     stopped = 0
+    held = _release_remembered_hold()
+    if held:
+        print(f"released the {held} button a `pointer down` left held")
+        stopped += 1
     # a shell verb acting beside a live server never touches the server's
     # beacon, so it is only findable through the lock it holds while acting
     verb_pid = _running_verb_pid()
@@ -328,6 +332,29 @@ def stop() -> int:
         return 1
     print(f"stopped hypruse (pid {pid})")
     return 0
+
+
+def _release_remembered_hold() -> str | None:
+    """A shell `pointer down` ends its process with the button still held,
+    so no process is left for SIGTERM to reach; the hold is remembered in
+    cli_state instead, and the emergency stop releases it from here."""
+    from hypruse import cli_state, session
+    from hypruse import input as hinput
+
+    held = (cli_state.load().get("flags") or {}).get("held_button")
+    if not isinstance(held, str) or not held:
+        return None
+    with contextlib.suppress(Exception):
+        session.ensure_session_env()
+    hinput.restore_held(held)
+    if hinput.held_button() is None:
+        return None  # not a button name: nothing to release
+    hinput.release_held()
+    with contextlib.suppress(Exception):
+        cli_state.restore()
+        cli_state.set_flag("held_button", None)
+        cli_state.save()
+    return held
 
 
 def _running_verb_pid() -> int | None:
@@ -774,7 +801,9 @@ server; for agents that run commands). Observation, works in read-only mode:
 Acting (refused with exit 3 under HYPRUSE_READONLY; all take --dry-run, which
 rehearses; all but launch and clipboard take --then none|desktop|ui|screenshot,
 which appends the effect; pointer, keyboard and click_ui take --allow-auth):
-  pointer move X Y | click [X Y] [--button B] [--double] | drag X Y TO_X TO_Y [--button B]
+  pointer move X Y | click [X Y] [--button B] [--double] [--hold-ms MS]
+          | down [X Y] [--button B] | up [X Y] [--button B]
+          | drag X Y TO_X TO_Y [--button B] [--duration-ms MS] [--steps N]
           | scroll DY [DX] [--at X Y]
   keyboard type TEXT|- [--window ADDR] | key COMBO [--window ADDR]
   click_ui NAME [--window ADDR] [--index I] [--button B] [--double]   or   click_ui --mark N

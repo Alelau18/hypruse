@@ -172,7 +172,7 @@ hypruse ui --window 0x5f2a --name Save     # [0] push button "Save" @1204,88
 hypruse click_ui Save --window 0x5f2a --then ui
 hypruse screenshot --window 0x5f2a         # path, then {"geometry":[x,y,w,h],"scale":1.0,"image":[w,h],...}
 hypruse zoom 1180 840 --window 0x5f2a
-hypruse pointer click 1183 842             # move X Y | drag X Y TO_X TO_Y | scroll DY [DX] --at X Y
+hypruse pointer click 1183 842             # move X Y | down/up [X Y] | drag X Y TO_X TO_Y | scroll DY [DX] --at X Y
 hypruse keyboard type "hello" --window 0x5f2a
 hypruse keyboard key ctrl+shift+t --window 0x5f2a
 hypruse use_bind SUPER+RETURN              # combos come from `hypruse binds`

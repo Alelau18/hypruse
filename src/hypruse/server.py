@@ -848,6 +848,9 @@ def _pointer_policy(
         bg.refuse("the pointer moves the human's real cursor", _POINTER_INSTEAD)
 
 
+_POINTER_ACTIONS = ("move", "click", "down", "up", "drag", "scroll")
+
+
 @journal.journaled("act")
 def pointer(
     action: str,
@@ -861,12 +864,17 @@ def pointer(
     double: bool = False,
     duration_ms: float = hinput.DRAG_DURATION_MS,
     steps: int = hinput.DRAG_STEPS,
+    hold_ms: float = 0,
     then: str = "none",
     allow_auth: bool = False,
     background: bool | None = None,
 ) -> list[Any] | str:
     """Mouse in global coordinates. action='move' (x,y) | 'click' (optional
-    x,y first; button left/right/middle; double=true) | 'drag' (x,y →
+    x,y first; button left/right/middle; double=true; `hold_ms` up to
+    10000 keeps the button down that long before releasing) | 'down' /
+    'up' (press, or release, `button` and leave it there; optional x,y
+    first: down, move, screenshot, up is a drag you pace yourself, and a
+    move while a button is down is guarded like a drag) | 'drag' (x,y →
     to_x,to_y holding button, over `duration_ms` (default 200, max 5000)
     in `steps` moves (default 12, max 100); slow it down for an app that
     samples the mouse per frame) | 'scroll' (scroll_dy notches, positive =
@@ -883,7 +891,7 @@ def pointer(
     `background=false`."""
     safety.touch(f"pointer:{action}")
     trust.guard_seat()
-    if action in ("move", "click", "drag", "scroll"):  # else the ValueError below
+    if action in _POINTER_ACTIONS:  # else the ValueError below
         _pointer_policy(action, x, y, to_x, to_y, background)
     # HYPRUSE_DRYRUN runs every check below and then delivers nothing, so
     # `plan` describes what each branch was about to do. The guards stay
@@ -892,7 +900,9 @@ def pointer(
     dry = journal.dry_run()
     plan = ""
     note = ""
-    if action != "move":
+    # a move with a button held down is a drag, and delivers like one
+    holding = hinput.held_button() if action == "move" else None
+    if action != "move" or holding:
         # a locked session routes every event to its credential prompt, so
         # no window can receive this (a bare click can legitimately AIM at
         # the prompt, so window_given=False: note on allow_auth, else
@@ -908,17 +918,41 @@ def pointer(
         # below are the ones the confinement and auth guards gate
         if x is None or y is None:
             raise ValueError("move needs x and y")
+        if holding:
+            trust.guard_pointer(x, y, allow_auth)
+            note = note or _layer_note(x, y)
         plan = f"move the cursor to ({x:.0f}, {y:.0f})"
+        if holding:
+            plan += f" with the {holding} button held down"
         if not dry:
             hinput.move(x, y)
     elif action == "click":
         hinput.check_button(button)
         hinput.check_xy(x, y)
+        hinput.check_hold(hold_ms, double)
         trust.guard_pointer(x, y, allow_auth)  # None x/y = click at current cursor
         note = note or _layer_note(x, y)
         plan = f"{'double-' if double else ''}click {button} at {_at(x, y)}"
+        if hold_ms:
+            plan += f", holding it {hold_ms:g} ms"
         if not dry:
-            hinput.click(x, y, button=button, double=double)
+            hinput.click(x, y, button=button, double=double, hold_ms=hold_ms)
+    elif action in ("down", "up"):
+        # the same guards as a click: a press or a release is input
+        # delivered at a point, and `down` is half of a click there
+        if action == "down":
+            hinput.check_down(button)
+        else:
+            hinput.check_button(button)
+        hinput.check_xy(x, y)
+        trust.guard_pointer(x, y, allow_auth)  # None x/y = at the current cursor
+        note = note or _layer_note(x, y)
+        plan = f"{'press' if action == 'down' else 'release'} {button} at {_at(x, y)}"
+        if action == "down":
+            plan += " and keep it held until pointer action='up'"
+        if not dry:
+            fn = hinput.button_down if action == "down" else hinput.button_up
+            fn(x, y, button=button)
     elif action == "drag":
         if None in (x, y, to_x, to_y):
             raise ValueError("drag needs x, y, to_x, to_y")
@@ -942,11 +976,13 @@ def pointer(
         if not dry:
             hinput.scroll(dy=scroll_dy, dx=scroll_dx, x=x, y=y)
     else:
-        raise ValueError(f"unknown action {action!r}: move|click|drag|scroll")
+        raise ValueError(f"unknown action {action!r}: {'|'.join(_POINTER_ACTIONS)}")
     if dry:
         return _acted(f"{_DRY} {plan}{note}", then)
     trust.remember_seat()
-    return _acted(f"{action} ok; cursor now at {hyprctl.cursor_pos()}{note}", then)
+    held = hinput.held_button()
+    tail = f"; the {held} button is held down until pointer action='up'" if held else ""
+    return _acted(f"{action} ok; cursor now at {hyprctl.cursor_pos()}{tail}{note}", then)
 
 
 @journal.journaled("act")
@@ -2314,6 +2350,7 @@ def sequence(
 
     results: list[str] = []
     stopped: str | None = None
+    held_before = hinput.held_button()
     prev_expected: set[str] = set()
     backlog: list[tuple[str, dict[str, Any]]] = []  # drained events a wait step may consume
     deadline = time.monotonic() + _SEQ_BUDGET
@@ -2382,6 +2419,13 @@ def sequence(
                     stopped = f"desktop changed ({names}) after the last step"
             stream.close()
 
+    held = hinput.held_button()
+    if stopped is not None and held and held != held_before:
+        # a step pressed a button and the step that would release it never
+        # ran: finish what was started rather than leave the human's
+        # pointer stuck down
+        hinput.release_held()
+        stopped += f"; released the {held} button a step had pressed"
     ran = len(results)
     # each step already says DRY RUN, but the summary line is what gets
     # skimmed, and "all 4/4 steps ran" reads like four things happened.

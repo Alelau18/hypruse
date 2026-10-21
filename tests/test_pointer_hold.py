@@ -1,0 +1,337 @@
+"""Holding a pointer button: `down` / `up`, and `hold_ms` on a click.
+
+A held button outlives the call that pressed it, so the properties that
+matter are the ones the safety story leans on: the hold is recorded
+before the press (where the SIGTERM cleanup finds it), cleared by its
+release, never doubled, and released by a sequence that stops before its
+own `up`. And `down`/`up` are input delivered at a point, so they meet the
+same guards as a click."""
+
+import json
+
+import pytest
+
+from hypruse import cli, cli_state, verbs
+from hypruse import input as hinput
+from hypruse import server as srv
+from hypruse.wire import PRESSED, RELEASED
+
+
+class FakeVP:
+    on_named_seat = False
+
+    def __init__(self):
+        self.events = []
+
+    def button(self, button, state):
+        # what a SIGTERM landing here would see
+        self.events.append((button, state, hinput._held_button))
+
+    def click(self, button, double=False):
+        self.events.append(("click", button))
+
+    def nudge(self):
+        pass
+
+
+@pytest.fixture
+def vp(monkeypatch):
+    p = FakeVP()
+    monkeypatch.setattr(hinput, "_vp", p)
+    monkeypatch.setattr(hinput, "_held_button", None)
+    monkeypatch.setattr(hinput.hyprctl, "dispatch", lambda *a: p.events.append(("warp",) + a[1:]))
+    monkeypatch.setattr(hinput.time, "sleep", lambda s: p.events.append(("sleep", s)))
+    return p
+
+
+# --- input ------------------------------------------------------------------
+
+
+def test_down_records_the_hold_before_pressing_and_up_clears_it(vp):
+    hinput.button_down(10, 20)
+    assert vp.events[0] == ("warp", "10", "20")
+    assert vp.events[-1] == ("left", PRESSED, "left")
+    assert hinput.held_button() == "left"
+    hinput.button_up()
+    assert vp.events[-1] == ("left", RELEASED, "left")
+    assert hinput.held_button() is None
+
+
+def test_a_second_down_is_refused_before_any_input(vp):
+    hinput.button_down()
+    vp.events.clear()
+    with pytest.raises(hinput.InputError, match="already held"):
+        hinput.button_down(button="right")
+    assert vp.events == []
+    assert hinput.held_button() == "left"
+
+
+def test_up_without_a_matching_down_still_releases(vp):
+    # a shell `down` happened in another process: releasing is harmless
+    hinput.button_up(button="right")
+    assert vp.events == [("right", RELEASED, None)]
+
+
+def test_up_of_another_button_keeps_the_hold(vp):
+    hinput.button_down()
+    hinput.button_up(button="right")
+    assert hinput.held_button() == "left"
+
+
+def test_the_shutdown_path_releases_a_down(vp):
+    hinput.button_down()
+    hinput.release_held()
+    assert vp.events[-1][:2] == ("left", RELEASED)
+    assert hinput.held_button() is None
+
+
+def test_release_held_makes_a_pointer_for_a_hold_it_inherited(monkeypatch):
+    made = []
+
+    class Fresh(FakeVP):
+        def __init__(self):
+            super().__init__()
+            made.append(self)
+
+    monkeypatch.setattr(hinput, "_vp", None)
+    monkeypatch.setattr(hinput, "VirtualPointer", Fresh)
+    hinput.restore_held("middle")
+    hinput.release_held()
+    assert [e[:2] for e in made[0].events] == [("middle", RELEASED)]
+    assert hinput.held_button() is None
+
+
+def test_restore_held_ignores_what_is_not_a_button():
+    hinput.restore_held("laser")
+    assert hinput.held_button() is None
+
+
+def test_a_long_click_holds_then_releases(vp):
+    hinput.click(5, 6, hold_ms=1500)
+    assert vp.events[-3:] == [
+        ("left", PRESSED, "left"), ("sleep", 1.5), ("left", RELEASED, "left")]
+    assert hinput.held_button() is None
+
+
+def test_a_long_click_that_dies_mid_hold_still_releases(vp, monkeypatch):
+    def interrupted(s):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(hinput.time, "sleep", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        hinput.click(hold_ms=500)
+    assert [e[:2] for e in vp.events] == [("left", PRESSED), ("left", RELEASED)]
+    assert hinput.held_button() is None
+
+
+def test_a_click_of_the_held_button_lets_go_of_the_hold(vp):
+    hinput.button_down()
+    hinput.click()
+    assert hinput.held_button() is None
+
+
+def test_a_drag_keeps_a_down_of_another_button_on_record(vp, monkeypatch):
+    monkeypatch.setattr(hinput, "move", lambda x, y: None)
+    hinput.button_down(button="right")
+    hinput.drag(0, 0, 1, 1)
+    assert hinput.held_button() == "right"
+
+
+@pytest.mark.parametrize(
+    ("kw", "msg"),
+    [({"hold_ms": -1}, "hold_ms"), ({"hold_ms": 10001}, "hold_ms"),
+     ({"hold_ms": 100, "double": True}, "cannot be combined")],
+)
+def test_hold_bounds_are_checked_before_any_input(vp, kw, msg):
+    with pytest.raises(hinput.InputError, match=msg):
+        hinput.click(1, 2, **kw)
+    assert vp.events == []
+
+
+# --- the pointer tool ----------------------------------------------------------
+
+
+@pytest.fixture
+def tool(monkeypatch):
+    """The pointer tool with its guards and the input layer recorded."""
+    calls = {"guard": [], "input": [], "lock": 0}
+    monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
+    monkeypatch.setattr(srv.trust, "guard_pointer",
+                        lambda x, y, allow_auth=False: calls["guard"].append((x, y)))
+
+    def lock(window_given, allow_auth):
+        calls["lock"] += 1
+        return ""
+
+    monkeypatch.setattr(srv.trust, "guard_session_lock", lock)
+    monkeypatch.setattr(srv.trust, "covering_layer", lambda x, y: None)
+    monkeypatch.setattr(srv.hyprctl, "cursor_pos", lambda: (7, 8))
+    monkeypatch.setattr(hinput, "_held_button", None)
+
+    def down(x=None, y=None, button="left"):
+        calls["input"].append(("down", x, y, button))
+        hinput.restore_held(button)
+
+    def up(x=None, y=None, button="left"):
+        calls["input"].append(("up", x, y, button))
+        hinput.restore_held(None)
+
+    monkeypatch.setattr(hinput, "button_down", down)
+    monkeypatch.setattr(hinput, "button_up", up)
+    monkeypatch.setattr(hinput, "move", lambda x, y: calls["input"].append(("move", x, y)))
+    monkeypatch.setattr(hinput, "click", lambda *a, **k: calls["input"].append(("click", a, k)))
+    return calls
+
+
+def test_down_and_up_go_through_the_click_guards(tool):
+    out = srv.pointer("down", x=10, y=20, button="right")
+    assert tool["input"] == [("down", 10, 20, "right")]
+    assert tool["guard"] == [(10, 20)] and tool["lock"] == 1
+    assert "right button is held down until pointer action='up'" in out
+    out = srv.pointer("up", button="right")
+    assert tool["input"][-1] == ("up", None, None, "right")
+    assert tool["guard"][-1] == (None, None) and tool["lock"] == 2
+    assert out == "up ok; cursor now at (7, 8)"
+
+
+def test_a_move_with_a_button_down_is_guarded_like_a_drag(tool):
+    srv.pointer("move", x=1, y=2)
+    assert tool["guard"] == [] and tool["lock"] == 0  # a bare move only shifts the cursor
+    srv.pointer("down")
+    tool["guard"].clear()
+    srv.pointer("move", x=3, y=4)
+    assert tool["guard"] == [(3, 4)] and tool["lock"] == 2
+
+
+def test_a_second_down_is_refused_by_the_tool(tool):
+    srv.pointer("down")
+    with pytest.raises(hinput.InputError, match="already held"):
+        srv.pointer("down", button="right")
+    assert [c[0] for c in tool["input"]] == ["down"]
+
+
+def test_hold_ms_reaches_the_click(tool):
+    srv.pointer("click", x=1, y=2, hold_ms=750)
+    assert tool["input"] == [("click", (1, 2), {"button": "left", "double": False,
+                                                "hold_ms": 750})]
+
+
+def test_down_up_and_a_long_click_rehearse(tool, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_DRYRUN", "1")
+    out = srv.pointer("down", x=1, y=2)
+    assert "would press left at (1, 2) and keep it held until pointer action='up'" in out
+    assert "would release middle at the cursor" in srv.pointer("up", button="middle")
+    assert "holding it 300 ms" in srv.pointer("click", x=1, y=2, hold_ms=300)
+    assert tool["input"] == [] and hinput.held_button() is None
+    assert tool["guard"] == [(1, 2), (None, None), (1, 2)]
+
+
+def test_the_guarantee_refuses_down_and_up(tool, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    for action in ("down", "up"):
+        with pytest.raises(srv.trust.TrustError, match="HYPRUSE_BACKGROUND"):
+            srv.pointer(action, x=1, y=1)
+    assert tool["input"] == []
+
+
+def test_automatic_mode_refuses_a_down_over_another_window(tool, monkeypatch):
+    monkeypatch.delenv("HYPRUSE_BACKGROUND")
+    monkeypatch.setattr(srv, "_active_address", lambda: "0xme")
+    monkeypatch.setattr(srv.trust, "other_window_at",
+                        lambda x, y, active: {"address": "0xother", "class": "foot"})
+    with pytest.raises(srv.trust.TrustError, match="not the window the human is in"):
+        srv.pointer("down", x=1, y=1)
+    with pytest.raises(srv.trust.TrustError):
+        srv.pointer("up")  # in place: judged at the cursor, like a click
+    assert tool["input"] == []
+
+
+def test_unknown_action_lists_down_and_up(tool):
+    with pytest.raises(ValueError, match="move|click|down|up|drag|scroll"):
+        srv.pointer("press")
+
+
+# --- sequence -------------------------------------------------------------------
+
+
+def test_a_sequence_that_stops_before_its_up_releases_the_button(tool, monkeypatch):
+    monkeypatch.setattr(srv.events, "EventStream", lambda: (_ for _ in ()).throw(
+        srv.events.EventError("no socket")))
+    released = []
+    monkeypatch.setattr(hinput, "release_held",
+                        lambda: released.append(hinput.held_button()) or hinput.restore_held(None))
+    steps = [
+        {"op": "pointer", "action": "down", "x": 1, "y": 1},
+        {"op": "pointer", "action": "move", "x": 50, "y": 50},
+        {"op": "pointer", "action": "fling"},
+        {"op": "pointer", "action": "up"},
+    ]
+    out = srv.sequence(steps, then="none")
+    assert released == ["left"]
+    assert "released the left button a step had pressed" in out
+    assert ("up", None, None, "left") not in tool["input"]
+
+
+def test_a_sequence_that_runs_to_the_end_leaves_a_deliberate_hold(tool, monkeypatch):
+    monkeypatch.setattr(srv.events, "EventStream", lambda: (_ for _ in ()).throw(
+        srv.events.EventError("no socket")))
+    out = srv.sequence([{"op": "pointer", "action": "down", "x": 1, "y": 1}], then="none")
+    assert "all 1/1" in out and hinput.held_button() == "left"
+
+
+# --- the shell verbs ----------------------------------------------------------------
+
+
+def _kwargs(*argv):
+    ns = verbs.build_parser().parse_args(list(argv))
+    return verbs.normalize(ns.verb, ns)[0]
+
+
+def test_cli_down_up_and_hold_ms():
+    assert _kwargs("pointer", "down", "10", "20", "--button", "right") == {
+        "action": "down", "x": 10.0, "y": 20.0, "button": "right"}
+    assert _kwargs("pointer", "up") == {"action": "up"}
+    assert _kwargs("pointer", "click", "1", "2", "--hold-ms", "800") == {
+        "action": "click", "x": 1.0, "y": 2.0, "hold_ms": 800.0}
+    with pytest.raises(verbs.Usage, match="down takes X Y"):
+        _kwargs("pointer", "down", "10")
+
+
+def test_a_cli_hold_is_carried_to_the_next_process(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "test")
+    monkeypatch.setattr(verbs, "_lock", lambda: None)
+    monkeypatch.setattr(cli, "_take_beacon", lambda: True)
+    monkeypatch.setattr(hinput, "_held_button", None)
+    seen = []
+
+    def pointer(**kw):
+        seen.append(hinput.held_button())
+        if kw["action"] == "down":
+            hinput.restore_held("left")
+        else:
+            hinput.restore_held(None)
+        return f"{kw['action']} ok"
+
+    monkeypatch.setattr(srv, "pointer", pointer)
+    assert verbs.run("pointer", {"action": "down"}) == 0
+    assert json.loads(cli_state.path().read_text())["flags"]["held_button"] == "left"
+    hinput.restore_held(None)  # a new process starts with nothing held
+    assert verbs.run("pointer", {"action": "up"}) == 0
+    assert seen == [None, "left"]  # the second process adopted the hold
+    assert json.loads(cli_state.path().read_text())["flags"]["held_button"] is None
+
+
+def test_stop_releases_a_hold_a_shell_down_left(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "test")
+    cli_state.restore()
+    cli_state.set_flag("held_button", "left")
+    cli_state.save()
+    released = []
+    monkeypatch.setattr(hinput, "release_held",
+                        lambda: released.append(hinput.held_button()) or hinput.restore_held(None))
+    assert cli.stop() == 0
+    assert released == ["left"]
+    assert "released the left button" in capsys.readouterr().out
+    assert cli_state.load()["flags"]["held_button"] is None

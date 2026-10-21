@@ -304,7 +304,9 @@ wait subscribed is not caught: look at `desktop`. Use this instead of
 
 ```
 hypruse pointer move X Y
-hypruse pointer click [X Y] [--button left|right|middle] [--double] [--allow-auth]
+hypruse pointer click [X Y] [--button left|right|middle] [--double] [--hold-ms MS] [--allow-auth]
+hypruse pointer down [X Y] [--button B] [--allow-auth]
+hypruse pointer up [X Y] [--button B] [--allow-auth]
 hypruse pointer drag X Y TO_X TO_Y [--button B] [--duration-ms MS] [--steps N] [--allow-auth]
 hypruse pointer scroll DY [DX] [--at X Y] [--allow-auth]
 ```
@@ -317,11 +319,19 @@ followed by a one-pixel there-and-back motion, so apps that ignore warps
 `drag` holds the button across `--steps` moves (1-100, default 12) spread
 over `--duration-ms` (0-5000, default 200) and ends exactly on `TO_X TO_Y`;
 slow it down for an app that samples the mouse once per frame.
+`click --hold-ms` keeps the button down that long (up to 10000) before
+releasing. `down` presses a button (at `X Y`, or where the cursor is) and
+leaves it held across calls until `up`, so a hold can be paced by hand:
+`down`, `move` (real motion, so it drags), `screenshot` mid-hold, `up`. A
+move while a button is down is guarded like a drag. One button at a time:
+a second `down` is an error. `hypruse stop` releases a button a `down`
+left held, and a `sequence` that stops before its `up` releases it too.
 
 Output:
 
 ```
 click ok; cursor now at (800, 60)
+down ok; cursor now at (800, 60); the left button is held down until pointer action='up'
 ```
 
 When a launcher or on-screen keyboard layer covers the point the click is

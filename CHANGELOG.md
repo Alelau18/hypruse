@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Holding a button.** `pointer` takes `action='down'` and `'up'`
+  (optional x,y to move there first, `button` as for a click) and
+  `hold_ms` on a click (press, wait, release; up to 10 s). `down` records
+  the held button where the SIGTERM cleanup and `hypruse stop` find it,
+  refuses a second hold, and `up` clears it; a move while a button is down
+  is guarded like a drag. Both go through the click's guards (trust,
+  confinement, the auth interlock, the session lock and the background
+  policy: refused under `HYPRUSE_BACKGROUND=1`, judged by the point like a
+  click in automatic mode), rehearse under dry run, and are journaled.
+  The CLI has `pointer down [X Y] [--button B]`, `pointer up [X Y]
+  [--button B]` and `pointer click ... --hold-ms N`; a shell `down`
+  carries over to the next verb, and `hypruse stop` releases it. A
+  `sequence` that stops before the step that releases a button it pressed
+  releases it.
+
 ### Fixed
 - **Pointer motion apps can see.** A cursor move was a compositor warp,
   which XWayland, Wine and GameMaker clients never receive as motion, so

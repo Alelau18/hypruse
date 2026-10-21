@@ -12,9 +12,9 @@ shutdown. Anything can watch it, the shipped Waybar module (waybar/)
 shows a red indicator while an agent has hands on the desktop, and its
 click action (or a Hyprland keybind) runs `pkill -f hypruse`: the
 process dies mid-action at worst, never holding a button down, because
-button press/release pairs are sent inside one tool call and the SIGTERM
+a click's press/release pair is sent inside one tool call and the SIGTERM
 path runs registered cleanups (on_shutdown) that release anything a
-long-running drag still holds.
+drag, a long click or a `pointer down` still holds.
 """
 
 from __future__ import annotations

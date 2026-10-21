@@ -48,7 +48,8 @@ def dry(monkeypatch):
     monkeypatch.setattr(hyprctl, "snapshot", lambda: {"windows": [CLIENT]})
     for name in ("dispatch", "keyword"):
         monkeypatch.setattr(hyprctl, name, lambda *a, _n=name: effects.append((_n, *a)))
-    for name in ("move", "click", "drag", "scroll", "type_text", "key_combo"):
+    for name in ("move", "click", "button_down", "button_up", "drag", "scroll", "type_text",
+                 "key_combo"):
         monkeypatch.setattr(hinput, name, lambda *a, _n=name, **k: effects.append((_n, a, k)))
     monkeypatch.setattr(clip, "write", lambda t: effects.append(("clipboard", t)))
     return effects
@@ -256,6 +257,8 @@ def test_a_clipboard_read_still_reads(dry, monkeypatch):
     [
         lambda: hinput.move(1, 2),
         lambda: hinput.click(1, 2),
+        lambda: hinput.button_down(1, 2),
+        lambda: hinput.button_up(1, 2),
         lambda: hinput.drag(1, 2, 3, 4),
         lambda: hinput.scroll(dy=1),
         lambda: hinput.type_text("x"),
