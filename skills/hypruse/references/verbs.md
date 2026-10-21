@@ -117,6 +117,11 @@ cursor 642,516
 layer top wofi at 660,300 600x400 kind launcher
 ```
 
+A window line ends with flags only when they are true: `floating`,
+`xwayland`, `fullscreen`, `pinned`, `hidden` (an inactive group tab). A
+monitor in DPMS sleep ends with `dpms off`: a capture of it is refused at
+once (it draws no frame), so ask the human to wake it.
+
 Exit codes: 0, 1.
 
 Notes: `at` and the size are global logical pixels, the same space every

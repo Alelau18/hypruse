@@ -228,6 +228,20 @@ def _scale_for_rect(x: int, y: int, w: int, h: int, monitors: list[dict[str, Any
     return max(scales, default=1.0)
 
 
+def _refuse_if_asleep(monitors: list[dict[str, Any]], rect: tuple[int, int, int, int]) -> None:
+    """Refuse a screen capture that touches a monitor in DPMS sleep. grim
+    waits for a frame the sleeping output never renders and times out
+    after 10 s, which read as a broken capture (and, after a successful
+    action with then='screenshot', as the action failing)."""
+    for m in monitors:
+        if m.get("dpmsStatus") is False and _rect_intersects(hyprctl.logical_rect(m), rect):
+            raise CaptureRefused(
+                f"monitor {m.get('name')} is asleep (DPMS off), so it draws no frame to "
+                "capture. Ask the human to wake it (input, or `hyprctl dispatch dpms on`), "
+                "then capture again"
+            )
+
+
 def _find_window(window: str, clients: list[dict[str, Any]], active: str | None) -> dict[str, Any]:
     target = active if window == "active" else window
     if not target:
@@ -539,6 +553,8 @@ def capture(
         data, fmt, factor = grabbed
         meta["source"] = "window"
     else:
+        # a monitor, a region, or a window cropped from the screen
+        _refuse_if_asleep(monitors, tuple(meta["geometry"]))  # type: ignore[arg-type]
         data, fmt, applied = _grab_fitting(base, start_scale, max_bytes, lossless, base_scale)
         factor = base_scale * applied
         if window:

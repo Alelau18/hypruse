@@ -300,8 +300,10 @@ def _learn_client(address: Any) -> None:
 
 @journal.journaled("observe")
 def desktop() -> dict[str, Any]:
-    """Semantic desktop snapshot: monitors, workspaces, windows (address,
-    class, title, `at` + `size` in global coords), active window, cursor,
+    """Semantic desktop snapshot: monitors (`dpms: off` when asleep: no
+    capture of it works until the human wakes it), workspaces, windows
+    (address, class, title, `at` + `size` in global coords, and
+    xwayland/fullscreen/pinned/hidden flags when true), active window, cursor,
     and `layers`: launchers (wofi/rofi), bars, notification popups, and
     on-screen keyboards are NOT windows and appear only there, with a
     best-effort `kind` and global geometry you can screenshot by region or

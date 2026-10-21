@@ -565,10 +565,19 @@ def _window(c: dict[str, Any]) -> dict[str, Any]:
         "floating": c.get("floating", False),
         "pid": c.get("pid"),
     }
-    # int enum since Hyprland 0.42 (0 none / 1 maximized / 2 fullscreen), bool before
+    # flags only when true, to keep the snapshot token-lean. xwayland
+    # matters for what reaches the app (background keys between two
+    # XWayland windows, games that ignore warps); pinned for what covers
+    # what. fullscreen is an int enum since Hyprland 0.42 (0 none /
+    # 1 maximized / 2 fullscreen), bool before; an inactive group tab is
+    # hidden: true before 0.56 and visible: false since
+    if c.get("xwayland"):
+        win["xwayland"] = True
     if c.get("fullscreen"):
         win["fullscreen"] = True
-    if c.get("hidden"):
+    if c.get("pinned"):
+        win["pinned"] = True
+    if c.get("hidden") or c.get("visible") is False:
         win["hidden"] = True
     return win
 
@@ -587,6 +596,8 @@ def _monitor(m: dict[str, Any]) -> dict[str, Any]:
     }
     if int(m.get("transform", 0)):
         out["transform"] = int(m["transform"])
+    if m.get("dpmsStatus") is False:  # asleep: captures of it hang, input wakes it
+        out["dpms"] = "off"
     return out
 
 

@@ -577,3 +577,42 @@ def test_a_crop_of_a_hidden_window_is_refused_with_what_to_do(monkeypatch):
     with pytest.raises(screenshot.CaptureRefused, match="leave out region"):
         screenshot.capture(window="0xb", region="0,0,10,10")
     assert calls == []
+
+
+# --- DPMS: a sleeping monitor draws no frame ---------------------------------------
+
+
+ASLEEP = [dict(ONE_MONITOR[0], dpmsStatus=False, focused=True),
+          {"name": "DP-2", "x": 1920, "y": 0, "width": 1920, "height": 1080, "scale": 1.0,
+           "dpmsStatus": True, "activeWorkspace": {"id": 1}}]
+
+
+def _sleeping(monkeypatch):
+    monkeypatch.setattr(screenshot.hyprctl, "query", lambda w: {
+        "monitors": ASLEEP, "clients": [SHOWN], "activewindow": SHOWN}[w])
+    calls = []
+    monkeypatch.setattr(screenshot, "_grim", lambda args: calls.append(args) or _png(10, 10))
+    return calls
+
+
+def test_a_monitor_capture_of_a_sleeping_monitor_fails_fast(monkeypatch):
+    calls = _sleeping(monkeypatch)
+    with pytest.raises(screenshot.CaptureRefused, match="monitor eDP-1 is asleep \\(DPMS off\\)"):
+        screenshot.capture()
+    assert calls == []  # no 10 s grim timeout
+
+
+def test_a_region_touching_a_sleeping_monitor_fails_fast(monkeypatch):
+    calls = _sleeping(monkeypatch)
+    with pytest.raises(screenshot.CaptureRefused, match="asleep"):
+        screenshot.capture(region="1900,0,100x100")  # straddles the seam
+    assert calls == []
+    screenshot.capture(region="2000,0,100,100")  # wholly on the awake monitor
+    assert len(calls) == 1
+
+
+def test_capture_stable_does_not_retry_a_sleeping_monitor(monkeypatch):
+    calls = _sleeping(monkeypatch)
+    with pytest.raises(screenshot.CaptureRefused):
+        screenshot.capture_stable()
+    assert calls == []

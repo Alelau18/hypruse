@@ -566,3 +566,18 @@ def test_layout_group_is_the_first_of_one_when_unknown(monkeypatch):
 
     monkeypatch.setattr(hyprctl, "query", boom)
     assert hyprctl.layout_group() == (0, 1)
+
+
+def test_window_flags_appear_only_when_true():
+    base = {"address": "0xa", "class": "wine", "title": "t", "at": [0, 0], "size": [1, 1]}
+    assert not {"xwayland", "fullscreen", "pinned", "hidden"} & set(hyprctl._window(dict(
+        base, xwayland=False, fullscreen=0, pinned=False, hidden=False, visible=True)))
+    win = hyprctl._window(dict(base, xwayland=True, fullscreen=2, pinned=True, visible=False))
+    assert (win["xwayland"], win["fullscreen"], win["pinned"], win["hidden"]) == (True,) * 4
+
+
+def test_a_sleeping_monitor_says_dpms_off():
+    m = {"name": "HDMI-A-1", "x": 0, "y": 0, "width": 3840, "height": 2160, "scale": 1.0}
+    assert "dpms" not in hyprctl._monitor(dict(m, dpmsStatus=True))
+    assert "dpms" not in hyprctl._monitor(m)  # an older Hyprland without the field
+    assert hyprctl._monitor(dict(m, dpmsStatus=False))["dpms"] == "off"

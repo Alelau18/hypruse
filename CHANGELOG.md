@@ -37,6 +37,12 @@ All notable changes to this project are documented here. The format follows
   releases it.
 
 ### Fixed
+- **Sleeping monitors and window flags.** `desktop` marks windows that are
+  `xwayland`, `fullscreen`, `pinned` or `hidden` (each only when true, to
+  keep the snapshot small) and monitors in DPMS sleep (`dpms: off`). A
+  capture of a monitor, a region or a screen crop touching a sleeping
+  monitor is refused at once ("monitor X is asleep (DPMS off) ...")
+  instead of a 10 s grim timeout.
 - **Screenshot regions as agents write them.** `region` takes `x,y,W,H`
   besides `x,y,WxH` and `x,y WxH`, and `window` with `region` is a crop in
   the window's own coordinates instead of an error: clipped to the window,

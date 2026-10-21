@@ -680,6 +680,8 @@ def _render_desktop(snap: dict[str, Any]) -> str:
             line += " focused"
         if m.get("transform"):
             line += f" transform {m['transform']}"
+        if m.get("dpms") == "off":
+            line += " dpms off"
         lines.append(line)
     for w in snap.get("workspaces", []):
         line = (f"ws {_ws(w.get('id'))} {_q(w.get('name', ''))} on {_safe(w.get('monitor'))} "
@@ -691,7 +693,7 @@ def _render_desktop(snap: dict[str, Any]) -> str:
         at, size = c.get("at") or [None, None], c.get("size") or [None, None]
         line = (f"win {c.get('address')} ws {_ws(c.get('workspace'))} {_safe(c.get('class', ''))} "
                 f"{_q(c.get('title', ''))} at {at[0]},{at[1]} {size[0]}x{size[1]}")
-        for flag in ("floating", "fullscreen", "hidden"):
+        for flag in ("floating", "xwayland", "fullscreen", "pinned", "hidden"):
             if c.get(flag):
                 line += f" {flag}"
         lines.append(line)

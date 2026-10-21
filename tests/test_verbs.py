@@ -738,3 +738,17 @@ def test_the_launch_warning_is_printed():
     out = verbs.render("launch", {"address": "0x1", "class": "foot", "title": "~",
                                   "workspace": 99, "note": "n", "warning": "careful"})
     assert out.splitlines()[-1] == "warning careful"
+
+
+def test_desktop_lines_carry_the_compact_flags():
+    snap = {
+        "monitors": [{"name": "HDMI-A-1", "geometry": [0, 0, 3840, 2160], "scale": 1.0,
+                      "active_workspace": 1, "dpms": "off"}],
+        "workspaces": [],
+        "windows": [{"address": "0xa", "workspace": 1, "class": "sf6.exe", "title": "SF6",
+                     "at": [0, 0], "size": [10, 10], "xwayland": True, "pinned": True}],
+        "active_window": "0xa", "cursor": [1, 2],
+    }
+    out = verbs._render_desktop(snap)
+    assert "scale 1.0 ws 1 dpms off" in out
+    assert out.splitlines()[1].endswith("10x10 xwayland pinned")
