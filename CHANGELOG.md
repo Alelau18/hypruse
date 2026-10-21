@@ -37,6 +37,11 @@ All notable changes to this project are documented here. The format follows
   releases it.
 
 ### Fixed
+- **`HYPRUSE_STRICT` no longer stops background work when the human
+  moves.** The seat guard ran before `keyboard` and `click_ui` decided on
+  the background path, so every mouse move the human made refused the
+  agent's work in a window they were not in. The mode is decided first and
+  the guard runs on the foreground path only.
 - **`then='screenshot'` after a background action shows that window.** It
   captured the focused monitor, which shows the human's own work, not the
   window acted on. A background `click_ui`, a background `keyboard`, and a

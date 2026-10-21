@@ -1145,7 +1145,6 @@ def keyboard(
     _check_then(then)
     window = _select(window)
     _note_clients()  # what wait_for(window_open) counts as already there
-    trust.guard_seat()
     # validate EVERY argument before any side effect: focusing the target
     # below is a visible seat change, and a call that goes on to raise
     # must not have moved the human's focus on its way out
@@ -1167,6 +1166,11 @@ def keyboard(
             return _keyboard_in_background(target_client, action, text, keys, then, allow_auth)
     elif bg.decide(True, background):
         bg.refuse("keyboard needs window= on one of the agent's workspaces to type there")
+    # HYPRUSE_STRICT guards the human's seat against input aimed at what
+    # they may have just changed. A background path neither reads nor moves
+    # that seat, so the guard runs only here: before it, every mouse move
+    # the human made refused the agent's work in another window.
+    trust.guard_seat()
     # a locked session eats all input, and a mapped launcher layer holds
     # the keyboard grab regardless of window focus: both refuse when that
     # breaks the caller's stated intent (a named window, or a confinement
@@ -1251,7 +1255,6 @@ def click_ui(
     _check_then(then)
     window = _select(window)
     _note_clients()  # what wait_for(window_open) counts as already there
-    trust.guard_seat()
     if bool(name) == bool(mark):
         raise ValueError("pass exactly one of `name` or `mark`")
     if mark:
@@ -1314,6 +1317,7 @@ def click_ui(
             kind = "double click" if double else f"{button} click"
             bg.refuse(f"a {kind} has no accessibility action, only a left click does")
         return _click_in_background(client, control, desc, then, allow_auth)
+    trust.guard_seat()  # the human's seat: foreground only, as in keyboard
     trust.guard_client(client)  # confinement
     trust.guard_auth_client(client, allow_auth)
     # a locked session, or a layer over the point, would swallow the click

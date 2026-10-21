@@ -1114,3 +1114,35 @@ def test_a_landing_is_recognised_by_the_workspace_id_too(monkeypatch):
                         lambda a: {"address": a, "workspace": {"id": 99, "name": "agent"}})
     accept = srv._launched_window("99", "foot")
     assert accept({"address": "0xf", "workspace": "agent", "class": "zz"})
+
+
+# --- HYPRUSE_STRICT guards the human's seat, which background work never touches ----
+
+
+def _seat_moved(monkeypatch):
+    def moved():
+        raise srv.trust.TrustError("seat moved since the last action (the human?)")
+
+    monkeypatch.setattr(srv.trust, "guard_seat", moved)
+
+
+def test_strict_does_not_refuse_background_keys_when_the_human_moves(wired_bg, monkeypatch):
+    _seat_moved(monkeypatch)
+    out = str(srv.keyboard("type", text="hello", window="0xa"))
+    assert "sent 5 keys to 0xa" in out
+
+
+def test_strict_does_not_refuse_a_background_press(wired_bg, monkeypatch):
+    _seat_moved(monkeypatch)
+    out = str(srv.click_ui(name="Save", window="0xa"))
+    assert "accessibility action" in out and wired_bg["actions"] == [("svc", "/save")]
+
+
+def test_strict_still_guards_foreground_input(wired_bg, monkeypatch):
+    _seat_moved(monkeypatch)
+    wired_bg["active"] = "0xa"  # the human is in it: foreground
+    with pytest.raises(srv.trust.TrustError, match="seat moved"):
+        srv.keyboard("type", text="hello", window="0xa")
+    with pytest.raises(srv.trust.TrustError, match="seat moved"):
+        srv.click_ui(name="Save", window="0xa")
+    assert wired_bg["typed"] == [] and wired_bg["clicks"] == []
