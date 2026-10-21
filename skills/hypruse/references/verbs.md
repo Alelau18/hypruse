@@ -346,7 +346,8 @@ slow it down for an app that samples the mouse once per frame.
 releasing. `down` presses a button (at `X Y`, or where the cursor is) and
 leaves it held across calls until `up`, so a hold can be paced by hand:
 `down`, `move` (real motion, so it drags), `screenshot` mid-hold, `up`. A
-move while a button is down is guarded like a drag. One button at a time:
+move while a button is down is guarded like a drag; an `up` with no `X Y`
+of the held button is never refused (it only ends the hold). One button at a time:
 a second `down` is an error. `hypruse stop` releases a button a `down`
 left held, and a `sequence` that stops before its `up` releases it too.
 

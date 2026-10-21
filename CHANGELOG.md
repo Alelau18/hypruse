@@ -29,7 +29,10 @@ All notable changes to this project are documented here. The format follows
   is guarded like a drag. Both go through the click's guards (trust,
   confinement, the auth interlock, the session lock and the background
   policy: refused under `HYPRUSE_BACKGROUND=1`, judged by the point like a
-  click in automatic mode), rehearse under dry run, and are journaled.
+  click in automatic mode), rehearse under dry run, and are journaled. An
+  `up` with no x,y of the button hypruse holds is never refused, since it
+  only ends a press that was allowed and refusing it would strand the
+  button; an `up` elsewhere is guarded like a move.
   The CLI has `pointer down [X Y] [--button B]`, `pointer up [X Y]
   [--button B]` and `pointer click ... --hold-ms N`; a shell `down`
   carries over to the next verb, and `hypruse stop` releases it. A

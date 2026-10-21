@@ -1015,8 +1015,16 @@ def pointer(
     safety.touch(f"pointer:{action}")
     _check_then(then)
     _note_clients()  # what wait_for(window_open) counts as already there
-    trust.guard_seat()
-    if action in _POINTER_ACTIONS:  # else the ValueError below
+    # releasing the button hypruse holds, where the cursor is, only ends a
+    # press that was allowed when it was made: refusing it (the human moved,
+    # the session locked, the cursor drifted over another window) would
+    # strand the button down. An `up` elsewhere is a move first and is
+    # guarded like one.
+    ending_hold = (action == "up" and x is None and y is None
+                   and hinput.held_button() is not None and hinput.held_button() == button)
+    if not ending_hold:
+        trust.guard_seat()
+    if action in _POINTER_ACTIONS and not ending_hold:  # else the ValueError below
         _pointer_policy(action, x, y, to_x, to_y, background)
     # HYPRUSE_DRYRUN runs every check below and then delivers nothing, so
     # `plan` describes what each branch was about to do. The guards stay
@@ -1027,7 +1035,7 @@ def pointer(
     note = ""
     # a move with a button held down is a drag, and delivers like one
     holding = hinput.held_button() if action == "move" else None
-    if action != "move" or holding:
+    if (action != "move" or holding) and not ending_hold:
         # a locked session routes every event to its credential prompt, so
         # no window can receive this (a bare click can legitimately AIM at
         # the prompt, so window_given=False: note on allow_auth, else
@@ -1070,8 +1078,9 @@ def pointer(
         else:
             hinput.check_button(button)
         hinput.check_xy(x, y)
-        trust.guard_pointer(x, y, allow_auth)  # None x/y = at the current cursor
-        note = note or _layer_note(x, y)
+        if not ending_hold:
+            trust.guard_pointer(x, y, allow_auth)  # None x/y = at the current cursor
+            note = note or _layer_note(x, y)
         plan = f"{'press' if action == 'down' else 'release'} {button} at {_at(x, y)}"
         if action == "down":
             plan += " and keep it held until pointer action='up'"

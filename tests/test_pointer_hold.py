@@ -188,9 +188,9 @@ def test_down_and_up_go_through_the_click_guards(tool):
     assert tool["input"] == [("down", 10, 20, "right")]
     assert tool["guard"] == [(10, 20)] and tool["lock"] == 1
     assert "right button is held down until pointer action='up'" in out
-    out = srv.pointer("up", button="right")
-    assert tool["input"][-1] == ("up", None, None, "right")
-    assert tool["guard"][-1] == (None, None) and tool["lock"] == 2
+    out = srv.pointer("up", x=30, y=40, button="right")  # a move first: guarded
+    assert tool["input"][-1] == ("up", 30, 40, "right")
+    assert tool["guard"][-1] == (30, 40) and tool["lock"] == 2
     assert out == "up ok; cursor now at (7, 8)"
 
 
@@ -405,3 +405,36 @@ def test_release_held_reports_a_failed_release_and_keeps_the_hold(monkeypatch):
     assert hinput.held_button() == "left"
     hinput.restore_held(None)
     assert hinput.release_held() is False  # nothing held, nothing sent
+
+
+# --- an `up` that ends the hold is never refused ---------------------------------------
+
+
+def _refusing(monkeypatch, calls):
+    def refuse(*a, **k):
+        raise srv.trust.TrustError("refused")
+
+    for name in ("guard_seat", "guard_pointer", "guard_session_lock"):
+        monkeypatch.setattr(srv.trust, name, refuse)
+    monkeypatch.setattr(srv, "_pointer_policy", refuse)
+
+
+def test_a_bare_up_of_the_held_button_always_releases(tool, monkeypatch):
+    srv.pointer("down", x=1, y=2)
+    _refusing(monkeypatch, tool)
+    out = srv.pointer("up")
+    assert tool["input"][-1] == ("up", None, None, "left")
+    assert out.startswith("up ok") and hinput.held_button() is None
+
+
+def test_an_up_elsewhere_or_of_another_button_keeps_the_guards(tool, monkeypatch):
+    srv.pointer("down", x=1, y=2)
+    _refusing(monkeypatch, tool)
+    with pytest.raises(srv.trust.TrustError):
+        srv.pointer("up", x=50, y=60)  # a move first
+    with pytest.raises(srv.trust.TrustError):
+        srv.pointer("up", button="right")  # not the hold it would end
+    hinput.restore_held(None)
+    with pytest.raises(srv.trust.TrustError):
+        srv.pointer("up")  # nothing held: an ordinary release
+    assert [c[0] for c in tool["input"]] == ["down"]
