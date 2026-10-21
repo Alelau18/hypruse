@@ -137,7 +137,10 @@ cheapest way to read one app). With grim 1.5+ on Hyprland 0.54+ that is the
 window itself, even on a hidden workspace, where it may show how the app last
 looked; otherwise a crop of the screen (`source: screen`), and a hidden window
 is refused. Refused while the session is locked. `--region` captures an arbitrary global
-rectangle; `--scale` 0.1-1.0 is a deliberate downscale, normally unset;
+rectangle, written `x,y,WxH`, `x,y WxH` or `x,y,W,H`; with `--window` it is a
+crop in the window's own coordinates (0,0 is its top-left), clipped to the
+window and cut from the screen, so it needs the window on screen (a hidden
+one is refused: capture it whole instead). `geometry` is still global; `--scale` 0.1-1.0 is a deliberate downscale, normally unset;
 `--stable` waits up to 2 s until two consecutive frames match, so a capture
 right after an action is not mid-animation; `--lossless` writes PNG instead
 of JPEG q90; `--out` moves the file.

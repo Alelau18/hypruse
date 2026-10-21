@@ -37,6 +37,13 @@ All notable changes to this project are documented here. The format follows
   releases it.
 
 ### Fixed
+- **Screenshot regions as agents write them.** `region` takes `x,y,W,H`
+  besides `x,y,WxH` and `x,y WxH`, and `window` with `region` is a crop in
+  the window's own coordinates instead of an error: clipped to the window,
+  cut from the screen at its global position, with global `geometry` so
+  `global = geometry[:2] + image_pixel / scale` still holds. A window that
+  is not on screen is captured whole by `grim -T`, which hypruse cannot
+  crop without an image library, so that case is refused with what to do.
 - **A failed `then=` observation no longer hides a successful action.**
   Only `then='ui'` failures were caught: a grim timeout after a successful
   `hypr focus_window` surfaced as a tool error. Every `then=` value now

@@ -110,7 +110,8 @@ def build_parser() -> argparse.ArgumentParser:
     v = verb("screenshot", "capture the focused monitor, a window, or a region")
     v.add_argument("--window", default=_S, metavar="ADDR",
                    help="window address, 'active', or class:RE|title:RE|pid:N")
-    v.add_argument("--region", default=_S, metavar="x,y,WxH")
+    v.add_argument("--region", default=_S, metavar="x,y,WxH",
+                   help="global, or window-relative with --window; x,y,W,H works too")
     v.add_argument("--scale", type=float, default=_S, metavar="F", help="deliberate downscale")
     capture(v)
 

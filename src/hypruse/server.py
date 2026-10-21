@@ -389,7 +389,9 @@ def screenshot(
 ) -> list[Any]:
     """Capture the focused monitor, a window (`window`: "active" or an
     address or selector, cheapest for reading one app), or a `region`
-    "x,y,WxH". Returns the image (or a file path to read) + JSON metadata
+    "x,y,WxH" or "x,y,W,H" (global; with `window` too, a crop in the
+    window's own coordinates, cut from the screen, so the window must be
+    on screen). Returns the image (or a file path to read) + JSON metadata
     with geometry/scale for pixel→global mapping. A window on a hidden
     workspace or under another window is still captured as itself
     (metadata `source` "window"; without grim -T a shown window is cropped
@@ -2679,7 +2681,9 @@ _READONLY_DOCS = {
     first; pass the addresses it returns to the other observation tools.""",
     "screenshot": """Capture the focused monitor, a window (`window`: "active" or an
     address or selector, cheapest for reading one app), or a `region`
-    "x,y,WxH". Returns the image (or a file path to read) + JSON metadata
+    "x,y,WxH" or "x,y,W,H" (global; with `window` too, a crop in the
+    window's own coordinates, cut from the screen, so the window must be
+    on screen). Returns the image (or a file path to read) + JSON metadata
     with geometry/scale for pixel→global mapping. A window on a hidden
     workspace or under another window is still captured as itself
     (metadata `source` "window"; without grim -T a shown window is cropped

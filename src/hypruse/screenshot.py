@@ -30,7 +30,7 @@ class CaptureRefused(ScreenshotError):
     is no active window, or the session is locked."""
 
 
-_REGION = re.compile(r"^\s*(-?\d+)\s*,\s*(-?\d+)\s*[, ]\s*(\d+)\s*x\s*(\d+)\s*$")
+_REGION = re.compile(r"^\s*(-?\d+)\s*,\s*(-?\d+)\s*[, ]\s*(\d+)\s*[x,]\s*(\d+)\s*$")
 
 _SIZE = re.compile(r"^\s*(\d+)\s*x\s*(\d+)\s*$")
 
@@ -38,10 +38,11 @@ DEFAULT_ZOOM_SIZE = "480x360"
 
 
 def parse_region(region: str) -> tuple[int, int, int, int]:
-    """Accepts 'x,y,WxH' or 'x,y WxH' (grim's own format)."""
+    """Accepts 'x,y,WxH', 'x,y WxH' (grim's own format) or 'x,y,W,H' (the
+    four numbers agents write by habit)."""
     m = _REGION.match(region)
     if not m:
-        raise ScreenshotError(f"bad region {region!r}, expected 'x,y,WxH'")
+        raise ScreenshotError(f"bad region {region!r}, expected 'x,y,WxH' or 'x,y,W,H'")
     x, y, w, h = map(int, m.groups())
     if w <= 0 or h <= 0:
         raise ScreenshotError(f"bad region {region!r}: empty size")
@@ -405,6 +406,49 @@ def _grab_toplevel(
     return data, fmt, factor
 
 
+def _window_crop(
+    window: str, region: str, monitors: list[dict[str, Any]]
+) -> tuple[int, int, int, int, dict[str, Any]]:
+    """A window-relative `region` as the global rect to capture, clipped to
+    the window, plus the metadata that says what it is. The geometry stays
+    global, so global = geometry[:2] + image_pixel / scale still holds.
+
+    The crop comes from the screen, where the window is shown. A window
+    that is not on screen is captured whole by grim -T, and cropping that
+    image would need an image library hypruse does not depend on, so it is
+    refused with what to do instead."""
+    rx, ry, rw, rh = parse_region(region)
+    active = (hyprctl.query("activewindow") or {}).get("address")
+    clients = hyprctl.query("clients")
+    c = _find_window(window, clients, active)
+    (ax, ay), (aw, ah) = c["at"], c["size"]
+    hidden = _hidden_reason(c, monitors, clients)
+    if hidden is not None:
+        raise CaptureRefused(
+            f"window {c['address']} is not shown ({hidden}), and a region inside it can only "
+            "be cropped from the screen. Capture the whole window (leave out region; it is "
+            f"captured as itself) and zoom by reading that image, or {_bring_forward(c, hidden)}."
+        )
+    x0, y0 = max(rx, 0), max(ry, 0)
+    x1, y1 = min(rx + rw, aw), min(ry + rh, ah)
+    if x1 <= x0 or y1 <= y0:
+        raise ScreenshotError(
+            f"region {region!r} is window-relative and lies outside window {c['address']}, "
+            f"which is {aw}x{ah}"
+        )
+    meta = {
+        "target": "window",
+        "window": c["address"],
+        "class": c.get("class", ""),
+        "region": [x0, y0, x1 - x0, y1 - y0],
+        "visible": True,
+        "source": "screen",
+        "note": "a region of the window, cropped from the screen: anything over the window "
+                "shows in its place; geometry is global",
+    }
+    return ax + x0, ay + y0, x1 - x0, y1 - y0, meta
+
+
 def capture(
     window: str = "",
     region: str = "",
@@ -413,25 +457,30 @@ def capture(
     max_edge: int | None = None,
     lossless: bool = False,
 ) -> tuple[bytes, dict[str, Any]]:
-    """Returns (image_bytes, metadata). Exactly one of window/region, or
-    neither for the focused monitor. `scale` (0 = auto) forces a capture
+    """Returns (image_bytes, metadata). A window, a region, both (a region
+    in the window's own coordinates, cropped from the screen), or neither
+    for the focused monitor. `scale` (0 = auto) forces a capture
     scale; `max_edge` caps the output's long edge (so the API never
     downscales it under the model); `max_bytes` fits a transport budget by
     degrading format before resolution. The default format is JPEG q90
     (fast, small, reads UI text well); `lossless` leads with PNG instead.
     Any applied downscale is folded into the metadata `scale`, so the
     pixel→global mapping stays exact."""
-    if window and region:
-        raise ScreenshotError("pass window OR region, not both")
     if scale and not 0.1 <= scale <= 1.0:
         raise ScreenshotError(f"scale {scale} out of range (0.1-1.0, or 0 for auto)")
 
     monitors = hyprctl.query("monitors")
+    crop: dict[str, Any] = {}
+    if window and region:
+        # a region inside a window: what agents meant every time they
+        # passed both, so it is a crop in the window's own coordinates
+        x, y, w, h, crop = _window_crop(window, region, monitors)
+        region, window = f"{x},{y},{w}x{h}", ""
 
     if region:
         x, y, w, h = parse_region(region)
         base = ["-g", f"{x},{y} {w}x{h}"]
-        meta: dict[str, Any] = {"target": "region", "geometry": [x, y, w, h]}
+        meta: dict[str, Any] = {"target": "region", "geometry": [x, y, w, h], **crop}
         base_scale = _scale_for_rect(x, y, w, h, monitors)
         physical_long = max(w, h) * base_scale
     elif window:

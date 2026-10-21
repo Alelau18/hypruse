@@ -9,7 +9,14 @@ def test_parse_region_both_separators():
     assert screenshot.parse_region("-5, -7, 8x9") == (-5, -7, 8, 9)
 
 
-@pytest.mark.parametrize("bad", ["", "10,20", "a,b,cxd", "10,20,0x50", "10;20;3x4"])
+def test_parse_region_takes_four_numbers_too():
+    # what agents wrote by habit, six times in the mined sessions
+    assert screenshot.parse_region("1100,560,2300,500") == (1100, 560, 2300, 500)
+    assert screenshot.parse_region(" 1, 2 , 3 , 4 ") == (1, 2, 3, 4)
+
+
+@pytest.mark.parametrize(
+    "bad", ["", "10,20", "a,b,cxd", "10,20,0x50", "10;20;3x4", "1,2,3", "1,2,3,4,5", "1,2,0,4"])
 def test_parse_region_rejects(bad):
     with pytest.raises(screenshot.ScreenshotError):
         screenshot.parse_region(bad)
@@ -536,3 +543,37 @@ def test_a_hung_grim_is_a_screenshot_error(monkeypatch):
     monkeypatch.setattr(screenshot.subprocess, "run", hang)
     with pytest.raises(screenshot.ScreenshotError, match="timed out"):
         screenshot._grim(["-g", "0,0 8x8"])
+
+
+# --- a region inside a window ------------------------------------------------------
+
+
+def test_window_and_region_crop_the_window_in_its_own_coordinates(monkeypatch):
+    calls = _desktop(monkeypatch)
+    _, meta = screenshot.capture(window="0xa", region="100,50,200,100")
+    # SHOWN sits at (10, 20): the crop is that offset into it, in global terms
+    assert calls == [["-t", "jpeg", "-q", "90", "-g", "110,70 200x100"]]
+    assert meta["geometry"] == [110, 70, 200, 100]  # global = geometry[:2] + px / scale
+    assert meta["target"] == "window" and meta["window"] == "0xa"
+    assert meta["region"] == [100, 50, 200, 100] and meta["source"] == "screen"
+
+
+def test_a_window_crop_is_clipped_to_the_window(monkeypatch):
+    _desktop(monkeypatch)
+    _, meta = screenshot.capture(window="0xa", region="700,-20,500,100")
+    assert meta["region"] == [700, 0, 100, 80]  # SHOWN is 800x600
+    assert meta["geometry"] == [710, 20, 100, 80]
+
+
+def test_a_crop_outside_the_window_is_an_error(monkeypatch):
+    calls = _desktop(monkeypatch)
+    with pytest.raises(screenshot.ScreenshotError, match="outside window 0xa, which is 800x600"):
+        screenshot.capture(window="0xa", region="900,0,10x10")
+    assert calls == []
+
+
+def test_a_crop_of_a_hidden_window_is_refused_with_what_to_do(monkeypatch):
+    calls = _desktop(monkeypatch)
+    with pytest.raises(screenshot.CaptureRefused, match="leave out region"):
+        screenshot.capture(window="0xb", region="0,0,10,10")
+    assert calls == []
