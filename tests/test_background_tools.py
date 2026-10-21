@@ -965,12 +965,37 @@ def test_focusing_is_refused_where_the_window_could_come_forward(wired_bg, toolk
         srv.click_ui(name="Name", window="0xa")
 
 
-def test_the_window_rule_for_focus_on_activate_is_read(monkeypatch):
-    monkeypatch.setattr(srv.hyprctl, "query", lambda what: (
-        {"focus_on_activate": True} if what.startswith("getprop address:0xa")
-        else {"option": "misc:focus_on_activate", "int": 0}))
-    assert srv.__dict__["_focus_on_activate"]("0xa") == 1
-    assert srv.__dict__["_focus_on_activate"]() == 0
+def _foa(monkeypatch, prop, option):
+    def query(what):
+        if what.startswith("getprop address:0xa"):
+            if prop is None:
+                raise srv.hyprctl.HyprctlError("no such window")
+            return {"focus_on_activate": prop}
+        if option is None:
+            raise srv.hyprctl.HyprctlError("unreadable")
+        return {"option": "misc:focus_on_activate", "int": option}
+
+    monkeypatch.setattr(srv.hyprctl, "query", query)
+    return srv.__dict__["_focus_on_activate"]
+
+
+def test_a_window_rule_turning_focus_on_activate_on_is_read(monkeypatch):
+    foa = _foa(monkeypatch, True, 0)
+    assert foa("0xa") == 1
+    assert foa() == 0
+
+
+def test_getprop_false_means_no_rule_so_the_option_decides(monkeypatch):
+    # the bug: getprop prints false whenever no rule sets it, and reading
+    # that as "off" let a GTK 3 field focus switch the human's workspace
+    assert _foa(monkeypatch, False, 1)("0xa") == 1
+    assert _foa(monkeypatch, False, 0)("0xa") == 0
+
+
+def test_an_unreadable_option_stays_unknown_unless_a_rule_says_on(monkeypatch):
+    assert _foa(monkeypatch, False, None)("0xa") is None  # callers refuse on None
+    assert _foa(monkeypatch, True, None)("0xa") == 1
+    assert _foa(monkeypatch, None, 0)("0xa") == 0
 
 
 def test_a_rehearsed_press_reads_plainly(wired_bg, monkeypatch):

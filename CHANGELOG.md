@@ -37,6 +37,13 @@ All notable changes to this project are documented here. The format follows
   releases it.
 
 ### Fixed
+- **A background field focus could switch the human's workspace.** The
+  GTK 2/3 refusal read `hyprctl getprop ... focus_on_activate`, which
+  prints false whenever no window rule sets it, as the setting being off.
+  With `misc:focus_on_activate = true`, a background `click_ui` on a GTK 3
+  entry ran GrabFocus, GTK presented its window, and Hyprland switched the
+  human's workspace and moved the cursor. The option is now read first and
+  a window rule can only turn the value on.
 - **Say how to get a tree from Chromium and Electron.** When `ui`,
   `click_ui` or `marks` find no tree, or no matching controls, in a window
   whose class looks like Chromium, Chrome, Helium, Brave, Electron or VS

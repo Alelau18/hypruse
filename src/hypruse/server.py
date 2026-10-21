@@ -1601,21 +1601,30 @@ def _seat_report(before: tuple[Any, Any] | None) -> tuple[bool, str]:
 
 
 def _focus_on_activate(address: str = "") -> int | None:
-    """Hyprland's focus_on_activate for a window (a window rule overrides the
-    misc: option, and getprop reports the result), else the option; None
-    when neither can be read."""
-    if address:
+    """Hyprland's effective focus_on_activate for a window, or None when it
+    cannot be read. The effective value is the window rule's, else the
+    misc: option (rule.valueOr(option)). `getprop` cannot tell those apart:
+    it prints the rule's value or its default, false, when no rule sets
+    it, so a false from it means "no rule" and the option decides. Reading
+    it as "off" bypassed the refusal on a desktop with the option on, and a
+    background GTK 3 field focus switched the human's workspace. A rule
+    turning it on still reads 1, so getprop may only raise the answer. A
+    rule turning it off reads the same as no rule, so such a window is
+    judged by the option: this fails toward refusing, never toward a
+    workspace switch."""
+    try:
+        reply = hyprctl.query("getoption misc:focus_on_activate")
+        value = reply.get("int", reply.get("bool")) if isinstance(reply, dict) else None
+        option = int(value) if isinstance(value, int | bool) else None
+    except Exception:
+        option = None
+    if address and option != 1:
         with contextlib.suppress(Exception):
             reply = hyprctl.query(f"getprop address:{address} focus_on_activate")
             value = reply.get("focus_on_activate") if isinstance(reply, dict) else None
-            if isinstance(value, int | bool):
-                return int(value)
-    try:
-        reply = hyprctl.query("getoption misc:focus_on_activate")
-    except Exception:
-        return None
-    value = reply.get("int", reply.get("bool")) if isinstance(reply, dict) else None
-    return int(value) if isinstance(value, int | bool) else None
+            if isinstance(value, int | bool) and int(value):
+                return 1  # a rule turns it on for this window
+    return option
 
 
 _ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
