@@ -37,6 +37,15 @@ All notable changes to this project are documented here. The format follows
   releases it.
 
 ### Fixed
+- **Session discovery picks one live compositor.** With the session
+  variables stripped, a crashed instance's leftover socket file counted as
+  live, and `WAYLAND_DISPLAY` was picked on its own (by name, so
+  `wayland-10` sorted before `wayland-2`), so the signature and the socket
+  could belong to different compositors. Both now come from one record of
+  `hyprctl -j instances` (newest first), or, when hyprctl cannot answer,
+  from a runtime-dir scan that requires the pid in `hyprland.lock` to be
+  alive. A set signature with no `WAYLAND_DISPLAY` gets its own instance's
+  socket.
 - **`HYPRUSE_STRICT` no longer stops background work when the human
   moves.** The seat guard ran before `keyboard` and `click_ui` decided on
   the background path, so every mouse move the human made refused the

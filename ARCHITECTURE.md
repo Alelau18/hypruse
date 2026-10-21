@@ -43,7 +43,9 @@ src/hypruse/
                  barrier; what `hypruse journal` and `hypruse replay` read
   clipboard.py   wl-clipboard wrapper for the opt-in clipboard tool
   session.py     discovers HYPRLAND_INSTANCE_SIGNATURE / WAYLAND_DISPLAY
-                 from runtime-dir sockets when the host stripped the env
+                 as one pair, from `hyprctl -j instances` (else the
+                 runtime dir's lock files, live pids only), when the host
+                 stripped the env
   safety.py      activity beacon + kill-switch semantics
 ```
 

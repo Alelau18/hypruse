@@ -9,7 +9,7 @@ test that wants the interesting state opts in explicitly.
 
 import pytest
 
-from hypruse import a11y, dbuswire, hyprctl, journal, server, trust
+from hypruse import a11y, dbuswire, hyprctl, journal, server, session, trust
 
 
 @pytest.fixture(autouse=True)
@@ -134,3 +134,14 @@ def no_known_clients_refresh(monkeypatch):
     """
     monkeypatch.setattr(server, "_note_clients", lambda clients=None: None)
     monkeypatch.setattr(server, "_known_clients", None)
+
+
+@pytest.fixture(autouse=True)
+def no_live_instances(monkeypatch):
+    """session's `hyprctl -j instances` answers "hyprctl unavailable", so
+    discovery falls back to scanning the test's own runtime directory.
+
+    Same rule: a verb run with WAYLAND_DISPLAY unset would otherwise ask
+    the developer's compositor which instances are running.
+    """
+    monkeypatch.setattr(session, "_hyprctl_instances", lambda: None)
