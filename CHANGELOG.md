@@ -28,6 +28,12 @@ All notable changes to this project are documented here. The format follows
   releases it.
 
 ### Fixed
+- **A failed `then=` observation no longer hides a successful action.**
+  Only `then='ui'` failures were caught: a grim timeout after a successful
+  `hypr focus_window` surfaced as a tool error. Every `then=` value now
+  returns the action's result with a note, `(then='screenshot' failed:
+  <reason>; the action itself went through)`, and an unknown `then` is
+  refused before acting instead of after.
 - **`wait_for(window_open)` no longer misses a window that mapped before
   it subscribed.** The server keeps the set of windows the agent has had a
   chance to see, refreshed at the start of every acting tool call, by every

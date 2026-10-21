@@ -400,8 +400,8 @@ def test_then_screenshot_never_masks_the_action_success(monkeypatch):
 
     monkeypatch.setattr(srv, "_deliver_capture", boom)
     out = srv._acted("click ok", "screenshot")
-    texts = " ".join(getattr(b, "text", str(b)) for b in out)
-    assert "click ok" in texts and "screenshot failed" in texts
+    assert isinstance(out, str)  # one result, read like any action's
+    assert out.startswith("click ok") and "then='screenshot' failed: grim failed" in out
 
 
 def test_then_screenshot_keeps_the_action_line_on_any_capture_error(monkeypatch):
@@ -409,5 +409,42 @@ def test_then_screenshot_keeps_the_action_line_on_any_capture_error(monkeypatch)
         raise OSError("no space left on device")
 
     monkeypatch.setattr(srv, "_deliver_capture", boom)
-    texts = " ".join(getattr(b, "text", str(b)) for b in srv._acted("click ok", "screenshot"))
-    assert "click ok" in texts and "screenshot failed" in texts
+    out = srv._acted("click ok", "screenshot")
+    assert out.startswith("click ok\n") and "then='screenshot' failed: no space left" in out
+
+
+def test_then_desktop_failure_keeps_the_action_line(monkeypatch):
+    def boom():
+        raise srv.hyprctl.HyprctlError("hyprctl -j clients timed out")
+
+    monkeypatch.setattr(srv.hyprctl, "snapshot", boom)
+    out = srv._acted("focused 0xa", "desktop")
+    assert out == ("focused 0xa\n(then='desktop' failed: hyprctl -j clients timed out; "
+                   "the action itself went through)")
+
+
+def test_a_hypr_focus_whose_screenshot_times_out_reports_the_focus(monkeypatch):
+    # the mined case: grim timed out on a sleeping monitor after the focus
+    # had landed, and the tool reported an error
+    monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
+    monkeypatch.setattr(srv.trust, "guard_window", lambda t: None)
+    monkeypatch.setattr(srv.trust, "remember_seat", lambda: None)
+    sent = []
+    monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: sent.append(a))
+
+    def grim_timeout(**k):
+        raise srv.shot.ScreenshotError("grim timed out after 10s")
+
+    monkeypatch.setattr(srv, "_deliver_capture", grim_timeout)
+    out = srv.hypr("focus_window", target="0xa", then="screenshot")
+    assert sent == [("focuswindow", "address:0xa")]
+    assert out.startswith("focused 0xa") and "grim timed out" in out
+
+
+def test_an_unknown_then_is_refused_before_acting(monkeypatch):
+    monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
+    clicked = []
+    monkeypatch.setattr(srv.hinput, "click", lambda *a, **k: clicked.append(a))
+    with pytest.raises(ValueError, match="unknown then 'image'"):
+        srv.pointer("click", x=1, y=2, then="image")
+    assert clicked == []

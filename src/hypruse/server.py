@@ -785,13 +785,19 @@ def _acted(msg: str, then: str, window: str = "", fallback: bool = True) -> list
     if then == "none":
         return msg
     head = _text(msg)
+    # the action has already happened by the time it is observed: a capture
+    # or IPC failure here (grim timing out on a monitor in DPMS sleep) is a
+    # note on the result, never an error that reads as the action failing
     if then == "desktop":
-        return [head, _text(json.dumps(hyprctl.snapshot()))]
+        try:
+            return [head, _text(json.dumps(hyprctl.snapshot()))]
+        except Exception as exc:
+            return _observe_failed(msg, then, exc)
     if then == "screenshot":
         try:
             return [head, *_deliver_capture(stable=True)]
-        except Exception as exc:  # the observation must never mask the action's success
-            return [head, _text(f"screenshot failed: {exc}")]
+        except Exception as exc:
+            return _observe_failed(msg, then, exc)
     if then == "ui":
         try:
             view = _with_hidden_note(window, _ui_read(window))
@@ -816,6 +822,18 @@ def _acted(msg: str, then: str, window: str = "", fallback: bool = True) -> list
         payload = view if isinstance(view, str) else json.dumps(view)
         return [head, _text(payload)]
     raise ValueError(f"unknown then {then!r}: {'|'.join(_OBSERVE_MODES)}")
+
+
+def _observe_failed(msg: str, then: str, exc: Exception) -> str:
+    """The action's own result, with the failed observation as a note."""
+    return f"{msg}\n(then={then!r} failed: {exc}; the action itself went through)"
+
+
+def _check_then(then: str) -> None:
+    """Refuse an unknown `then` before acting: found only when observing,
+    it raised after the click had already landed, and read as a failure."""
+    if then not in _OBSERVE_MODES:
+        raise ValueError(f"unknown then {then!r}: {'|'.join(_OBSERVE_MODES)}")
 
 
 # Every dry-run result opens with this, so an agent reading its own tool
@@ -939,6 +957,7 @@ def pointer(
     human is in (press controls there with click_ui), unless
     `background=false`."""
     safety.touch(f"pointer:{action}")
+    _check_then(then)
     _note_clients()  # what wait_for(window_open) counts as already there
     trust.guard_seat()
     if action in _POINTER_ACTIONS:  # else the ValueError below
@@ -1067,6 +1086,7 @@ def keyboard(
     type into a password field or a system authentication dialog (only when
     a human intends that credential entry)."""
     safety.touch(f"keyboard:{action}")
+    _check_then(then)
     _note_clients()  # what wait_for(window_open) counts as already there
     trust.guard_seat()
     # validate EVERY argument before any side effect: focusing the target
@@ -1171,6 +1191,7 @@ def click_ui(
     `allow_auth=true` overrides the refusal to click a system
     authentication dialog."""
     safety.touch("click_ui")
+    _check_then(then)
     _note_clients()  # what wait_for(window_open) counts as already there
     trust.guard_seat()
     if bool(name) == bool(mark):
@@ -1647,6 +1668,7 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
     refused because they change the human's view, and move_window moves
     only to the agent's own workspaces."""
     safety.touch(f"hypr:{action}")
+    _check_then(then)
     _note_clients()  # what wait_for(window_open) counts as already there
     workspace = workspace.strip()
     # every argument is checked before any guard runs and before anything
@@ -2048,6 +2070,7 @@ def use_bind(combo: str, then: str = "none") -> list[Any] | str:
     (HYPRUSE_BACKGROUND=1): a bind runs an arbitrary compositor action
     that cannot be scoped to a window."""
     safety.touch("use_bind")
+    _check_then(then)
     _note_clients()  # what wait_for(window_open) counts as already there
     trust.guard_seat()
     trust.guard_use_bind()  # an arbitrary compositor action escapes confinement
@@ -2486,6 +2509,7 @@ def sequence(
     pointer, keyboard and click_ui step that does not set its own, and
     background=true refuses a hypr step that takes the human's view."""
     safety.touch("sequence")
+    _check_then(then)
     _note_clients()  # what wait_for(window_open) counts as already there
     if not steps:
         raise ValueError("sequence needs at least one step")
