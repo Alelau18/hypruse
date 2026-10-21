@@ -2373,11 +2373,27 @@ def _step_wait_names(step: dict[str, Any]) -> set[str]:
     return set(_WAIT_EVENTS.get(step.get("event", ""), set())) & _WATCHED_EVENTS
 
 
+_SEQ_SLEEP_MAX_MS = 60000
+
+
+def _sleep_ms(step: dict[str, Any]) -> float:
+    """A sleep step's length, refused unless 0 < ms <= 60000. Checked for
+    every step before the first one runs: a typo found halfway would leave
+    the desktop part-way through the plan."""
+    extra = sorted(set(step) - {"op", "ms"})
+    if extra:
+        raise ValueError(f"a sleep step takes only ms, not {', '.join(extra)}")
+    ms = step.get("ms")
+    if isinstance(ms, bool) or not isinstance(ms, int | float) or not 0 < ms <= _SEQ_SLEEP_MAX_MS:
+        raise ValueError(f"a sleep step needs ms from 1 to {_SEQ_SLEEP_MAX_MS}, got {ms!r}")
+    return float(ms)
+
+
 def _dispatch_step(step: dict[str, Any]) -> Any:
     op = step.get("op")
     handler = _SEQ_HANDLERS.get(op)
     if handler is None:
-        raise ValueError(f"unknown step op {op!r}: {'|'.join(_SEQ_HANDLERS)}")
+        raise ValueError(f"unknown step op {op!r}: {'|'.join([*_SEQ_HANDLERS, 'sleep'])}")
     # `then` is handled once for the whole sequence, never per step
     params = {k: v for k, v in step.items() if k not in ("op", "then")}
     try:
@@ -2451,7 +2467,9 @@ def sequence(
     """Run an ordered list of actions in ONE call, so a click/type/enter
     micro-sequence costs one round-trip instead of several. Each step is
     {"op": "pointer"|"keyboard"|"click_ui"|"hypr"|"wait_for", ...that tool's
-    args}, e.g. [{"op":"pointer","action":"click","x":800,"y":60},
+    args}, or {"op": "sleep", "ms": N} (1-60000) for a fixed pause when
+    there is no event to wait_for, e.g.
+    [{"op":"pointer","action":"click","x":800,"y":60},
     {"op":"keyboard","action":"type","text":"hello","window":"0x.."},
     {"op":"keyboard","action":"key","keys":"enter"}]. With stop_on_change
     (default) the run stops, best-effort, when it notices a STRUCTURAL
@@ -2473,6 +2491,12 @@ def sequence(
         raise ValueError("sequence needs at least one step")
     if len(steps) > _SEQ_MAX_STEPS:
         raise ValueError(f"sequence too long ({len(steps)} steps, max {_SEQ_MAX_STEPS})")
+    for i, step in enumerate(steps):
+        if isinstance(step, dict) and step.get("op") == "sleep":
+            try:
+                _sleep_ms(step)
+            except ValueError as exc:
+                raise ValueError(f"step {i}: {exc}") from None
 
     stream = None
     if stop_on_change:
@@ -2518,7 +2542,18 @@ def sequence(
                     if step.get("action") == "toggle_floating" and not step.get("target"):
                         bg.refuse("toggle_floating with no target acts on the human's "
                                   "focused window")
-                if step.get("op") == "wait_for" and stream is not None:
+                if step.get("op") == "sleep":
+                    ms = _sleep_ms(step)
+                    if ms / 1000 > budget_left:
+                        stopped = (f"time budget ({_SEQ_BUDGET:.0f}s) would run out during "
+                                   f"step {i}'s {ms:g} ms sleep")
+                        break
+                    if journal.dry_run():
+                        res = f"{_DRY} sleep {ms:g} ms"
+                    else:
+                        time.sleep(ms / 1000)
+                        res = f"slept {ms:g} ms"
+                elif step.get("op") == "wait_for" and stream is not None:
                     res = _seq_wait_for(stream, backlog, run, budget_left)
                 else:
                     res = _dispatch_step(run)

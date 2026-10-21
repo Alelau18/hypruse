@@ -513,3 +513,57 @@ def test_an_open_step_finds_a_window_that_mapped_before_it(wired, monkeypatch):
     out = srv.sequence(steps, then="none")
     assert "'already': True" in _head(out) and "0xB" in _head(out)
     assert stream.wait_calls == []
+
+
+# --- sleep steps ----------------------------------------------------------------
+
+
+def test_a_sleep_step_pauses_between_steps(wired, monkeypatch):
+    _stream(monkeypatch, [])
+    slept = []
+    monkeypatch.setattr(srv.time, "sleep", lambda s: slept.append(s))
+    steps = [
+        {"op": "pointer", "action": "click", "x": 1, "y": 2},
+        {"op": "sleep", "ms": 1500},
+        {"op": "keyboard", "action": "key", "keys": "enter"},
+    ]
+    out = srv.sequence(steps, then="none")
+    assert [s["op"] for s in wired] == ["pointer", "keyboard"]
+    assert 1.5 in slept
+    assert "all 3/3" in _head(out) and "[1] sleep : slept 1500 ms" in _head(out)
+
+
+@pytest.mark.parametrize(
+    "step",
+    [{"op": "sleep"}, {"op": "sleep", "ms": 0}, {"op": "sleep", "ms": 60001},
+     {"op": "sleep", "ms": "4"}, {"op": "sleep", "ms": True},
+     {"op": "sleep", "seconds": 4}],
+)
+def test_a_bad_sleep_step_refuses_before_any_step_runs(wired, monkeypatch, step):
+    _stream(monkeypatch, [])
+    with pytest.raises(ValueError, match="step 1: a sleep step"):
+        srv.sequence([{"op": "pointer", "action": "click", "x": 1, "y": 2}, step], then="none")
+    assert wired == []
+
+
+def test_a_sleep_longer_than_the_budget_stops_instead_of_overrunning(wired, monkeypatch):
+    _stream(monkeypatch, [])
+    slept = []
+    monkeypatch.setattr(srv.time, "sleep", lambda s: slept.append(s))
+    out = srv.sequence([{"op": "sleep", "ms": 45000}], then="none")
+    assert "stopped after 0/1" in _head(out) and "would run out" in _head(out)
+    assert 45.0 not in slept
+
+
+def test_a_dry_run_does_not_sleep(wired, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_DRYRUN", "1")
+    _stream(monkeypatch, [])
+    slept = []
+    monkeypatch.setattr(srv.time, "sleep", lambda s: slept.append(s))
+    out = srv.sequence([{"op": "sleep", "ms": 2000}], then="none")
+    assert "would sleep 2000 ms" in _head(out) and 2.0 not in slept
+
+
+def test_unknown_op_lists_sleep():
+    with pytest.raises(ValueError, match="sleep"):
+        srv._dispatch_step({"op": "nap"})

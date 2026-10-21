@@ -617,7 +617,10 @@ click_ui step that does not set its own `background`), `--then` (default
 `desktop`), `--dry-run`, `--json`. `STEPS` is an
 inline JSON array, `@file.json`, or `-` for stdin. Each step is
 `{"op": "pointer"|"keyboard"|"click_ui"|"hypr"|"wait_for", ...that verb's
-MCP arguments}`:
+MCP arguments}`, or `{"op": "sleep", "ms": N}` (1-60000) for a fixed pause
+when there is no event to wait for (do not use an unfiltered `wait_for` as a
+delay). A bad sleep step is an error before any step runs, and a sleep that
+would overrun the 30 s budget stops the sequence instead:
 
 ```json
 [{"op":"click_ui","name":"Search","window":"0x55a4479a1200"},

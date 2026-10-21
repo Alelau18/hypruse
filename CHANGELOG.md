@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`sequence` sleep step.** `{"op": "sleep", "ms": N}` (1-60000) pauses
+  between steps. It is checked before the first step runs, journaled with
+  the sequence, skipped in a dry run, and stops the sequence rather than
+  overrun its 30 s budget. Agents had been using unfiltered
+  `wait_for title_change` steps as delays.
 - **Holding a button.** `pointer` takes `action='down'` and `'up'`
   (optional x,y to move there first, `button` as for a click) and
   `hold_ms` on a click (press, wait, release; up to 10 s). `down` records
