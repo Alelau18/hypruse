@@ -532,6 +532,27 @@ def test_an_app_that_opened_elsewhere_says_whether_focus_moved(launch_fake):
     assert launch_fake["seat"] == 1  # our launch moved the seat
 
 
+def test_the_humans_focus_is_given_back_after_the_move(launch_fake):
+    # the app's window opened on the human's screen, took their focus, and
+    # was moved away: their own window gets the focus back
+    launch_fake["lands"] = "1"
+    launch_fake["active"][:] = ["0xhuman", "0xother"]
+    launch_fake["clients"] = [{"address": "0xhuman", "workspace": {"id": 1, "name": "1"}}]
+    out = srv.launch("foot")
+    assert launch_fake["dispatch"][-1] == ("focuswindow", "address:0xhuman")
+    assert "given back to 0xhuman" in out["note"] and "0xother" not in out["note"]
+
+
+def test_focus_is_not_given_back_to_a_window_off_screen(launch_fake):
+    # focusing it would switch the human's workspace
+    launch_fake["lands"] = "1"
+    launch_fake["active"][:] = ["0xhuman", "0xother"]
+    launch_fake["clients"] = [{"address": "0xhuman", "workspace": {"id": 4, "name": "4"}}]
+    out = srv.launch("foot")
+    assert not any(d[0] == "focuswindow" for d in launch_fake["dispatch"])
+    assert "the focused window is now 0xother" in out["note"]
+
+
 def test_a_dry_run_names_the_agent_workspace(launch_fake, monkeypatch):
     monkeypatch.setattr(srv.journal, "dry_run", lambda: True)
     out = srv.launch("foot")
