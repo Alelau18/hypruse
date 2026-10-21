@@ -163,7 +163,14 @@ def key_combo(combo: str) -> None:
 
 _vp: VirtualPointer | None = None
 _vk: VirtualKeyboard | None = None
+# What the SIGTERM path releases: any button down right now, a drag's or a
+# long click's included (those last one call, under the seat lock).
 _held_button: str | None = None
+# The button a `pointer down` left held for a later `up`: the only hold
+# that outlives a call, and the one the single-hold rule and the results
+# are about. Kept apart so a drag in flight on another worker thread does
+# not read as a `down` waiting for its `up`.
+_down: str | None = None
 
 
 def release_held() -> bool:
@@ -181,27 +188,27 @@ def release_held() -> bool:
     True when a release was sent. A release that could not be sent leaves
     the hold on record, so whoever asked (`hypruse stop`, a stopped
     sequence) does not claim it was let go."""
-    global _held_button
+    global _held_button, _down
     if not _held_button:
         return False
     try:
         (_vp or VirtualPointer()).button(_held_button, RELEASED)
     except Exception:
         return False
-    _held_button = None
+    _held_button = _down = None
     return True
 
 
 def held_button() -> str | None:
-    """The button hypruse is holding down right now, if any."""
-    return _held_button
+    """The button a `pointer down` left held for its `up`, if any."""
+    return _down
 
 
 def restore_held(button: str | None) -> None:
     """Adopt a hold an earlier CLI process left (cli_state), so this
     process's SIGTERM cleanup releases it and a `pointer up` clears it."""
-    global _held_button
-    _held_button = button if button in BUTTONS else None
+    global _held_button, _down
+    _held_button = _down = button if button in BUTTONS else None
 
 
 def _with_keyboard(fn: Callable[[VirtualKeyboard], Any]) -> Any:
@@ -314,9 +321,9 @@ def check_down(button: str) -> None:
     """One held button at a time: the shutdown path releases the one it
     knows about, so a second hold would be one it could strand."""
     check_button(button)
-    if _held_button:
+    if _down:
         raise InputError(
-            f"the {_held_button} button is already held down; release it with "
+            f"the {_down} button is already held down; release it with "
             "pointer action='up' first"
         )
 
@@ -333,25 +340,26 @@ def click(
     has_xy = _check_xy(x, y)
     check_hold(hold_ms, double)
     with _seat_lock:
+        if hold_ms:
+            check_down(button)  # a hold of its own: one tracked hold at a time
         if has_xy:
             move(x, y)  # type: ignore[arg-type]
             time.sleep(0.02)
         if not hold_ms:
             _with_pointer(lambda p: p.click(button, double=double))
-            if _held_button == button:  # its release let go of a `down` too
+            if _down == button:  # its release let go of a `down` too
                 restore_held(None)
             return
 
         def held(p: VirtualPointer) -> None:
             global _held_button
-            before = _held_button
             _held_button = button  # before the press, as in drag
             p.button(button, PRESSED)
             try:
                 time.sleep(hold_ms / 1000)
             finally:
                 p.button(button, RELEASED)
-                _held_button = before if before != button else None
+                _held_button = None
 
         _with_pointer(held)
 
@@ -364,13 +372,14 @@ def button_down(x: float | None = None, y: float | None = None, button: str = "l
     check_down(button)
     has_xy = _check_xy(x, y)
     with _seat_lock:
+        check_down(button)  # again, under the lock: two downs can race
         if has_xy:
             move(x, y)  # type: ignore[arg-type]
             time.sleep(0.02)
 
         def press(p: VirtualPointer) -> None:
-            global _held_button
-            _held_button = button  # before the press: see drag
+            global _held_button, _down
+            _held_button = _down = button  # before the press: see drag
             p.button(button, PRESSED)
 
         _with_pointer(press)
@@ -380,7 +389,6 @@ def button_up(x: float | None = None, y: float | None = None, button: str = "lef
     """Release a button, after moving to (x, y) when given. Releasing one
     that is not down is harmless, so this never refuses for want of a
     matching `down` (a CLI `down` happened in another process)."""
-    global _held_button
     journal.refuse_if_dry("button_up")
     _check_button(button)
     has_xy = _check_xy(x, y)
@@ -389,8 +397,8 @@ def button_up(x: float | None = None, y: float | None = None, button: str = "lef
             move(x, y)  # type: ignore[arg-type]
             time.sleep(0.02)
         _with_pointer(lambda p: p.button(button, RELEASED))
-        if _held_button == button:
-            _held_button = None
+        if _down == button:
+            restore_held(None)
 
 
 DRAG_STEPS = 12
@@ -426,7 +434,6 @@ def drag(
 
     def run(p: VirtualPointer) -> None:
         global _held_button
-        before = _held_button  # a `down` still waiting for its `up`
         # flag BEFORE the press: the press blocks in a sync roundtrip with
         # the button already down compositor-side, and a SIGTERM landing
         # there must see the hold. Releasing an un-pressed button is
@@ -445,9 +452,10 @@ def drag(
                 time.sleep(pause)
         finally:
             p.button(button, RELEASED)
-            _held_button = before if before != button else None
+            _held_button = None
 
     with _seat_lock:
+        check_down(button)  # the drag's own hold is the one tracked; none may wait
         move(x1, y1)
         time.sleep(0.03)
         _with_pointer(run)

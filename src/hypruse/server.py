@@ -1063,6 +1063,8 @@ def pointer(
         hinput.check_button(button)
         hinput.check_xy(x, y)
         hinput.check_hold(hold_ms, double)
+        if hold_ms:
+            hinput.check_down(button)
         trust.guard_pointer(x, y, allow_auth)  # None x/y = click at current cursor
         note = note or _layer_note(x, y)
         plan = f"{'double-' if double else ''}click {button} at {_at(x, y)}"
@@ -1090,7 +1092,7 @@ def pointer(
     elif action == "drag":
         if None in (x, y, to_x, to_y):
             raise ValueError("drag needs x, y, to_x, to_y")
-        hinput.check_button(button)
+        hinput.check_down(button)  # one tracked hold at a time
         hinput.check_drag(duration_ms, steps)
         trust.guard_pointer(x, y, allow_auth)
         trust.guard_pointer(to_x, to_y, allow_auth)  # the drag ends elsewhere; guard that too

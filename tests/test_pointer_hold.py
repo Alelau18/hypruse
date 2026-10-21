@@ -39,6 +39,7 @@ def vp(monkeypatch):
     p = FakeVP()
     monkeypatch.setattr(hinput, "_vp", p)
     monkeypatch.setattr(hinput, "_held_button", None)
+    monkeypatch.setattr(hinput, "_down", None)
     monkeypatch.setattr(hinput.hyprctl, "dispatch", lambda *a: p.events.append(("warp",) + a[1:]))
     monkeypatch.setattr(hinput.time, "sleep", lambda s: p.events.append(("sleep", s)))
     return p
@@ -130,11 +131,29 @@ def test_a_click_of_the_held_button_lets_go_of_the_hold(vp):
     assert hinput.held_button() is None
 
 
-def test_a_drag_keeps_a_down_of_another_button_on_record(vp, monkeypatch):
+def test_a_drag_or_a_long_click_is_refused_during_a_hold(vp, monkeypatch):
+    # one tracked hold at a time, so the shutdown path never misses one
     monkeypatch.setattr(hinput, "move", lambda x, y: None)
     hinput.button_down(button="right")
-    hinput.drag(0, 0, 1, 1)
-    assert hinput.held_button() == "right"
+    vp.events.clear()
+    with pytest.raises(hinput.InputError, match="right button is already held"):
+        hinput.drag(0, 0, 1, 1)
+    with pytest.raises(hinput.InputError, match="already held"):
+        hinput.click(hold_ms=200)
+    assert vp.events == [] and hinput.held_button() == "right"
+    hinput.click()  # a plain click is not a hold of its own
+    assert vp.events == [("click", "left")]
+
+
+def test_the_tool_refuses_them_too_and_in_rehearsal(tool, monkeypatch):
+    srv.pointer("down")
+    for kw in ({"action": "drag", "x": 1, "y": 2, "to_x": 3, "to_y": 4},
+               {"action": "click", "hold_ms": 100}):
+        with pytest.raises(hinput.InputError, match="already held"):
+            srv.pointer(**kw)
+    monkeypatch.setenv("HYPRUSE_DRYRUN", "1")
+    with pytest.raises(hinput.InputError, match="already held"):
+        srv.pointer("drag", x=1, y=2, to_x=3, to_y=4)
 
 
 @pytest.mark.parametrize(
@@ -167,6 +186,7 @@ def tool(monkeypatch):
     monkeypatch.setattr(srv.trust, "covering_layer", lambda x, y: None)
     monkeypatch.setattr(srv.hyprctl, "cursor_pos", lambda: (7, 8))
     monkeypatch.setattr(hinput, "_held_button", None)
+    monkeypatch.setattr(hinput, "_down", None)
 
     def down(x=None, y=None, button="left"):
         calls["input"].append(("down", x, y, button))
@@ -323,6 +343,7 @@ def test_a_cli_hold_is_carried_to_the_next_process(tmp_path, monkeypatch):
     monkeypatch.setattr(verbs, "_lock", lambda: None)
     monkeypatch.setattr(cli, "_take_beacon", lambda: True)
     monkeypatch.setattr(hinput, "_held_button", None)
+    monkeypatch.setattr(hinput, "_down", None)
     seen = []
 
     def pointer(**kw):
@@ -438,3 +459,12 @@ def test_an_up_elsewhere_or_of_another_button_keeps_the_guards(tool, monkeypatch
     with pytest.raises(srv.trust.TrustError):
         srv.pointer("up")  # nothing held: an ordinary release
     assert [c[0] for c in tool["input"]] == ["down"]
+
+
+def test_a_drag_in_flight_is_not_a_down_waiting_for_its_up(monkeypatch):
+    # the tool checks before taking the seat lock; another worker's drag
+    # holds a button then, which must not read as a stranded `down`
+    monkeypatch.setattr(hinput, "_held_button", "left")
+    monkeypatch.setattr(hinput, "_down", None)
+    hinput.check_down("left")  # no raise
+    assert hinput.held_button() is None
