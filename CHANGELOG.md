@@ -23,6 +23,19 @@ All notable changes to this project are documented here. The format follows
   releases it.
 
 ### Fixed
+- **`wait_for(window_open)` no longer misses a window that mapped before
+  it subscribed.** The server keeps the set of windows the agent has had a
+  chance to see, refreshed at the start of every acting tool call, by every
+  `desktop`, and at startup (the CLI carries it between verbs). A filtered
+  wait finding a matching window outside that set answers at once with
+  `already: true` and the window's address, class and title, and reports
+  each window once. Agents lost about 185 s to such timeouts.
+- **`wait_for(window_close)` filtered by class or title can succeed.**
+  Hyprland's `closewindow` event carries only the address, so a title
+  filter never matched it. The filter is resolved to the matching open
+  windows' addresses when the wait starts, any one of them closing ends
+  it, and one that closed while the wait was subscribing is reported as
+  `already`. `sequence`'s wait steps behave the same.
 - **Pointer motion apps can see.** A cursor move was a compositor warp,
   which XWayland, Wine and GameMaker clients never receive as motion, so
   hover did nothing in games and agents fell back to `ydotool mousemove`.

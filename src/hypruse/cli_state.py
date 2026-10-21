@@ -89,6 +89,7 @@ def restore() -> None:
     _restored = {
         "trust": _plain(trust.export_state()),
         "marks": _plain(server.marks_state()),
+        "flags": _plain(_flags),
     }
 
 
@@ -130,7 +131,12 @@ def _merge(current: dict[str, Any], mine: dict[str, Any]) -> dict[str, Any]:
         current.get("marks") or mine["marks"]
     )
     flags = dict(current.get("flags") or {}) if isinstance(current.get("flags"), dict) else {}
-    flags.update(mine["flags"])
+    # only the flags this process changed: a long wait_for must not write
+    # back a held button or a window list another verb has since updated
+    old_flags = _restored.get("flags") or {}
+    flags.update(
+        {k: v for k, v in mine["flags"].items() if k not in old_flags or old_flags[k] != v}
+    )
     return {
         "trust": {"owned": sorted(owned), "seat": seat, "notify_ts": notify_ts},
         "marks": marks,

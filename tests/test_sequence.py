@@ -481,3 +481,35 @@ def test_sequence_background_applies_to_every_step_that_takes_it(wired):
     assert wired[0]["background"] is True
     assert wired[1]["background"] is False  # a step's own choice wins
     assert "background" not in wired[2]  # hypr takes no background
+
+
+def test_a_close_step_filtered_by_title_matches_by_address(wired, monkeypatch):
+    # Hyprland's closewindow names only the address: a title filter is
+    # resolved to the dialog's address when the step starts
+    dialog = {"address": "0xD", "class": "chromium", "title": "Open File"}
+    monkeypatch.setattr(srv.hyprctl, "query",
+                        lambda cmd: [dialog] if cmd == "clients" else {"name": ""})
+    stream = _stream(monkeypatch, [[]], waits=[("closewindow", {"address": "0xd"})])
+    steps = [
+        {"op": "keyboard", "action": "key", "keys": "enter"},
+        {"op": "wait_for", "event": "window_close", "match": "Open File"},
+    ]
+    out = srv.sequence(steps, then="none")
+    assert "all 2/2" in _head(out) and "0xd" in _head(out)
+    assert len(stream.wait_calls) == 1
+
+
+def test_an_open_step_finds_a_window_that_mapped_before_it(wired, monkeypatch):
+    srv._known_clients = {"0xa"}  # as the keyboard step's refresh left it
+    kitty = {"address": "0xA", "class": "kitty", "title": "~", "workspace": {"name": "1"}}
+    lg = {"address": "0xB", "class": "lg-remote", "title": "LG", "workspace": {"name": "2"}}
+    monkeypatch.setattr(srv.hyprctl, "query",
+                        lambda cmd: [kitty, lg] if cmd == "clients" else {"name": ""})
+    stream = _stream(monkeypatch, [[]])
+    steps = [
+        {"op": "keyboard", "action": "key", "keys": "enter"},
+        {"op": "wait_for", "event": "window_open", "match": "lg-remote"},
+    ]
+    out = srv.sequence(steps, then="none")
+    assert "'already': True" in _head(out) and "0xB" in _head(out)
+    assert stream.wait_calls == []

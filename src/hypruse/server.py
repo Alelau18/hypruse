@@ -241,6 +241,52 @@ def _prune_shots(d: Path, keep: int = 20) -> None:
             old.unlink()
 
 
+# The windows the agent has had a chance to know about: refreshed at the
+# start of every acting tool call and by every `desktop`. A window that maps
+# between an action and the agent's wait_for(window_open) fired its event
+# before the wait could subscribe; a window matching the wait that is NOT
+# in here opened since the agent last looked, which is that missed event.
+# None until the first refresh: with nothing known, every window would
+# look new, so the check is skipped rather than answered wrongly.
+_known_clients: set[str] | None = None
+
+
+def _note_clients(clients: Any = None) -> None:
+    """Refresh the known-window set from `clients` (hyprctl clients, or the
+    snapshot's windows), or from the compositor when not given. An
+    unreadable list keeps the previous set: the next refresh catches up."""
+    global _known_clients
+    if clients is None:
+        try:
+            clients = hyprctl.query("clients")
+        except Exception:
+            return
+    if not isinstance(clients, list):
+        return
+    _known_clients = {
+        str(c["address"]).lower() for c in clients if isinstance(c, dict) and c.get("address")
+    }
+
+
+def known_clients_state() -> list[str] | None:
+    """The known-window set for cli_state, which carries it across verbs."""
+    return None if _known_clients is None else sorted(_known_clients)
+
+
+def restore_known_clients(state: Any) -> None:
+    global _known_clients
+    _known_clients = (
+        {str(a).lower() for a in state if isinstance(a, str)} if isinstance(state, list) else None
+    )
+
+
+def _learn_client(address: Any) -> None:
+    """A window the agent has now been told about (an openwindow result, a
+    launch): a later window_open wait must not report it again."""
+    if _known_clients is not None and address:
+        _known_clients.add(str(address).lower())
+
+
 @journal.journaled("observe")
 def desktop() -> dict[str, Any]:
     """Semantic desktop snapshot: monitors, workspaces, windows (address,
@@ -252,6 +298,9 @@ def desktop() -> dict[str, Any]:
     can see: it may be transparent or dormant, so screenshot when
     visibility matters. Call first; act on the addresses it returns."""
     snap = hyprctl.snapshot()
+    # every window it lists is one the agent has now seen: a later
+    # wait_for(window_open) must wait for a new one, not answer with these
+    _note_clients(snap.get("windows"))
     # under HYPRUSE_STRICT a seat that moved without hypruse blocks every
     # acting tool until the agent re-observes; this read IS that
     # re-observation, so it re-arms the guard (as its error advises)
@@ -890,6 +939,7 @@ def pointer(
     human is in (press controls there with click_ui), unless
     `background=false`."""
     safety.touch(f"pointer:{action}")
+    _note_clients()  # what wait_for(window_open) counts as already there
     trust.guard_seat()
     if action in _POINTER_ACTIONS:  # else the ValueError below
         _pointer_policy(action, x, y, to_x, to_y, background)
@@ -1017,6 +1067,7 @@ def keyboard(
     type into a password field or a system authentication dialog (only when
     a human intends that credential entry)."""
     safety.touch(f"keyboard:{action}")
+    _note_clients()  # what wait_for(window_open) counts as already there
     trust.guard_seat()
     # validate EVERY argument before any side effect: focusing the target
     # below is a visible seat change, and a call that goes on to raise
@@ -1120,6 +1171,7 @@ def click_ui(
     `allow_auth=true` overrides the refusal to click a system
     authentication dialog."""
     safety.touch("click_ui")
+    _note_clients()  # what wait_for(window_open) counts as already there
     trust.guard_seat()
     if bool(name) == bool(mark):
         raise ValueError("pass exactly one of `name` or `mark`")
@@ -1595,6 +1647,7 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
     refused because they change the human's view, and move_window moves
     only to the agent's own workspaces."""
     safety.touch(f"hypr:{action}")
+    _note_clients()  # what wait_for(window_open) counts as already there
     workspace = workspace.strip()
     # every argument is checked before any guard runs and before anything
     # is dispatched, so a bad call cannot half-run and a dry run raises
@@ -1791,6 +1844,7 @@ def launch(
     Returns the new window's address/class/title/workspace, or a timeout
     note."""
     safety.touch("launch")
+    _note_clients()  # what wait_for(window_open) counts as already there
     wait_s = min(max(wait_s, 1.0), 30.0)
     # Background mode: with no workspace, automatic mode and the guarantee
     # open the app on the next agent workspace that is off screen
@@ -1847,6 +1901,7 @@ def launch(
         )
     # owned-set for `launched` confinement; tag + notify when HYPRUSE_MARK
     trust.note_launched(win["address"], win.get("class", ""))
+    _learn_client(win["address"])  # the result names it: not a window_open to wait for
     ws = win.get("workspace", {})
     result: dict[str, Any] = {
         "address": win["address"],
@@ -1993,6 +2048,7 @@ def use_bind(combo: str, then: str = "none") -> list[Any] | str:
     (HYPRUSE_BACKGROUND=1): a bind runs an arbitrary compositor action
     that cannot be scoped to a window."""
     safety.touch("use_bind")
+    _note_clients()  # what wait_for(window_open) counts as already there
     trust.guard_seat()
     trust.guard_use_bind()  # an arbitrary compositor action escapes confinement
     bind = hyprctl.find_bind(combo)
@@ -2078,6 +2134,48 @@ def _workspace_signatures(ws: dict[str, Any]) -> set[str]:
     return sigs
 
 
+def _client_hay(c: dict[str, Any]) -> str:
+    """What a window's `match` is searched in, the fields its open event
+    carries: address, class, title and workspace name."""
+    ws = c.get("workspace") or {}
+    return (f"{c.get('address', '')} {c.get('class', '')} {c.get('title', '')} "
+            f"{ws.get('name', '') if isinstance(ws, dict) else ws}").lower()
+
+
+def _close_targets(needle: str, clients: Any) -> set[str]:
+    """Addresses of the open windows a window_close `match` names.
+    Hyprland's closewindow event carries only the address, so a class or
+    title filter can never match the event itself: the wait resolves the
+    filter to these windows when it starts and waits for one of them."""
+    out = set()
+    for c in clients or []:
+        if not isinstance(c, dict) or not c.get("address"):
+            continue
+        hay = f"{c.get('address', '')} {c.get('class', '')} {c.get('title', '')}".lower()
+        if needle in hay:
+            out.add(str(c["address"]).lower())
+    return out
+
+
+def _wait_plan(
+    event: str, needle: str
+) -> tuple[dict[str, Any] | None, Callable[[str, dict[str, Any]], bool], set[str] | None]:
+    """(already, matcher, close_targets) for a wait: the pre-check's answer
+    when the condition already holds, the event matcher otherwise, and for
+    a filtered window_close the addresses it resolved to (matched by
+    address, since that is all the event carries)."""
+    if event == "window_close" and needle:
+        targets = _close_targets(needle, hyprctl.query("clients"))
+        if not targets:
+            return {"event": "closewindow", "already": True}, _event_matcher(needle), None
+
+        def closes(_name: str, payload: dict[str, Any]) -> bool:
+            return str(payload.get("address", "")).lower() in targets
+
+        return None, closes, targets
+    return _already_satisfied(event, needle), _event_matcher(needle), None
+
+
 def _already_satisfied(event: str, needle: str) -> dict[str, Any] | None:
     """Level-triggered pre-check: has the awaited condition already
     happened? A trigger tool call returns before the agent can call
@@ -2088,11 +2186,28 @@ def _already_satisfied(event: str, needle: str) -> dict[str, Any] | None:
     switch, whatever it is': the current workspace always exists, so
     pre-checking it would answer instantly without ever blocking."""
     if event == "window_close" and needle:
-        for c in hyprctl.query("clients"):
-            hay = f"{c.get('address', '')} {c.get('class', '')} {c.get('title', '')}".lower()
-            if needle in hay:
-                return None  # still open, wait for the real event
+        if _close_targets(needle, hyprctl.query("clients")):
+            return None  # still open, wait for the real event
         return {"event": "closewindow", "already": True}
+    # window_open: a matching window the agent has not seen since its last
+    # action or desktop (see _known_clients) mapped after it acted, so its
+    # openwindow fired before this wait could subscribe. Filtered only:
+    # unfiltered means 'the next window, whatever it is'.
+    if event == "window_open" and needle and _known_clients is not None:
+        for c in hyprctl.query("clients") or []:
+            addr = str(c.get("address", "")).lower()
+            if not addr or addr in _known_clients or not c.get("mapped", True):
+                continue
+            if needle in _client_hay(c):
+                _learn_client(addr)  # reported once: a second wait waits for the next
+                return {
+                    "event": "openwindow",
+                    "address": c.get("address"),
+                    "workspace": str((c.get("workspace") or {}).get("name", "")),
+                    "class": c.get("class", ""),
+                    "title": c.get("title", ""),
+                    "already": True,
+                }
     if event == "workspace" and needle:
         ws = hyprctl.query("activeworkspace") or {}
         name = str(ws.get("name", ""))
@@ -2134,10 +2249,12 @@ def wait_for(event: str, match: str = "", timeout_s: float = 10) -> dict[str, An
     started/stopped). match: optional case-insensitive substring filter
     over the event's fields (class/title/workspace name/address/namespace).
     timeout_s 1-60, default 10. Returns the event payload, or a timeout
-    note; a filtered wait whose condition ALREADY holds (the window is
-    already gone, the workspace already active, the layer already mapped)
-    returns instantly with `already: true` instead of missing an event
-    that fired before it could subscribe. Use it after actions with
+    note; a filtered wait whose condition ALREADY holds (a matching window
+    opened since your last action or desktop call, the window is already
+    gone, the workspace already active, the layer already mapped) returns
+    instantly with `already: true` instead of missing an event that fired
+    before it could subscribe. A window_close filtered by class or title
+    waits for any of the matching windows to close. Use it after actions with
     delayed effects: app startups, page loads that change a window title,
     a launcher bind that pops a layer."""
     names = _WAIT_EVENTS.get(event)
@@ -2147,18 +2264,26 @@ def wait_for(event: str, match: str = "", timeout_s: float = 10) -> dict[str, An
     timeout_s = min(max(timeout_s, 1.0), 60.0)
     needle = match.lower()
 
-    already = _already_satisfied(event, needle)
+    already, matcher, targets = _wait_plan(event, needle)
     if already is not None:
         return already
 
-    matcher = _event_matcher(needle)
     try:
         with events.EventStream() as stream:
+            if targets:
+                # a target that closed between resolving the filter and
+                # subscribing fired its event where no one listened
+                with contextlib.suppress(Exception):
+                    gone = targets - _close_targets("", hyprctl.query("clients"))
+                    if gone:
+                        return {"event": "closewindow", "address": min(gone), "already": True}
             hit = stream.wait_for(names, matcher, timeout_s)
     except events.EventError as exc:
         return f"event socket unavailable: {exc}"
     if hit is None:
         return f"timeout: no matching {event} event within {timeout_s:.0f}s"
+    if hit[0] == "openwindow":
+        _learn_client(hit[1].get("address"))
     return {"event": hit[0], **hit[1]}
 
 
@@ -2293,14 +2418,17 @@ def _seq_wait_for(
     needle = str(step.get("match", "")).lower()
     timeout_s = min(max(float(step.get("timeout_s", 10)), 1.0), 60.0, max(budget_left, 1.0))
 
-    already = _already_satisfied(event, needle)
+    # the same pre-checks and matching as the tool; no re-check after
+    # subscribing is needed, since this stream was open before the step ran
+    already, matcher, _targets = _wait_plan(event, needle)
     if already is not None:
         return already
 
-    matcher = _event_matcher(needle)
     for i, (n, p) in enumerate(backlog):
         if n in names and matcher(n, p):
             del backlog[i]
+            if n == "openwindow":
+                _learn_client(p.get("address"))
             return {"event": n, **p}
     try:
         hit = stream.wait_for(names, matcher, timeout_s)
@@ -2308,6 +2436,8 @@ def _seq_wait_for(
         return f"event socket unavailable: {exc}"
     if hit is None:
         return f"timeout: no matching {event} event within {timeout_s:.0f}s"
+    if hit[0] == "openwindow":
+        _learn_client(hit[1].get("address"))
     return {"event": hit[0], **hit[1]}
 
 
@@ -2338,6 +2468,7 @@ def sequence(
     pointer, keyboard and click_ui step that does not set its own, and
     background=true refuses a hypr step that takes the human's view."""
     safety.touch("sequence")
+    _note_clients()  # what wait_for(window_open) counts as already there
     if not steps:
         raise ValueError("sequence needs at least one step")
     if len(steps) > _SEQ_MAX_STEPS:
@@ -2614,6 +2745,7 @@ def main() -> None:
     journal.start(__version__)  # HYPRUSE_JOURNAL: open the session record
     safety.on_shutdown(journal.stop)  # closed on the SIGTERM path too
     trust.init_marking()  # HYPRUSE_MARK: install the agent-owned border rule
+    _note_clients()  # windows already open are not ones a window_open wait is for
     app().run()
 
 

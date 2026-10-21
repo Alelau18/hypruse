@@ -116,3 +116,21 @@ def no_live_accessibility(monkeypatch):
 
     monkeypatch.setattr(a11y, "connect", no_bus)
     monkeypatch.setattr(dbuswire, "connection", no_socket)
+
+
+REAL_NOTE_CLIENTS = server._note_clients
+
+
+@pytest.fixture(autouse=True)
+def no_known_clients_refresh(monkeypatch):
+    """The acting tools' known-window refresh (the window_open pre-check's
+    baseline) does nothing, unless a test opts in with
+    `monkeypatch.setattr(server, "_note_clients", REAL_NOTE_CLIENTS)`.
+
+    It is one more clients query at the start of every acting call, and the
+    tests that script hyprctl's answers query by query would have it eat
+    the answer meant for the code under test. The known set starts empty
+    (None), so no pre-check answers from a previous test's windows.
+    """
+    monkeypatch.setattr(server, "_note_clients", lambda clients=None: None)
+    monkeypatch.setattr(server, "_known_clients", None)

@@ -115,3 +115,18 @@ def test_restore_marks_rejects_malformed_items():
     srv.restore_marks({"window": "0xaaa", "items": {"2": {"dx": 1, "dy": 2, "label": "l"}}})
     assert srv.marks_state()["items"] == {2: {"dx": 1, "dy": 2, "label": "l"}}
     assert srv.marks_state()["ts"] == 0.0  # no timestamp recorded: expired, never fresh
+
+
+def test_a_flag_this_process_did_not_change_keeps_the_files_value():
+    # a long wait_for restored the flags, a `pointer up` cleared the hold
+    # meanwhile; the wait's save must not write the stale hold back
+    cli_state.set_flag("held_button", "left")
+    cli_state.save()
+    cli_state.restore()  # the waiting verb starts
+    on_disk = json.loads(cli_state.path().read_text())
+    on_disk["flags"]["held_button"] = None  # another verb released it
+    cli_state.path().write_text(json.dumps(on_disk))
+    cli_state.set_flag("known_clients", ["0xa"])  # what the wait itself changed
+    cli_state.save()
+    flags = json.loads(cli_state.path().read_text())["flags"]
+    assert flags["held_button"] is None and flags["known_clients"] == ["0xa"]

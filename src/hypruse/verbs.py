@@ -419,6 +419,9 @@ def run(tool: str, kwargs: dict[str, Any], *, json_out: bool = False,
     # a `pointer down` outlives its process: adopt it, so this verb's
     # SIGTERM cleanup releases it and a `pointer up` here clears it
     hinput.restore_held(cli_state.flag("held_button"))
+    # and the windows the agent has seen, which wait_for(window_open)
+    # needs to tell a window that opened since the last action
+    server.restore_known_clients(cli_state.flag("known_clients"))
     if tool == "launch" and trust.marking_on() and not cli_state.flag("marking_installed"):
         trust.init_marking()  # once per compositor instance, not per call
         cli_state.set_flag("marking_installed", True)
@@ -432,6 +435,7 @@ def run(tool: str, kwargs: dict[str, Any], *, json_out: bool = False,
         return _fail("error", f"{type(exc).__name__}: {exc}", EXIT_ERROR)
     finally:
         cli_state.set_flag("held_button", hinput.held_button())
+        cli_state.set_flag("known_clients", server.known_clients_state())
         cli_state.save()
         if lock is not None:
             lock.close()

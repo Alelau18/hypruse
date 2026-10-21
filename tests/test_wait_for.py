@@ -190,3 +190,154 @@ def test_a_digit_filter_does_not_match_a_named_workspace_on_056(monkeypatch):
     assert not matches("workspace", {"name": "web"})
     # a renamed numbered workspace still matches its number
     assert srv._event_matcher("2")("workspace", {"name": "mail"})
+
+
+# --- window_open: a window that mapped before the wait subscribed ------------
+
+
+class ScriptedStream:
+    """Feeds scripted events through the wait's own matcher, the way the
+    real stream does, so a matcher that cannot match is caught."""
+
+    def __init__(self, events):
+        self.events = list(events)
+        self.calls = 0
+
+    def wait_for(self, names, matcher, timeout):
+        self.calls += 1
+        for n, p in self.events:
+            if n in names and (matcher is None or matcher(n, p)):
+                return n, p
+        return None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+
+KITTY = {"address": "0xA", "class": "kitty", "title": "~", "mapped": True,
+         "workspace": {"id": 1, "name": "1"}}
+LG = {"address": "0xB", "class": "lg-remote", "title": "LG Remote", "mapped": True,
+      "workspace": {"id": 2, "name": "2"}}
+
+
+@pytest.fixture
+def clients(monkeypatch):
+    from conftest import REAL_NOTE_CLIENTS
+
+    monkeypatch.setattr(srv, "_note_clients", REAL_NOTE_CLIENTS)
+    monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
+    state = {"clients": [KITTY]}
+    monkeypatch.setattr(srv.hyprctl, "query",
+                        lambda cmd: state["clients"] if cmd == "clients" else {})
+    return state
+
+
+def _no_stream(monkeypatch):
+    def boom():
+        raise AssertionError("must not subscribe when already satisfied")
+
+    monkeypatch.setattr(srv.events, "EventStream", boom)
+
+
+def test_a_window_that_opened_since_the_last_action_is_already_there(clients, monkeypatch):
+    srv._note_clients()  # what an acting tool does when it starts
+    clients["clients"] = [KITTY, LG]  # the launch mapped before wait_for ran
+    _no_stream(monkeypatch)
+    out = srv.wait_for("window_open", match="lg-remote")
+    assert out == {"event": "openwindow", "address": "0xB", "workspace": "2",
+                   "class": "lg-remote", "title": "LG Remote", "already": True}
+
+
+def test_it_is_reported_once_then_the_next_one_is_waited_for(clients, monkeypatch):
+    srv._note_clients()
+    clients["clients"] = [KITTY, LG]
+    _no_stream(monkeypatch)
+    srv.wait_for("window_open", match="lg")
+    stream = ScriptedStream([("openwindow", {"address": "0xC", "class": "lg-remote"})])
+    monkeypatch.setattr(srv.events, "EventStream", lambda: stream)
+    assert srv.wait_for("window_open", match="lg")["address"] == "0xC"
+    assert stream.calls == 1
+
+
+def test_a_window_the_agent_already_saw_is_not_new(clients, monkeypatch):
+    clients["clients"] = [KITTY, LG]
+    monkeypatch.setattr(srv.hyprctl, "snapshot", lambda: {"windows": [KITTY, LG]})
+    monkeypatch.setattr(srv.trust, "remember_seat", lambda: None)
+    srv.desktop()  # LG is in the snapshot the agent read
+    stream = ScriptedStream([])
+    monkeypatch.setattr(srv.events, "EventStream", lambda: stream)
+    assert srv.wait_for("window_open", match="lg").startswith("timeout")
+    assert stream.calls == 1
+
+
+def test_nothing_known_yet_means_no_precheck(clients, monkeypatch):
+    # before any refresh every window would look new
+    clients["clients"] = [KITTY, LG]
+    stream = ScriptedStream([])
+    monkeypatch.setattr(srv.events, "EventStream", lambda: stream)
+    srv.wait_for("window_open", match="lg", timeout_s=1)
+    assert stream.calls == 1
+
+
+@pytest.mark.parametrize("match", ["", "nomatch"])
+def test_unfiltered_or_unmatched_window_open_still_waits(clients, monkeypatch, match):
+    srv._note_clients()
+    clients["clients"] = [KITTY, LG]
+    stream = ScriptedStream([])
+    monkeypatch.setattr(srv.events, "EventStream", lambda: stream)
+    srv.wait_for("window_open", match=match, timeout_s=1)
+    assert stream.calls == 1
+
+
+def test_an_unmapped_window_is_not_open_yet(clients, monkeypatch):
+    srv._note_clients()
+    clients["clients"] = [KITTY, dict(LG, mapped=False)]
+    stream = ScriptedStream([])
+    monkeypatch.setattr(srv.events, "EventStream", lambda: stream)
+    srv.wait_for("window_open", match="lg", timeout_s=1)
+    assert stream.calls == 1
+
+
+def test_acting_tools_refresh_the_known_windows(clients, monkeypatch):
+    monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: None)
+    monkeypatch.setattr(srv.trust, "remember_seat", lambda: None)
+    srv.hypr("workspace", workspace="3")
+    assert srv.known_clients_state() == ["0xa"]
+
+
+# --- window_close: the event carries only the address -----------------------------
+
+
+DIALOG = {"address": "0xD", "class": "chromium", "title": "Open File", "mapped": True,
+          "workspace": {"id": 1, "name": "1"}}
+
+
+def test_a_close_filtered_by_title_matches_the_windows_address(clients, monkeypatch):
+    clients["clients"] = [KITTY, DIALOG]
+    stream = ScriptedStream([("closewindow", {"address": "0xa"}),  # another window
+                             ("closewindow", {"address": "0xd"})])
+    monkeypatch.setattr(srv.events, "EventStream", lambda: stream)
+    out = srv.wait_for("window_close", match="open file")
+    assert out == {"event": "closewindow", "address": "0xd"}
+
+
+def test_a_close_in_the_gap_before_subscribing_is_already(clients, monkeypatch):
+    clients["clients"] = [KITTY, DIALOG]
+
+    def subscribe():
+        clients["clients"] = [KITTY]  # it closed while the socket connected
+        return ScriptedStream([])
+
+    monkeypatch.setattr(srv.events, "EventStream", subscribe)
+    out = srv.wait_for("window_close", match="open file")
+    assert out == {"event": "closewindow", "address": "0xd", "already": True}
+
+
+def test_any_one_of_several_matches_closing_satisfies(clients, monkeypatch):
+    clients["clients"] = [KITTY, DIALOG, dict(DIALOG, address="0xE")]
+    stream = ScriptedStream([("closewindow", {"address": "0xe"})])
+    monkeypatch.setattr(srv.events, "EventStream", lambda: stream)
+    assert srv.wait_for("window_close", match="open file")["address"] == "0xe"

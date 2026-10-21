@@ -295,10 +295,16 @@ timeout: no matching window_open event within 10s
 
 Exit codes: 0; 1 (event socket unavailable); 4 (timeout).
 
-Notes: the `already:` pre-check exists for filtered `window_close`,
-`workspace` and `layer_open` only. A `window_open` that fired before the
-wait subscribed is not caught: look at `desktop`. Use this instead of
-`sleep` after launches, launcher binds and page loads.
+Notes: the `already:` pre-check exists for filtered `window_open`,
+`window_close`, `workspace` and `layer_open`. A filtered `window_open`
+answers `already:` with a matching window that opened since the last acting
+verb or `desktop` (so a window that mapped between your action and the wait
+is not missed; one `desktop` already listed is not new, and each is reported
+once). A filtered `window_close` resolves the match to the addresses of the
+matching open windows when it starts, since Hyprland's close event carries
+only the address; any one of them closing ends the wait, and none matching
+means `already:`. Use this instead of `sleep` after launches, launcher binds
+and page loads.
 
 ## pointer
 
