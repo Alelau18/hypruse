@@ -280,6 +280,33 @@ def _nudge_on() -> bool:
         "0", "false", "no", "off")
 
 
+_LAYOUT_TTL = 2.0
+_layout: tuple[float, list[dict[str, Any]]] | None = None
+
+
+def _nudge_direction(x: int, y: int) -> int:
+    """+1, or -1 when the pixel to the right of (x, y) is on no monitor.
+    The compositor keeps the cursor on the layout, so a +1 there would be
+    clamped while the -1 still moved it: a move to the right edge would
+    end a pixel short. The layout is cached briefly, since a drag moves
+    a dozen times in 200 ms; unreadable, it stays +1."""
+    global _layout
+    now = time.monotonic()
+    if _layout is None or now - _layout[0] > _LAYOUT_TTL:
+        try:
+            _layout = (now, hyprctl.query("monitors"))
+        except Exception:
+            return 1
+    monitors = _layout[1]
+    try:
+        if hyprctl.monitor_at(monitors, x + 1, y) is None and hyprctl.monitor_at(
+                monitors, x - 1, y) is not None:
+            return -1
+    except (KeyError, TypeError, ValueError):
+        pass
+    return 1
+
+
 def move(x: float, y: float) -> None:
     journal.refuse_if_dry("move")
     with _seat_lock:
@@ -294,15 +321,17 @@ def move(x: float, y: float) -> None:
 
         if _with_pointer(run):
             return
-        hyprctl.dispatch("movecursor", str(int(round(x))), str(int(round(y))))
+        xi, yi = int(round(x)), int(round(y))
+        hyprctl.dispatch("movecursor", str(xi), str(yi))
         if _nudge_on():
             # a warp is not motion: XWayland, Wine and GameMaker clients never
             # see it, so hover and drag did nothing there. A net-zero wiggle
             # through the virtual pointer is real motion at the target. The
             # cursor is already where it was asked to be, so a wire failure
             # here costs only the hover, not the move.
+            direction = _nudge_direction(xi, yi)
             with contextlib.suppress(WireError):
-                _with_pointer(lambda p: p.nudge())
+                _with_pointer(lambda p: p.nudge(direction))
 
 
 MAX_HOLD_MS = 10000.0

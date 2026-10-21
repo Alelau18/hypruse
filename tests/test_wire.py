@@ -158,3 +158,21 @@ def test_nudge_is_two_frames_of_opposite_motion():
     deltas = [struct.unpack("<Iii", body)[1:] for _, op, body in sent if op == wire.PTR_MOTION]
     assert deltas == [(256, 0), (-256, 0)]
     assert trips == [4]
+
+
+def test_nudge_inward_starts_with_the_left_step():
+    sent = []
+
+    class FakePointer(wire.VirtualPointer):
+        def __init__(self):
+            self._pointer = 42
+
+        def _send(self, obj, opcode, body=b""):
+            sent.append((opcode, body))
+
+        def _roundtrip(self, collect_globals=False):
+            return []
+
+    FakePointer().nudge(-1)
+    deltas = [struct.unpack("<Iii", b)[1:] for op, b in sent if op == wire.PTR_MOTION]
+    assert deltas == [(-256, 0), (256, 0)]

@@ -55,8 +55,8 @@ class FakeVP:
     def button(self, button, state):
         self.events.append((button, state))
 
-    def nudge(self):
-        self.events.append("nudge")
+    def nudge(self, direction=1):
+        self.events.append("nudge" if direction == 1 else ("nudge", direction))
 
     def move_to(self, x, y):
         self.events.append(("move_to", x, y))
@@ -153,7 +153,7 @@ def test_a_named_seat_moves_by_motion_and_needs_no_nudge(seat, monkeypatch):
 
 def test_a_failed_nudge_does_not_fail_the_move(seat, monkeypatch):
     # the cursor is already where it was asked to be
-    def broken():
+    def broken(direction=1):
         raise hinput.WireError("gone")
 
     monkeypatch.setattr(seat, "nudge", broken)
@@ -219,3 +219,26 @@ def test_drag_bounds_are_checked_before_any_input(seat, kw, msg):
     with pytest.raises(hinput.InputError, match=msg):
         hinput.drag(0, 0, 1, 1, **kw)
     assert seat.events == []
+
+
+EDGE = [{"name": "DP-1", "x": 0, "y": 0, "width": 1920, "height": 1080, "scale": 1.0},
+        {"name": "DP-2", "x": 1920, "y": 0, "width": 1920, "height": 540, "scale": 1.0}]
+
+
+def test_the_nudge_goes_inward_at_the_layouts_right_edge(seat, monkeypatch):
+    # +1 would be clamped and -1 kept: the move would end a pixel short
+    queries = []
+    monkeypatch.setattr(hinput.hyprctl, "query", lambda w: queries.append(w) or EDGE)
+    hinput.move(3839, 100)
+    hinput.move(1919, 800)  # DP-2 is shorter: nothing right of here at y=800
+    hinput.move(1919, 100)  # DP-2 continues the layout: outward is fine
+    hinput.move(10, 10)
+    nudges = [e for e in seat.events if e == "nudge" or isinstance(e, tuple)
+              and e[0] == "nudge"]
+    assert nudges == [("nudge", -1), ("nudge", -1), "nudge", "nudge"]
+    assert queries == ["monitors"]  # cached across a burst of moves
+
+
+def test_an_unreadable_layout_nudges_the_usual_way(seat):
+    hinput.move(3839, 100)  # conftest: no compositor to ask
+    assert seat.events[-1] == "nudge"

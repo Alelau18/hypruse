@@ -133,6 +133,8 @@ def no_known_clients_refresh(monkeypatch):
     (None), so no pre-check answers from a previous test's windows.
     """
     monkeypatch.setattr(server, "_note_clients", lambda clients=None: None)
+    # and the input layer's briefly cached monitor layout starts empty
+    monkeypatch.setattr(server.hinput, "_layout", None)
     monkeypatch.setattr(server, "_known_clients", None)
 
 

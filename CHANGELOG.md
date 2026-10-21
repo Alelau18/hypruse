@@ -115,7 +115,8 @@ All notable changes to this project are documented here. The format follows
   hover did nothing in games and agents fell back to `ydotool mousemove`.
   Every warp is now followed by a net-zero one-pixel motion on the virtual
   pointer (+1 then -1, in two frames), so the client under the cursor sees
-  the mouse arrive. `HYPRUSE_POINTER_NUDGE=0` turns it off.
+  the mouse arrive (-1 first on the layout's right edge, where the +1
+  would be clamped). `HYPRUSE_POINTER_NUDGE=0` turns it off.
 - **Drags that games see as drags.** A drag was 12 warps with the button
   held, so a game saw a press and a release with no motion between. Every
   step is now a warp plus real motion, the path ends exactly on the target,

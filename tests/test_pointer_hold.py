@@ -30,7 +30,7 @@ class FakeVP:
     def click(self, button, double=False):
         self.events.append(("click", button))
 
-    def nudge(self):
+    def nudge(self, direction=1):
         pass
 
 

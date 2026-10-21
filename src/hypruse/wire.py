@@ -299,8 +299,10 @@ class VirtualPointer:
         if self._pos is not None:
             self._pos = (self._pos[0] + dx, self._pos[1] + dy)
 
-    def nudge(self) -> None:
-        """A net-zero relative motion: +1,0 in one frame, then -1,0 in the next.
+    def nudge(self, direction: int = 1) -> None:
+        """A net-zero relative motion: +1,0 in one frame, then -1,0 in the next
+        (-1 first when `direction` is -1, for a cursor on the layout's right
+        edge, where the compositor would clamp the +1 and keep the -1).
 
         A cursor warp (the compositor's movecursor) repositions the cursor
         without sending wl_pointer.motion to every client: XWayland, Wine and
@@ -309,7 +311,8 @@ class VirtualPointer:
         a physical mouse would have sent, and they cancel out, so the cursor
         ends where the warp put it. Two frames, not one: a client sums the
         motion inside one frame, and a frame that sums to zero is no motion."""
-        for dx in (1, -1):
+        step = -1 if direction < 0 else 1
+        for dx in (step, -step):
             body = struct.pack("<Iii", _now_ms(), to_fixed(dx), 0)
             self._send(self._pointer, PTR_MOTION, body)
             self._send(self._pointer, PTR_FRAME)
