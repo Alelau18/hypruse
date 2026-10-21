@@ -2690,8 +2690,11 @@ def sequence(
         # a step pressed a button and the step that would release it never
         # ran: finish what was started rather than leave the human's
         # pointer stuck down
-        hinput.release_held()
-        stopped += f"; released the {held} button a step had pressed"
+        if hinput.release_held():
+            stopped += f"; released the {held} button a step had pressed"
+        else:
+            stopped += (f"; the {held} button a step pressed is still held (its release "
+                        "could not be sent): pointer action='up' releases it")
     ran = len(results)
     # each step already says DRY RUN, but the summary line is what gets
     # skimmed, and "all 4/4 steps ran" reads like four things happened.

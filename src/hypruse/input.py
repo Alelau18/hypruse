@@ -166,7 +166,7 @@ _vk: VirtualKeyboard | None = None
 _held_button: str | None = None
 
 
-def release_held() -> None:
+def release_held() -> bool:
     """Best-effort release of a button hypruse is holding: an in-flight
     drag, a long click, or a `pointer down` still waiting for its `up`.
 
@@ -176,12 +176,20 @@ def release_held() -> None:
     cursor moves and a `down` holds it across tool calls, and the kill
     switch must not end the process mid-hold. A CLI verb inherits a `down`
     from an earlier process (cli_state), with no pointer of its own yet, so
-    one is made for the release."""
+    one is made for the release.
+
+    True when a release was sent. A release that could not be sent leaves
+    the hold on record, so whoever asked (`hypruse stop`, a stopped
+    sequence) does not claim it was let go."""
     global _held_button
-    if _held_button:
-        with contextlib.suppress(Exception):
-            (_vp or VirtualPointer()).button(_held_button, RELEASED)
+    if not _held_button:
+        return False
+    try:
+        (_vp or VirtualPointer()).button(_held_button, RELEASED)
+    except Exception:
+        return False
     _held_button = None
+    return True
 
 
 def held_button() -> str | None:

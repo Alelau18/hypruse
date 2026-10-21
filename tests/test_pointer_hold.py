@@ -259,7 +259,7 @@ def test_a_sequence_that_stops_before_its_up_releases_the_button(tool, monkeypat
         srv.events.EventError("no socket")))
     released = []
     monkeypatch.setattr(hinput, "release_held",
-                        lambda: released.append(hinput.held_button()) or hinput.restore_held(None))
+                        _releases(released))
     steps = [
         {"op": "pointer", "action": "down", "x": 1, "y": 1},
         {"op": "pointer", "action": "move", "x": 50, "y": 50},
@@ -277,6 +277,26 @@ def test_a_sequence_that_runs_to_the_end_leaves_a_deliberate_hold(tool, monkeypa
         srv.events.EventError("no socket")))
     out = srv.sequence([{"op": "pointer", "action": "down", "x": 1, "y": 1}], then="none")
     assert "all 1/1" in out and hinput.held_button() == "left"
+
+
+def _releases(log, ok=True):
+    """A release_held that records the button and reports `ok`."""
+    def release():
+        log.append(hinput.held_button())
+        if ok:
+            hinput.restore_held(None)
+        return ok
+
+    return release
+
+
+def test_a_stopped_sequence_does_not_claim_a_release_that_failed(tool, monkeypatch):
+    monkeypatch.setattr(srv.events, "EventStream", lambda: (_ for _ in ()).throw(
+        srv.events.EventError("no socket")))
+    monkeypatch.setattr(hinput, "release_held", _releases([], ok=False))
+    out = srv.sequence([{"op": "pointer", "action": "down"}, {"op": "pointer", "action": "x"}],
+                       then="none")
+    assert "the left button a step pressed is still held" in out
 
 
 # --- the shell verbs ----------------------------------------------------------------
@@ -330,8 +350,58 @@ def test_stop_releases_a_hold_a_shell_down_left(tmp_path, monkeypatch, capsys):
     cli_state.save()
     released = []
     monkeypatch.setattr(hinput, "release_held",
-                        lambda: released.append(hinput.held_button()) or hinput.restore_held(None))
+                        _releases(released))
     assert cli.stop() == 0
     assert released == ["left"]
     assert "released the left button" in capsys.readouterr().out
     assert cli_state.load()["flags"]["held_button"] is None
+
+
+def test_stop_finds_the_hold_without_the_signature_in_its_env(tmp_path, monkeypatch, capsys):
+    # a hotkey daemon or a bar module runs `hypruse stop` with a bare env:
+    # the state file is per instance, so the instance is discovered first
+    import os
+
+    sig = "abc_1700000000_1"
+    inst = tmp_path / "hypr" / sig
+    inst.mkdir(parents=True)
+    (inst / ".socket.sock").touch()
+    (inst / "hyprland.lock").write_text(f"{os.getpid()}\nwayland-1\n")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", sig)
+    cli_state.restore()
+    cli_state.set_flag("held_button", "right")
+    cli_state.save()
+    monkeypatch.delenv("HYPRLAND_INSTANCE_SIGNATURE")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    released = []
+    monkeypatch.setattr(hinput, "release_held", _releases(released))
+    assert cli.stop() == 0
+    assert released == ["right"]
+    assert "released the right button" in capsys.readouterr().out
+
+
+def test_stop_keeps_the_hold_on_record_when_the_release_fails(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "test")
+    cli_state.restore()
+    cli_state.set_flag("held_button", "left")
+    cli_state.save()
+    monkeypatch.setattr(hinput, "release_held", _releases([], ok=False))
+    cli.stop()
+    out = capsys.readouterr().out
+    assert "could not release the left button" in out and "released the left" not in out
+    assert cli_state.load()["flags"]["held_button"] == "left"
+
+
+def test_release_held_reports_a_failed_release_and_keeps_the_hold(monkeypatch):
+    class Broken(FakeVP):
+        def button(self, button, state):
+            raise hinput.WireError("no compositor")
+
+    monkeypatch.setattr(hinput, "_vp", Broken())
+    hinput.restore_held("left")
+    assert hinput.release_held() is False
+    assert hinput.held_button() == "left"
+    hinput.restore_held(None)
+    assert hinput.release_held() is False  # nothing held, nothing sent

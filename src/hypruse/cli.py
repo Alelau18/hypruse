@@ -341,15 +341,20 @@ def _release_remembered_hold() -> str | None:
     from hypruse import cli_state, session
     from hypruse import input as hinput
 
+    # first: the state file is named by the instance signature, which a
+    # hotkey daemon or a bar module running `hypruse stop` usually lacks
+    with contextlib.suppress(Exception):
+        session.ensure_session_env()
     held = (cli_state.load().get("flags") or {}).get("held_button")
     if not isinstance(held, str) or not held:
         return None
-    with contextlib.suppress(Exception):
-        session.ensure_session_env()
     hinput.restore_held(held)
     if hinput.held_button() is None:
         return None  # not a button name: nothing to release
-    hinput.release_held()
+    if not hinput.release_held():
+        print(f"could not release the {held} button a `pointer down` left held "
+              "(no Wayland connection); it is still on record")
+        return None
     with contextlib.suppress(Exception):
         cli_state.restore()
         cli_state.set_flag("held_button", None)
