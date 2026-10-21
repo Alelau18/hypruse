@@ -1934,9 +1934,7 @@ def launch(
     workspace instead. It waits for its own window (one on that workspace,
     or of the program's own class), never one the human opens meanwhile.
     An app that is already running opens its window from the running
-    process, on the human's screen, before it is moved: the note says so,
-    and the human's focus is given back to the window they were in when
-    that window is still on screen.
+    process, on the human's screen, before it is moved: the note says so.
     Returns the new window's address/class/title/workspace, or a timeout
     note."""
     safety.touch("launch")
@@ -2033,10 +2031,7 @@ def launch(
             )
     active_after = _active_address() if rule else None
     if moved and active_after != active_before:
-        if active_before and _give_focus_back(active_before):
-            result["note"] += f"; the human's focus was given back to {active_before}"
-        else:
-            result["note"] += f" (the focused window is now {active_after})"
+        result["note"] += f" (the focused window is now {active_after})"
     took = bool(rule) and not moved and active_after == win["address"]
     if took:  # Hyprland dropped the silent rule (the workspace was on screen)
         result["note"] = (result["note"] + "; " if result.get("note") else "") + (
@@ -2053,22 +2048,6 @@ def launch(
         # 0.12's behaviour.
         trust.remember_seat()
     return result
-
-
-def _give_focus_back(address: str) -> bool:
-    """Refocus the window the human was in before a single-instance app's
-    window opened on their screen and was moved away. Only a window that
-    still exists on a workspace shown right now: focusing one elsewhere
-    would switch the human's workspace, a bigger change than the one being
-    undone. False when it was not done."""
-    with contextlib.suppress(Exception):
-        before = _client_by_address(address)
-        shown = hyprctl.visible_workspaces(hyprctl.query("monitors"))
-        if before is None or hyprctl.workspace_ref(before.get("workspace")) not in shown:
-            return False
-        hyprctl.dispatch("focuswindow", f"address:{address}")
-        return True
-    return False
 
 
 def _shown_workspaces(monitors: list[dict[str, Any]]) -> list[dict[str, Any]]:

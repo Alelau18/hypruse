@@ -37,12 +37,6 @@ All notable changes to this project are documented here. The format follows
   releases it.
 
 ### Fixed
-- **`launch` gives the human's focus back.** An app that was already
-  running opens its new window from the running process on the human's
-  screen, where it takes their focus, before it is moved to the agent's
-  workspace. The window the human was in is now focused again when it
-  still exists on a workspace on screen (never one that would switch their
-  workspace), and the note says so.
 - **CLI state per compositor instance.** The shell verbs kept one
   `cli-state.json` per user, which a verb under another Hyprland instance
   (a nested test compositor) overwrote, discarding the other's marks,
@@ -125,6 +119,14 @@ All notable changes to this project are documented here. The format follows
   and `pointer(action='drag')` takes `duration_ms` (0-5000, default 200)
   and `steps` (1-100, default 12); the CLI takes `--duration-ms` and
   `--steps`.
+
+### Not changed
+- `launch` still only reports where the human's focus went when an
+  already-running app's window opens on their screen and is moved away
+  ("the focused window is now X"). Giving focus back was tried and
+  dropped: Hyprland's `focuswindow` also raises the window and warps the
+  cursor to its middle, so it would move the human's cursor, and it could
+  refocus a window the human had already left during the wait.
 
 ## [0.13.0] - 2026-10-18
 
