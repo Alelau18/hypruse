@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import shutil
 import subprocess
 from typing import Any
@@ -464,6 +465,92 @@ def monitor_at(monitors: list[dict[str, Any]], x: float, y: float) -> dict[str, 
     """The monitor whose logical rect contains (x, y), or None if the
     point is off every monitor."""
     return next((m for m in monitors if contains(logical_rect(m), x, y)), None)
+
+
+# --- window selectors ---------------------------------------------------------
+
+# Anything that takes a window address also takes a selector resolved at call
+# time: a window's address is a heap pointer and dies with it, so a game that
+# restarts, crashes or recreates its window has a new one, and agents spent
+# whole loops re-finding it by class. One resolver for every tool, so each
+# answers an ambiguous or missing window the same way.
+SELECTOR_PREFIXES = ("class:", "title:", "pid:")
+
+
+class WindowSelectError(ValueError):
+    """A window address or selector that names no window, or several."""
+
+
+def is_selector(window: Any) -> bool:
+    """Whether `window` is a class:/title:/pid: selector, not an address."""
+    return isinstance(window, str) and window.strip().lower().startswith(SELECTOR_PREFIXES)
+
+
+def _brief(c: dict[str, Any]) -> str:
+    ws = c.get("workspace") or {}
+    ref = workspace_ref(ws) if isinstance(ws, dict) else ws
+    return f"{c.get('address')} {c.get('class', '')} {json.dumps(c.get('title', ''))} ws {ref}"
+
+
+def _similar(pattern: str, clients: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Windows whose class shares a word with a class pattern, for the
+    'no match' answer: the window the agent wanted may now carry a
+    slightly different class (a launcher stub, a renamed build)."""
+    words = [w for w in re.split(r"[^a-z0-9]+", pattern.lower()) if len(w) >= 3]
+    out = []
+    for c in clients:
+        cls = re.sub(r"[^a-z0-9]", "", str(c.get("class", "")).lower())
+        if cls and any(w in cls or (len(cls) >= 3 and cls in w) for w in words):
+            out.append(c)
+    return out
+
+
+def select_client(window: str, clients: list[dict[str, Any]]) -> dict[str, Any]:
+    """The client a window address or selector names, among `clients`.
+
+    An address matches exactly. `class:RE` and `title:RE` are a
+    case-insensitive regex search, `pid:N` the process id. Exactly one
+    match is the answer; several refuse with the candidates (address,
+    class, title, workspace), so the agent picks one by address; none
+    refuses and lists the windows of a similar class, if any."""
+    sel = window.strip()
+    if not is_selector(sel):
+        hit = next((c for c in clients if c.get("address") == sel), None)
+        if hit is None:
+            raise WindowSelectError(
+                f"window {sel!r} not found, call desktop() for current addresses "
+                "(or pass class:REGEX, title:REGEX or pid:N, resolved when called)"
+            )
+        return hit
+    kind, _, value = sel.partition(":")
+    kind = kind.lower()
+    if not value:
+        raise WindowSelectError(f"empty selector {sel!r}: {kind}: needs a value")
+    if kind == "pid":
+        if not value.strip().isdigit():
+            raise WindowSelectError(f"bad selector {sel!r}: pid: takes a number")
+        matches = [c for c in clients if str(c.get("pid")) == value.strip()]
+    else:
+        try:
+            rx = re.compile(value, re.IGNORECASE)
+        except re.error as exc:
+            raise WindowSelectError(f"bad selector {sel!r}: {exc}") from None
+        matches = [c for c in clients
+                   if c.get("mapped", True) and rx.search(str(c.get(kind, "")))]
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        listed = "; ".join(_brief(c) for c in matches[:8])
+        more = f" and {len(matches) - 8} more" if len(matches) > 8 else ""
+        raise WindowSelectError(
+            f"{sel!r} matches {len(matches)} windows, so it names none of them: {listed}{more}. "
+            "Pass one address, or a narrower selector"
+        )
+    similar = _similar(value, clients) if kind == "class" else []
+    if similar:
+        listed = "; ".join(_brief(c) for c in similar[:8])
+        raise WindowSelectError(f"no window matches {sel!r}; windows of a similar class: {listed}")
+    raise WindowSelectError(f"no window matches {sel!r}; call desktop() for the current windows")
 
 
 def _window(c: dict[str, Any]) -> dict[str, Any]:

@@ -7,6 +7,15 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Window selectors.** Everywhere a tool takes a window address
+  (`window=` on `screenshot`, `zoom`, `ui`, `marks`, `keyboard` and
+  `click_ui`, `hypr` targets, `sequence` steps, the CLI's `--window` and
+  `ADDR`), it also takes `class:REGEX`, `title:REGEX` (case-insensitive
+  search) or `pid:N`, resolved once when the call starts by one resolver
+  (`hyprctl.select_client`). One match is used; several are refused with
+  the candidates' address, class, title and workspace; none says so and
+  lists the windows of a similar class. Addresses die whenever a game
+  restarts, which had agents re-finding windows with shell loops.
 - **`sequence` sleep step.** `{"op": "sleep", "ms": N}` (1-60000) pauses
   between steps. It is checked before the first step runs, journaled with
   the sequence, skipped in a dry run, and stops the sequence rather than

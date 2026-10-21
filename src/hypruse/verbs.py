@@ -49,6 +49,7 @@ WAIT_EVENTS = (
 EXIT_OK, EXIT_ERROR, EXIT_USAGE, EXIT_REFUSED, EXIT_NORESULT = 0, 1, 2, 3, 4
 
 _S = argparse.SUPPRESS  # absent flags stay absent, so the tool sees its own defaults
+_WIN = "a window address, or a selector resolved when called: class:RE, title:RE, pid:N"
 
 
 class Usage(Exception):
@@ -107,7 +108,8 @@ def build_parser() -> argparse.ArgumentParser:
     verb("desktop", "monitors, workspaces, windows, active window, cursor, layers")
 
     v = verb("screenshot", "capture the focused monitor, a window, or a region")
-    v.add_argument("--window", default=_S, metavar="ADDR", help="window address, or 'active'")
+    v.add_argument("--window", default=_S, metavar="ADDR",
+                   help="window address, 'active', or class:RE|title:RE|pid:N")
     v.add_argument("--region", default=_S, metavar="x,y,WxH")
     v.add_argument("--scale", type=float, default=_S, metavar="F", help="deliberate downscale")
     capture(v)
@@ -116,17 +118,18 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("x", type=float)
     v.add_argument("y", type=float)
     v.add_argument("--size", default=_S, metavar="WxH")
-    v.add_argument("--window", default=_S, metavar="ADDR", help="clamp to this window")
+    v.add_argument("--window", default=_S, metavar="ADDR",
+                   help="clamp to this window (address, or class:RE|title:RE|pid:N)")
     capture(v)
 
     v = verb("ui", "a window's controls by name with exact click points and values")
-    v.add_argument("--window", default=_S, metavar="ADDR")
+    v.add_argument("--window", default=_S, metavar="ADDR", help=_WIN)
     v.add_argument("--name", default=_S, metavar="TEXT", help="filter by accessible name")
     v.add_argument("--all", action="store_true", default=_S,
                    help="include controls that are not actionable (labels, panels)")
 
     v = verb("marks", "the window with its controls numbered, plus the legend")
-    v.add_argument("--window", default=_S, metavar="ADDR")
+    v.add_argument("--window", default=_S, metavar="ADDR", help=_WIN)
     v.add_argument("--name", default=_S, metavar="TEXT")
     v.add_argument("--out", default=_S, metavar="PATH", help="move the capture to PATH")
 
@@ -185,14 +188,15 @@ def build_parser() -> argparse.ArgumentParser:
     a = ks.add_parser("key", help="press COMBO: ctrl+shift+t, esc, F5, enter")
     a.add_argument("keys", metavar="COMBO")
     for a in ks.choices.values():
-        a.add_argument("--window", default=_S, metavar="ADDR", help="the window to type into")
+        a.add_argument("--window", default=_S, metavar="ADDR",
+                       help="the window to type into (address, or class:RE|title:RE|pid:N)")
         acting(a, auth=True)
         placement(a)
 
     v = verb("click_ui", "click a control by accessible name, or by marks number", ("click-ui",))
     v.add_argument("name", nargs="?", default=_S, metavar="NAME")
     v.add_argument("--mark", type=int, default=_S, metavar="N", help="from the last marks call")
-    v.add_argument("--window", default=_S, metavar="ADDR")
+    v.add_argument("--window", default=_S, metavar="ADDR", help=_WIN)
     v.add_argument("--index", type=int, default=_S, metavar="I",
                    help="pick among ambiguous candidates (0-based)")
     v.add_argument("--button", choices=("left", "right", "middle"), default=_S)
@@ -205,6 +209,7 @@ def build_parser() -> argparse.ArgumentParser:
     hs.required = True
     a = hs.add_parser("workspace", help="switch to WS (number, name, special:name)")
     a.add_argument("workspace", metavar="WS")
+    # every ADDR below also takes class:RE, title:RE or pid:N
     a = hs.add_parser("focus_window", help="focus the window at ADDR")
     a.add_argument("target", metavar="ADDR")
     a = hs.add_parser("move_window", help="move ADDR to WS, silently")

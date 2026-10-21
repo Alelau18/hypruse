@@ -82,6 +82,15 @@ HYPRUSE_AUTH_GUARD, HYPRUSE_STRICT, HYPRUSE_MARK, HYPRUSE_JOURNAL,
 HYPRUSE_DRYRUN, HYPRUSE_BACKGROUND, HYPRUSE_AGENT_WORKSPACES and
 HYPRUSE_AGENT_FILL are the owner's settings; no flag changes them.
 
+**Windows.** Every `ADDR` (`--window`, a `hypr` target, a sequence step's
+`window` or `target`) is an address from `desktop` or a selector resolved
+when the verb runs: `class:REGEX`, `title:REGEX` (case-insensitive search)
+or `pid:N`. A selector must name exactly one mapped window. Several matches
+are an error listing them (`address class "title" ws N`), so pass one
+address; none is an error listing windows of a similar class, if any. Use a
+selector for an app that restarts or recreates its window (games), whose
+address changes each time.
+
 **Bounds.** `wait_for --timeout` 1-60 s, `launch --wait` 1-30 s, `sequence`
 20 steps and 30 s total, so every verb returns well inside a 120 s shell
 timeout. hypruse never prompts, pages or colors.

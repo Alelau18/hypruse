@@ -231,12 +231,10 @@ def _find_window(window: str, clients: list[dict[str, Any]], active: str | None)
     target = active if window == "active" else window
     if not target:
         raise CaptureRefused("no active window")
-    for c in clients:
-        if c.get("address") == target:
-            return c
-    raise CaptureRefused(
-        f"window {target!r} not found, call desktop() for current addresses"
-    )
+    try:
+        return hyprctl.select_client(target, clients)  # an address, or a selector
+    except hyprctl.WindowSelectError as exc:
+        raise CaptureRefused(str(exc)) from None
 
 
 def _hidden_reason(

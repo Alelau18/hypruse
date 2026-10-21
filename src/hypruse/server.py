@@ -76,6 +76,13 @@ proportion (e.g. "60% across a 300px-wide crop → x≈180"), not absolute
 guessing, and after a click that should change something, screenshot again
 to confirm before continuing (stable=true waits out animations).
 
+Windows: every `window`/`target` argument takes an address from
+`desktop`, or a selector resolved when the call runs: class:REGEX,
+title:REGEX (case-insensitive search) or pid:N. A selector must name
+exactly one window; several or none refuse with the candidates. Prefer a
+selector for an app that restarts (games, crashed apps), whose address
+changes with every new window.
+
 The cursor and keyboard focus are SHARED with the human at the desk:
 finish what you start, and expect every action on their screen to be
 visible. Before typing, pass `keyboard(window=<address>)` so keystrokes
@@ -159,6 +166,10 @@ lists the owner's own keybinds, useful for understanding their
 workflows. To notice a change (an app starting, a title updating, a
 layer appearing), block on `wait_for` instead of re-capturing in a
 loop.
+
+Windows: a `window` argument takes an address from `desktop`, or a
+selector resolved when the call runs: class:REGEX, title:REGEX or pid:N
+(it must name exactly one window).
 
 Coordinates: one space everywhere, Hyprland global logical pixels
 (window `at`, cursor). Screenshots are pixel space: map back with
@@ -377,7 +388,7 @@ def screenshot(
     lossless: bool = False,
 ) -> list[Any]:
     """Capture the focused monitor, a window (`window`: "active" or an
-    address from desktop, cheapest for reading one app), or a `region`
+    address or selector, cheapest for reading one app), or a `region`
     "x,y,WxH". Returns the image (or a file path to read) + JSON metadata
     with geometry/scale for pixel→global mapping. A window on a hidden
     workspace or under another window is still captured as itself
@@ -393,6 +404,7 @@ def screenshot(
     PNG for pixel-exact work. Before clicking a small control, follow with
     `zoom` at the estimated point."""
     safety.touch("screenshot")
+    window = _select(window)
     return _deliver_capture(window, region, scale=scale, stable=stable, lossless=lossless)
 
 
@@ -410,10 +422,11 @@ def zoom(
     x,y, zoom there, re-estimate on the zoomed image (scale ~1.0, so
     global = geometry[:2] + image_pixel), then click. `size` "WxH" in
     logical pixels (default 480x360) is clamped to the screen; `window`
-    (an address from desktop, on screen) clamps to that window instead. The metadata
+    (an address or selector, on screen) clamps to that window instead. The metadata
     echoes the requested point back as `point`; `stable=true` waits for
     the frame to settle first; `lossless=true` returns PNG."""
     safety.touch("zoom")
+    window = _select(window)
     rx, ry, rw, rh = shot.zoom_region(x, y, size, window)
     return _deliver_capture(
         region=f"{rx},{ry},{rw}x{rh}",
@@ -424,17 +437,24 @@ def zoom(
 
 
 def _resolve_window(window: str) -> dict[str, Any]:
-    """The hyprctl client for a window address ('' or 'active' = focused)."""
+    """The hyprctl client for a window address or selector (class:RE,
+    title:RE, pid:N; see hyprctl.select_client), '' or 'active' = focused."""
     clients = hyprctl.query("clients")
     target = window
     if not window or window == "active":
         target = (hyprctl.query("activewindow") or {}).get("address")
     if not target:
         raise ValueError("no active window; pass a window address from desktop()")
-    client = next((c for c in clients if c.get("address") == target), None)
-    if client is None:
-        raise ValueError(f"window {target!r} not found, call desktop() for current addresses")
-    return client
+    return hyprctl.select_client(target, clients)
+
+
+def _select(window: str) -> str:
+    """A tool's window argument as an address: a selector is resolved once,
+    when the call starts, so every guard, focus and result after it names
+    the same window. An address, '' and 'active' pass through unchanged."""
+    if hyprctl.is_selector(window):
+        return _resolve_window(window)["address"]
+    return window
 
 
 def _active_address() -> str | None:
@@ -568,7 +588,7 @@ def _ui_read(
 def ui(window: str = "", name: str = "", actionable: bool = True) -> list[Any] | str:
     """Read a window's accessibility tree (AT-SPI) and return its elements
     with GLOBAL click points, so you can target a control by NAME with no
-    screenshot and no pixel guessing. `window` is an address from desktop
+    screenshot and no pixel guessing. `window` is an address or selector
     (default: the focused window). `name` filters to elements whose
     accessible name contains it (case-insensitive); `actionable` (default)
     keeps only interactive roles (buttons, entries, menu items, ...); with
@@ -588,6 +608,7 @@ def ui(window: str = "", name: str = "", actionable: bool = True) -> list[Any] |
     Electron/Chrome without --force-renderer-accessibility, expose little
     or nothing); when it does not, fall back to screenshot + zoom."""
     safety.touch("ui")
+    window = _select(window)
     view = _with_hidden_note(window, _ui_read(window, name, actionable))
     trust.remember_seat()  # a fresh read re-arms the strict seat guard
     return view
@@ -704,7 +725,7 @@ def marks(window: str = "", name: str = "") -> list[Any] | str:
     click point. One glance replaces the estimate-zoom-estimate loop for
     every control the accessibility tree knows: read the number off the
     image and call `click_ui(mark=N)` (or `pointer` at the legend's x,y).
-    `window` is an address from desktop (default: focused); `name` filters
+    `window` is an address or selector (default: focused); `name` filters
     the marked controls. Falls back to the plain legend when ImageMagick is
     not installed, and to a fall-back-to-vision note when the app exposes
     no tree (then use screenshot + zoom)."""
@@ -1067,7 +1088,7 @@ def keyboard(
     """Keyboard to an app. action='type' (text, unicode-safe) |
     'key' (keys combo: 'ctrl+shift+t', 'esc', 'F5'; aliases
     enter/esc/tab/backspace/pgup/pgdn/arrows, else XKB keysyms). Pass
-    `window` (an address from desktop) so keystrokes land in the intended
+    `window` (an address or selector) so keystrokes land in the intended
     app rather than whatever currently holds focus. The window the human
     is in is focused and typed into on their screen. Any other window gets
     the keys in the background, with the human's focus left alone: text
@@ -1087,6 +1108,7 @@ def keyboard(
     a human intends that credential entry)."""
     safety.touch(f"keyboard:{action}")
     _check_then(then)
+    window = _select(window)
     _note_clients()  # what wait_for(window_open) counts as already there
     trust.guard_seat()
     # validate EVERY argument before any side effect: focusing the target
@@ -1192,6 +1214,7 @@ def click_ui(
     authentication dialog."""
     safety.touch("click_ui")
     _check_then(then)
+    window = _select(window)
     _note_clients()  # what wait_for(window_open) counts as already there
     trust.guard_seat()
     if bool(name) == bool(mark):
@@ -1660,7 +1683,7 @@ _HYPR_TAKES_VIEW = {
 def hypr(action: str, target: str = "", workspace: str = "", then: str = "none") -> list[Any] | str:
     """Window/workspace ops over IPC (instant, no vision).
     action='workspace' (workspace: number/name/'special:name') |
-    'focus_window' (target: address) | 'move_window' (target + workspace,
+    'focus_window' (target: address or selector) | 'move_window' (target + workspace,
     silent) | 'close_window' (target) | 'fullscreen' (target?) |
     'toggle_floating' (target?). `then` ('desktop'|'screenshot'|'ui'|'none')
     appends the result to this call. While the background guarantee is on
@@ -1669,6 +1692,7 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
     only to the agent's own workspaces."""
     safety.touch(f"hypr:{action}")
     _check_then(then)
+    target = _select(target.strip()) if hyprctl.is_selector(target) else target
     _note_clients()  # what wait_for(window_open) counts as already there
     workspace = workspace.strip()
     # every argument is checked before any guard runs and before anything
@@ -2560,6 +2584,10 @@ def sequence(
             if step.get("op") == "wait_for":  # never let one wait outlast the budget
                 run["timeout_s"] = min(float(step.get("timeout_s", 10)), max(budget_left, 1.0))
             try:
+                if step.get("op") == "hypr" and hyprctl.is_selector(step.get("target")):
+                    # resolved here, not only inside hypr: the step's own
+                    # move or close is excused by the address its event names
+                    run["target"] = _select(str(step["target"]).strip())
                 if background is True and step.get("op") == "hypr":
                     if step.get("action") in _HYPR_TAKES_VIEW:
                         bg.refuse(_HYPR_TAKES_VIEW[step["action"]])
@@ -2587,7 +2615,7 @@ def sequence(
                 break
             label = step.get("action") or step.get("event") or ""
             results.append(f"[{i}] {step.get('op')} {label}: {res}".rstrip())
-            prev_expected = _step_expected_signatures(step)
+            prev_expected = _step_expected_signatures(run)
             if _step_may_switch_workspace(step):
                 # A step that focuses a window (or `hypr workspace` with a
                 # relative/alias target like '+1') lands on a workspace whose
@@ -2650,7 +2678,7 @@ _READONLY_DOCS = {
     be transparent or dormant, so screenshot when visibility matters. Call
     first; pass the addresses it returns to the other observation tools.""",
     "screenshot": """Capture the focused monitor, a window (`window`: "active" or an
-    address from desktop, cheapest for reading one app), or a `region`
+    address or selector, cheapest for reading one app), or a `region`
     "x,y,WxH". Returns the image (or a file path to read) + JSON metadata
     with geometry/scale for pixel→global mapping. A window on a hidden
     workspace or under another window is still captured as itself
@@ -2670,13 +2698,13 @@ _READONLY_DOCS = {
     x,y, zoom there, and read the fine detail on the zoomed image (scale
     ~1.0, so global = geometry[:2] + image_pixel). `size` "WxH" in
     logical pixels (default 480x360) is clamped to the screen; `window`
-    (an address from desktop, on screen) clamps to that window instead. The metadata
+    (an address or selector, on screen) clamps to that window instead. The metadata
     echoes the requested point back as `point`; `stable=true` waits for
     the frame to settle first; `lossless=true` returns PNG.""",
     "ui": """Read a window's accessibility tree (AT-SPI) and return its elements
     with GLOBAL coordinates, so you can read an app's controls and their
     state by NAME with no screenshot and no pixel guessing. `window` is an
-    address from desktop (default: the focused window). `name` filters to
+    address or selector (default: the focused window). `name` filters to
     elements whose accessible name contains it (case-insensitive);
     `actionable` (default) keeps only interactive roles (buttons, entries,
     menu items, ...); with a `name` that matches none of those, it keeps
@@ -2696,7 +2724,7 @@ _READONLY_DOCS = {
     number to the control's role, name, current value, and exact global
     position. One glance shows every control the accessibility tree knows:
     read the number off the image and look it up in the legend. `window`
-    is an address from desktop (default: focused); `name` filters the
+    is an address or selector (default: focused); `name` filters the
     marked controls. Falls back to the plain legend when ImageMagick is
     not installed, and to a fall-back-to-vision note when the app exposes
     no tree (then use screenshot + zoom).""",

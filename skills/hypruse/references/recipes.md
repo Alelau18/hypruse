@@ -395,7 +395,10 @@ it acted.
 
 **Stale addresses (exit 1).** `window '0x...' not found, call desktop() for
 current addresses`: window addresses are heap pointers and die with the
-window. Re-read `desktop`; never reuse an address from an earlier task.
+window. Re-read `desktop`; never reuse an address from an earlier task. For
+an app that keeps restarting (a game), pass `class:REGEX` instead of an
+address: it is resolved on every call, and a miss lists windows of a similar
+class.
 
 **Dry run.** Results that open with `DRY RUN, nothing was delivered: would
 ...` mean the owner set HYPRUSE_DRYRUN (or you passed `--dry-run`). The
