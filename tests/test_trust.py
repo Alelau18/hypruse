@@ -1227,3 +1227,80 @@ def test_the_agent_still_needs_its_own_workspace(guarantee, monkeypatch):
     monkeypatch.setattr(trust, "_owned", {trust.hyprctl.window_key(mine)})
     with pytest.raises(trust.TrustError, match="agent's workspaces"):
         trust.guard_client(mine)
+
+
+# V57/V62: under HYPRUSE_STRICT an action takes the seat as the new baseline
+# only for what it changed itself; anything else stays for the guard to see
+
+A = {"address": "0xa", "stableId": "1", "pid": 10, "class": "kitty", "at": [0, 0],
+     "size": [500, 500], "workspace": {"id": 1}, "mapped": True}
+B = dict(A, address="0xb", stableId="2", pid=20, **{"class": "firefox"}, at=[500, 0])
+A_DIALOG = dict(A, address="0xd", stableId="3", at=[100, 100], size=[50, 50])
+MONITORS = [{"id": 0, "activeWorkspace": {"id": 1}, "specialWorkspace": {"id": 0}}]
+
+
+@pytest.fixture
+def seat(monkeypatch):
+    """A strict seat whose baseline is the cursor at (5, 5) in A."""
+    monkeypatch.setenv("HYPRUSE_STRICT", "1")
+    now = {"cursor": (5, 5), "active": A}
+    monkeypatch.setattr(trust.hyprctl, "cursor_pos", lambda: now["cursor"])
+    monkeypatch.setattr(trust.hyprctl, "query",
+                        lambda what: now["active"] if what == "activewindow" else [A, B, A_DIALOG])
+    monkeypatch.setattr(trust.hyprctl, "batch_query", lambda cmds: [MONITORS, [A, B, A_DIALOG]])
+    monkeypatch.setattr(trust, "_seat", {"cursor": (5, 5), "active": trust.hyprctl.window_key(A)})
+    return now
+
+
+def test_a_focus_the_action_did_not_cause_stays_for_the_guard(seat):
+    seat["active"] = B  # a popup or the human, while keys went to A
+    warning = trust.remember_seat_after(windows=[A])
+    assert "focus went to 0xb (firefox)" in warning and "refused" in warning
+    with pytest.raises(trust.TrustError, match="seat moved"):
+        trust.guard_seat()
+
+
+def test_the_window_the_action_focused_and_its_dialog_are_its_own(seat):
+    seat["active"], seat["cursor"] = B, (700, 100)  # focuswindow B warped the cursor into it
+    assert trust.remember_seat_after(warped=[B]) == ""
+    trust.guard_seat()
+    seat["active"] = A_DIALOG
+    assert trust.remember_seat_after(windows=[A]) == ""  # the dialog A's keys opened
+    trust.guard_seat()
+
+
+def test_a_cursor_the_action_did_not_move_stays_for_the_guard(seat):
+    seat["cursor"] = (300, 300)  # the human, during a long type into A
+    assert "cursor moved to (300, 300)" in trust.remember_seat_after(focused=True)
+    with pytest.raises(trust.TrustError, match="seat moved"):
+        trust.guard_seat()
+
+
+def test_input_without_a_window_owns_the_focused_windows_dialogs(seat):
+    seat["active"] = A_DIALOG  # Enter in A opened it
+    assert trust.remember_seat_after(focused=True) == ""
+    seat["active"] = B
+    assert "focus went to 0xb" in trust.remember_seat_after(focused=True)
+
+
+def test_a_click_owns_the_point_and_the_window_under_it(seat):
+    seat["cursor"], seat["active"] = (600, 50), B
+    assert trust.remember_seat_after(points=[(600, 50)], under_cursor=True) == ""
+    trust.guard_seat()
+
+
+def test_a_window_under_a_cursor_someone_else_moved_is_not_the_clicks(seat):
+    seat["cursor"], seat["active"] = (600, 50), B
+    warning = trust.remember_seat_after(points=[(20, 20)], under_cursor=True)
+    assert "cursor moved" in warning and "focus went to 0xb" in warning
+
+
+def test_with_no_baseline_or_no_strict_mode_nothing_is_judged(seat, monkeypatch):
+    monkeypatch.setattr(trust, "_seat", {"cursor": None, "active": None})
+    seat["active"] = B
+    assert trust.remember_seat_after() == ""
+    assert trust._seat["active"] == trust.hyprctl.window_key(B)
+    monkeypatch.setenv("HYPRUSE_STRICT", "0")
+    seat["active"] = A
+    assert trust.remember_seat_after() == ""
+    assert trust._seat["active"] == trust.hyprctl.window_key(B)  # untouched

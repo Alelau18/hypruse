@@ -124,7 +124,11 @@ def test_hypr_targetless_fullscreen_honors_seat_guard(monkeypatch):
     monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: focused)
     monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: focused.update(
         address=a[1].removeprefix("address:")) if a[0] == "focuswindow" else None)
-    assert srv.hypr("fullscreen", target="0xabc") == "fullscreen toggled"
+    out = srv.hypr("fullscreen", target="0xabc")
+    # it runs, but the cursor moved before it, which it did not do: the
+    # baseline stays for the next guarded action to see (V57)
+    assert out.startswith("fullscreen toggled; WARNING") and "cursor moved to (9, 9)" in out
+    assert srv.trust._seat["cursor"] == (1, 1)
 
 
 def test_desktop_rebaselines_the_strict_seat_guard(monkeypatch):
@@ -553,3 +557,28 @@ def test_a_bind_reads_the_seat_again_right_before_it_runs(monkeypatch):
     with pytest.raises(srv.trust.TrustError, match="seat moved"):
         srv.use_bind("SUPER+Q")
     assert len(checks) == 2 and sent == []  # refused by the check next to the dispatch
+
+
+def test_a_focus_stolen_while_typing_refuses_the_next_windowless_key(monkeypatch):
+    # V57, the report's repro: type into the focused window, a popup takes
+    # the focus meanwhile, then Enter with no window= went to the popup
+    monkeypatch.setenv("HYPRUSE_STRICT", "1")
+    mine = {"address": "0xa", "stableId": "1", "pid": 10, "class": "kitty"}
+    popup = {"address": "0xp", "stableId": "2", "pid": 66, "class": "popup"}
+    now = {"active": mine}
+    monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
+    monkeypatch.setattr(srv.hyprctl, "cursor_pos", lambda: (5, 5))
+    monkeypatch.setattr(srv.hyprctl, "query",
+                        lambda cmd: now["active"] if cmd == "activewindow" else [mine, popup])
+    monkeypatch.setattr(srv.hyprctl, "batch_query", lambda cmds: [[], [mine, popup]])
+    monkeypatch.setattr(srv.trust, "guard_keyboard_layer", lambda *a: "")
+    monkeypatch.setattr(srv.trust, "guard_session_lock", lambda *a: "")
+    monkeypatch.setattr(srv.hinput, "type_text", lambda t: now.update(active=popup))
+    pressed = []
+    monkeypatch.setattr(srv.hinput, "key_combo", pressed.append)
+    srv.trust._seat.update(cursor=(5, 5), active=srv.hyprctl.window_key(mine))
+    out = srv.keyboard("type", text="hello")
+    assert "WARNING" in out and "focus went to 0xp (popup)" in out
+    with pytest.raises(srv.trust.TrustError, match="seat moved"):
+        srv.keyboard("key", keys="enter")
+    assert pressed == []

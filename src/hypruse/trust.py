@@ -46,6 +46,7 @@ import os
 import re
 import sys
 import time
+from collections.abc import Iterable
 from typing import Any
 
 from hypruse import flags, hyprctl, journal
@@ -1097,9 +1098,18 @@ def _strict_on() -> bool:
     return flags.safety_flag("HYPRUSE_STRICT")
 
 
+def strict_on() -> bool:
+    """Whether HYPRUSE_STRICT's seat guard is on (what an action reads only
+    for remember_seat_after costs nothing otherwise)."""
+    return _strict_on()
+
+
 def remember_seat() -> None:
-    """Stash the cursor and focused window hypruse just left the seat in, so
-    the next action can tell whether anything moved it in between."""
+    """Stash the cursor and focused window the seat is in now, so the next
+    action can tell whether anything moved it in between. For a fresh
+    observation, which shows the agent the seat as it is, and for an action
+    whose effect on it cannot be predicted (a workspace switch, a bind); an
+    action that can say what it changed uses remember_seat_after."""
     if not _strict_on():
         return
     with contextlib.suppress(Exception):
@@ -1107,6 +1117,77 @@ def remember_seat() -> None:
         # the window, not its address: a new window at a recycled address
         # after the human closed theirs is a change of focus
         _seat["active"] = hyprctl.window_key(hyprctl.query("activewindow") or {})
+
+
+def remember_seat_after(
+    *,
+    points: Iterable[tuple[float, float]] = (),
+    windows: Iterable[dict[str, Any] | None] = (),
+    warped: Iterable[dict[str, Any] | None] = (),
+    under_cursor: bool = False,
+    focused: bool = False,
+) -> str:
+    """After an action on the human's screen: take the seat as the new
+    baseline only when every change since the baseline is one the action
+    caused (V57, V62). remember_seat after the delivery took in whatever the
+    seat was by then, so a popup that took the focus mid-action, or the
+    human clicking elsewhere during a long type or a launch's wait, became
+    the agent's own state and the next guard_seat let input through.
+
+    The cursor is the action's when it is where the baseline had it, at one
+    of `points`, or inside one of `warped`, the windows it focused with
+    focuswindow (which warps the cursor to the window's middle). The focus
+    is when it is where the baseline had it, on one of `windows` or
+    `warped` or a window of one of their processes (a dialog the action
+    opened), with `focused` on the window the baseline had focused or its
+    process (input without a window= goes there), and with `under_cursor`
+    on a window under the cursor, when the cursor is the action's (a click,
+    or follow_mouse after a move, focuses it).
+
+    Anything else is someone else's: the baseline stays, so the next
+    guard_seat refuses, and the returned warning says what changed. Empty
+    when the seat is taken, or when it cannot be read (guard_seat then
+    fails closed on its own)."""
+    if not _strict_on():
+        return ""
+    try:
+        cursor = tuple(hyprctl.cursor_pos())
+        active = hyprctl.query("activewindow") or {}
+        monitors, clients = (hyprctl.batch_query(["monitors", "clients"])
+                             if under_cursor or focused else ([], []))
+    except Exception:
+        return ""
+    key = hyprctl.window_key(active)
+    if _seat["cursor"] is None:  # nothing to tell a change from yet
+        _seat["cursor"], _seat["active"] = cursor, key
+        return ""
+    warps = [w for w in warped if w]
+    wins = [w for w in windows if w] + warps
+    if focused:
+        wins += [c for c in clients if hyprctl.window_key(c) == _seat["active"]]
+    spots = {(round(x), round(y)) for x, y in points}
+    cursor_ok = (cursor == tuple(_seat["cursor"]) or cursor in spots
+                 or any(_covers(w, *cursor) for w in warps))
+    if under_cursor and cursor_ok:
+        shown = hyprctl.visible_workspaces(monitors)
+        wins += [c for c in clients if c.get("mapped", True) and _covers(c, *cursor)
+                 and hyprctl.workspace_ref(c.get("workspace")) in shown]
+    pids = {w.get("pid") for w in wins if w.get("pid")}
+    focus_ok = (key == _seat["active"] or key in {hyprctl.window_key(w) for w in wins}
+                or (bool(active.get("pid")) and active.get("pid") in pids))
+    if cursor_ok and focus_ok:
+        _seat["cursor"], _seat["active"] = cursor, key
+        return ""
+    changed = []
+    if not focus_ok:
+        changed.append(f"the focus went to {active.get('address') or 'no window'}"
+                       + (f" ({active.get('class')})" if active.get("class") else ""))
+    if not cursor_ok:
+        changed.append(f"the cursor moved to ({cursor[0]}, {cursor[1]})")
+    return ("; WARNING: while this call ran, " + " and ".join(changed) + ", which it did not "
+            "do: the human or a popup may have taken the seat, so under HYPRUSE_STRICT the "
+            "next action on their screen is refused until desktop() or screenshot() reads it "
+            "again")
 
 
 def guard_seat() -> None:

@@ -353,6 +353,21 @@ All notable changes to this project are documented here. The format follows
 - **`keyboard type --allow-auth TEXT` warns** that the text is on the
   verb's own command line, readable from /proc; the skill says to pass it
   on stdin (`keyboard type - --allow-auth`).
+- **`HYPRUSE_STRICT` takes in only the seat changes an action made.**
+  Every acting tool re-baselined the seat guard with whatever the seat was
+  once it finished, so a popup that took the focus mid-action, or the
+  human clicking elsewhere during a long `keyboard type` or a `launch`'s
+  wait (in off mode, after up to 30 s), became the agent's own state, and
+  the next key with no `window=` went to that window. An action now takes
+  the seat only when every change is its own: the cursor where it put it
+  (or inside the window `focuswindow` warped it to), the focus on the
+  window it worked in, a dialog of that window's process, or for the
+  pointer the window under the point. Otherwise the baseline stays, the
+  next action on the human's screen is refused until `desktop` or
+  `screenshot` reads the seat again, and the result ends with a
+  `WARNING` naming the change. A workspace switch and `use_bind`, whose
+  landing window cannot be predicted, still take the seat as they leave
+  it.
 - **The background guarantee covers the agent's own windows, not its
   workspaces.** Under `HYPRUSE_BACKGROUND=1`, `keyboard`, `click_ui` and
   `hypr` accepted any window on workspaces 90-99, so a window the human

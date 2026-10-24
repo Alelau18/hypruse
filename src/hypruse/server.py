@@ -1392,10 +1392,15 @@ def pointer(
         raise ValueError(f"unknown action {action!r}: {'|'.join(_POINTER_ACTIONS)}")
     if dry:
         return _acted(f"{_DRY} {plan}{note}", then)
-    trust.remember_seat()
+    # where this call left the cursor (a cancelled drop: back at the start),
+    # and the window under it, which a click or follow_mouse focuses
+    points = [(x, y)] if x is not None and y is not None else []
+    if action == "drag":
+        points.append((to_x, to_y))
+    seat = trust.remember_seat_after(points=points, under_cursor=True)  # type: ignore[arg-type]
     held = hinput.held_button()
     tail = f"; the {held} button is held down until pointer action='up'" if held else ""
-    return _acted(f"{action} ok; cursor now at {hyprctl.cursor_pos()}{tail}{note}", then)
+    return _acted(f"{action} ok; cursor now at {hyprctl.cursor_pos()}{tail}{note}{seat}", then)
 
 
 @journal.journaled("act")
@@ -1504,13 +1509,16 @@ def keyboard(
         time.sleep(0.05)  # let keyboard focus settle before typing into it
         what = f"the {len(text)} characters" if action == "type" else "the keys"
         _focus_landed(target_client["address"], what)
+    # the window the keys went to, or (no window=) the focused one, and a
+    # dialog either opens: a change to anything else is not the keys' doing
+    caused = {"warped": [target_client]} if window else {"focused": True}
     if action == "type":
         hinput.type_text(text)
-        trust.remember_seat()
-        return _acted(f"typed {len(text)} characters{into}{note}", then)
+        seat = trust.remember_seat_after(**caused)
+        return _acted(f"typed {len(text)} characters{into}{note}{seat}", then)
     hinput.key_combo(keys)
-    trust.remember_seat()
-    return _acted(f"pressed {_key_label(keys)}{into}{note}", then)
+    seat = trust.remember_seat_after(**caused)
+    return _acted(f"pressed {_key_label(keys)}{into}{note}{seat}", then)
 
 
 @journal.journaled("act")
@@ -1672,11 +1680,12 @@ def click_ui(
     with _hold_synced():
         hinput.click(x, y, button=button, double=double,
                      precheck=_at_delivery("the click-point check", "the click", at_the_point))
-    trust.remember_seat()
+    # the window it focused and clicked, and a dialog the click opened
+    seat = trust.remember_seat_after(points=[(x, y)], warped=[now], under_cursor=True)
     # observe the CLICKED window, not whatever holds focus after the click
     # (the click itself may have spawned a dialog that stole it)
     return _acted(
-        f"clicked {desc} at ({x}, {y}) in {client.get('class', '')}",
+        f"clicked {desc} at ({x}, {y}) in {client.get('class', '')}{seat}",
         then,
         window=client["address"],
     )
@@ -2256,6 +2265,7 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
             ),
             then,
         )
+    caused = _hypr_causes(action, target, active) if trust.strict_on() else {}
     if action == "workspace":
         hyprctl.dispatch("workspace", workspace)
         msg = f"on workspace {workspace}"
@@ -2296,8 +2306,31 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
         hyprctl.dispatch("togglefloating", *args)
         msg = f"floating toggled on {_pinned(active)}" if not target and active else (
             "floating toggled")
-    trust.remember_seat()  # our own focus/workspace change re-baselines the seat
-    return _acted(msg, then)
+    if action == "workspace":
+        # our own view change: which window it lands on cannot be predicted
+        trust.remember_seat()
+        return _acted(msg, then)
+    return _acted(msg + trust.remember_seat_after(**caused), then)
+
+
+def _hypr_causes(action: str, target: str, active: dict[str, Any] | None) -> dict[str, Any]:
+    """What a hypr action may do to the seat, read before it acts: the
+    window it names (or the active one), focused with focuswindow by
+    focus_window and a targeted fullscreen, and for a close or a move the
+    others on that window's workspace, one of which Hyprland focuses."""
+    with contextlib.suppress(Exception):
+        clients = hyprctl.query("clients")
+        mine = next((c for c in clients if c.get("address") == target), None) if target else active
+        if mine is None:
+            return {}
+        if action == "focus_window" or (action == "fullscreen" and target):
+            return {"warped": [mine]}
+        windows = [mine]
+        if action in ("close_window", "move_window"):
+            ws = hyprctl.workspace_ref(mine.get("workspace"))
+            windows += [c for c in clients if hyprctl.workspace_ref(c.get("workspace")) == ws]
+        return {"windows": windows}
+    return {}
 
 
 def _await_new_window(
@@ -2608,12 +2641,19 @@ def launch(
                 "this broke HYPRUSE_BACKGROUND=1: the new window took the human's keyboard "
                 "focus; tell the human"
             )
-    if mode == bg.OFF or not rule or moved or took:
-        # the launch moved the seat (the new window took focus, or ours
-        # moved it): re-baseline the seat guard. Any other change since the
-        # last action is the human's, for the guard to see. Off mode keeps
-        # 0.12's behaviour.
-        trust.remember_seat()
+    # the new window taking the focus is the launch's doing, and so is
+    # Hyprland focusing another window where it opened once it is moved
+    # away; any other change since the last action (the human, during the
+    # wait) stays for the seat guard to see, in off mode too (V62)
+    caused = [win]
+    if moved:
+        with contextlib.suppress(Exception):
+            caused += [c for c in hyprctl.query("clients")
+                       if hyprctl.workspace_ref(c.get("workspace")) == hyprctl.workspace_ref(ws)]
+    seat = trust.remember_seat_after(windows=caused)
+    if seat:
+        result["warning"] = "; ".join(
+            w for w in (result.get("warning"), seat.removeprefix("; WARNING: ")) if w)
     return result
 
 

@@ -532,7 +532,7 @@ def test_automatic_mode_still_switches_workspaces_on_request(wired_bg):
 
 @pytest.fixture
 def launch_fake(monkeypatch):
-    s = {"rule": None, "clients": [], "seat": 0, "active": ["0xhuman"],
+    s = {"rule": None, "clients": [], "active": ["0xhuman"],
          "lands": None, "dispatch": [], "monitors": MONS}
     monkeypatch.delenv("HYPRUSE_BACKGROUND", raising=False)
     monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
@@ -559,10 +559,14 @@ def launch_fake(monkeypatch):
     monkeypatch.setattr(srv.trust, "note_launched", lambda *a: None)
     monkeypatch.setattr(srv.trust, "owned", lambda: {"0xmine"})
 
-    def seat():
-        s["seat"] += 1
+    def seat(windows=()):
+        # what the launch says it caused: the strict seat guard takes in
+        # only those changes (trust.remember_seat_after, tested in test_trust)
+        s["claims"].append(sorted(w["address"] for w in windows))
+        return ""
 
-    monkeypatch.setattr(srv.trust, "remember_seat", seat)
+    s["claims"] = []
+    monkeypatch.setattr(srv.trust, "remember_seat_after", seat)
     return s
 
 
@@ -605,13 +609,12 @@ def test_the_guarantee_launches_only_onto_agent_workspaces(launch_fake, monkeypa
     assert launch_fake["rule"] == "[workspace 98 silent]"
 
 
-def test_a_silent_launch_leaves_the_seat_baseline_alone(launch_fake):
-    # the human's seat did not change, so a change since the last action is
-    # still theirs for the strict seat guard to see
+def test_a_launch_claims_only_its_own_window(launch_fake):
+    # a change since the last action that is not the new window is still the
+    # human's for the strict seat guard to see, silent or on screen
     srv.launch("foot")
-    assert launch_fake["seat"] == 0
     srv.launch("foot", background=False)
-    assert launch_fake["seat"] == 1
+    assert launch_fake["claims"] == [["0xnew"], ["0xnew"]]
 
 
 def test_an_app_that_opened_elsewhere_says_whether_focus_moved(launch_fake):
@@ -619,10 +622,13 @@ def test_an_app_that_opened_elsewhere_says_whether_focus_moved(launch_fake):
     # workspace, and is moved after
     launch_fake["lands"] = "1"
     launch_fake["active"][:] = ["0xhuman", "0xother"]
+    launch_fake["clients"] = [{"address": "0xother", "workspace": {"id": 1, "name": "1"}},
+                              {"address": "0xfar", "workspace": {"id": 5, "name": "5"}}]
     out = srv.launch("foot")
     assert ("movetoworkspacesilent", "99,address:0xnew") in launch_fake["dispatch"]
     assert "focus" in out["note"] and "0xother" in out["note"] and "agent" in out["note"]
-    assert launch_fake["seat"] == 1  # our launch moved the seat
+    # moved away, so Hyprland focused another window where it opened
+    assert launch_fake["claims"] == [["0xnew", "0xother"]]
 
 
 def test_a_dry_run_names_the_agent_workspace(launch_fake, monkeypatch):
@@ -802,17 +808,18 @@ def test_a_named_agent_workspace_is_not_mistaken_for_a_move(launch_fake, monkeyp
     assert launch_fake["dispatch"] == [] and "elsewhere" not in out["note"]
 
 
-def test_with_background_off_launch_re_baselines_the_seat_as_before(launch_fake, monkeypatch):
+def test_with_background_off_launch_claims_only_its_own_window(launch_fake, monkeypatch):
+    # V62: off mode took in the whole seat after a wait of up to 30 s
     monkeypatch.setenv("HYPRUSE_BACKGROUND", "0")
     srv.launch("foot", workspace="3")
-    assert launch_fake["seat"] == 1
+    assert launch_fake["claims"] == [["0xnew"]]
 
 
-def test_a_launch_that_took_focus_re_baselines_the_seat(launch_fake):
+def test_a_launch_that_took_focus_claims_that_focus(launch_fake):
     # Hyprland drops a silent rule for the workspace a window maps on
     launch_fake["active"][:] = ["0xhuman", "0xnew"]
     srv.launch("foot", workspace="3")
-    assert launch_fake["seat"] == 1
+    assert launch_fake["claims"] == [["0xnew"]]
 
 
 def test_confinement_to_workspaces_narrows_where_apps_open(launch_fake, monkeypatch):
@@ -1141,13 +1148,14 @@ def test_a_focus_change_that_was_not_the_new_window_stays_the_humans(launch_fake
     # under HYPRUSE_STRICT, re-baselining here would absorb the human's change
     launch_fake["active"][:] = ["0xhuman", "0xother"]
     srv.launch("foot")
-    assert launch_fake["seat"] == 0
+    assert launch_fake["claims"] == [["0xnew"]]  # not 0xother
 
 
 def test_a_launched_window_that_took_focus_says_so(launch_fake):
     launch_fake["active"][:] = ["0xhuman", "0xnew"]
     out = srv.launch("foot", workspace="3")
-    assert "took the human's keyboard focus" in out["note"] and launch_fake["seat"] == 1
+    assert "took the human's keyboard focus" in out["note"]
+    assert launch_fake["claims"] == [["0xnew"]]
 
 
 def test_under_the_guarantee_a_window_that_took_focus_is_a_warning(launch_fake, monkeypatch):
