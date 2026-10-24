@@ -433,3 +433,21 @@ def test_a_layout_with_no_monitor_at_its_corner_refuses_to_guess(monkeypatch):
                         lambda what: [_monitor(0, 200), _monitor(1920, 0)])
     with pytest.raises(hinput.InputError, match="cannot be known"):
         hinput._layout_origin()
+
+
+def test_a_named_seat_on_an_l_shaped_layout_is_not_moved_at_all(monkeypatch):
+    # review of 30549e9: pins input.move's origin wiring, which a fake pointer
+    # that swallows `origin` did not
+    from hypruse import wire
+
+    vp = wire.VirtualPointer.__new__(wire.VirtualPointer)
+    vp._seat, vp._pos, motion = 7, None, []  # a seat of its own, its cursor not found yet
+    vp.move = lambda dx, dy: motion.append((dx, dy))
+    monkeypatch.setattr(hinput, "_vp", vp)
+    dispatched = []
+    monkeypatch.setattr(hinput.hyprctl, "dispatch", lambda *a: dispatched.append(a))
+    monkeypatch.setattr(hinput.hyprctl, "query",
+                        lambda what: [_monitor(0, 200), _monitor(1920, 0)])
+    with pytest.raises(hinput.InputError, match="cannot be known"):
+        hinput.move(100, 300)
+    assert motion == [] and dispatched == []

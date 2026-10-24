@@ -62,8 +62,10 @@ def test_server_main_registers_drag_release_cleanup(tmp_path, monkeypatch):
 
     monkeypatch.setattr(srv.sys, "stdin", Pipe())
     srv.main()
-    assert srv._release_and_sync in safety._cleanups  # releases, then tells the CLI state
-    safety.shutdown()
+    try:
+        assert srv._release_and_sync in safety._cleanups  # releases, then tells the CLI state
+    finally:
+        safety.shutdown()  # never leave its cleanups for the next test
 
 
 def test_the_servers_shutdown_releases_then_records_it(tmp_path, monkeypatch):
@@ -115,3 +117,21 @@ def test_shutdown_runs_registered_cleanups(tmp_path, monkeypatch):
     assert calls == ["released"]
     safety.shutdown()  # cleanups are drained: no double release
     assert calls == ["released"]
+
+
+def test_a_server_holding_nothing_leaves_a_shells_hold_on_record(tmp_path, monkeypatch):
+    # review of f1444c6: the sync on the way out ran whatever the server held,
+    # so a server holding nothing erased a hold a shell `pointer down` recorded
+    from hypruse import cli_state
+    from hypruse import input as hinput
+    from hypruse import server as srv
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "test")
+    monkeypatch.setattr(hinput, "_held_button", None)
+    monkeypatch.setattr(hinput, "_down", None)
+    cli_state.restore()
+    cli_state.set_flag("held_button", "left")  # the shell's own hold
+    cli_state.save()
+    srv._release_and_sync()
+    assert cli_state.load()["flags"]["held_button"] == "left"

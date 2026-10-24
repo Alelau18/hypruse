@@ -751,6 +751,7 @@ def login_form(tool, monkeypatch):
     lambda: srv.pointer("click", x=1, y=2, button="middle"),
     lambda: srv.pointer("down", x=1, y=2, button="middle"),
     lambda: srv.pointer("drag", x=1, y=2, to_x=5, to_y=6, button="middle"),
+    lambda: srv.pointer("up", x=1, y=2, button="middle"),  # Qt pastes on the release
 ])
 def test_a_middle_press_into_a_window_with_a_password_field_is_refused(login_form, call):
     with pytest.raises(srv.trust.TrustError, match="middle click pastes .* login has a "

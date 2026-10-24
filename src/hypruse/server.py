@@ -1188,9 +1188,22 @@ def _release_and_sync() -> None:
     """The shutdown path's release: let go of a held button, then tell a
     CLI verb run beside us. One cleanup, because cleanups run last in first
     out: registered as two, the sync ran before the release and the state
-    file kept a hold that was gone."""
-    hinput.release_held()
-    _sync_cli_hold()
+    file kept a hold that was gone. Only after a release this server made:
+    holding nothing, it must not erase a hold a shell `pointer down` beside
+    it recorded (as the sequence's release does)."""
+    if hinput.release_held():
+        _sync_cli_hold()
+
+
+def _release_check(x: float | None, y: float | None, button: str, allow_auth: bool) -> None:
+    """What a release is checked against right before it lands: the
+    pointer guard, and for the middle button the paste check, since Qt
+    pastes the primary selection on the release (a caller-paced down,
+    move, up). A refusal releases it somewhere safe (hinput.button_up), so
+    a hold that ends here is never left down."""
+    trust.guard_pointer(x, y, allow_auth)
+    if button == "middle":
+        _guard_middle_paste(trust.windows_at(x, y), allow_auth)
 
 
 def _release_refused(x: float | None, ending_hold: bool) -> str:
@@ -1378,7 +1391,7 @@ def pointer(
             with _hold_synced():
                 hinput.button_up(x, y, button=button, precheck=_at_delivery(
                     "the pointer guard", f"the release ({_release_refused(x, ending_hold)})",
-                    lambda: trust.guard_pointer(x, y, allow_auth)))
+                    lambda: _release_check(x, y, button, allow_auth)))
     elif action == "drag":
         if None in (x, y, to_x, to_y):
             raise ValueError("drag needs x, y, to_x, to_y")
@@ -2540,8 +2553,9 @@ def launch(
     command: str, workspace: str = "", wait_s: float = 8.0, background: bool | None = None
 ) -> dict[str, Any] | str:
     """Open an app: run `command` via Hyprland exec. Optional `workspace` placement
-    (silent, works even for single-instance apps like browsers, whose
-    window gets moved after it appears) and `wait_s` (1-30, default 8;
+    (silent; a single-instance app like a browser, whose window opens
+    elsewhere, gets it moved after it appears, except under the background
+    guarantee, where that window is not the agent's) and `wait_s` (1-30, default 8;
     raise for slow apps). Without `workspace`, the app opens silently on
     the next of the agent's own workspaces (HYPRUSE_AGENT_WORKSPACES, 99
     down to 90 by default) that is not on screen, so the agent can work on
@@ -2551,7 +2565,8 @@ def launch(
     of another app the human opens meanwhile; only one it can prove is its
     own counts as the agent's (HYPRUSE_CONFINE=launched).
     An app that is already running opens its window from the running
-    process, on the human's screen, before it is moved: the note says so.
+    process, on the human's screen, before it is moved (left there under
+    the guarantee): the note says so.
     Returns the new window's address/class/title/workspace, or a timeout
     note."""
     safety.touch("launch")

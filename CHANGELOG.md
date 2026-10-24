@@ -357,13 +357,16 @@ All notable changes to this project are documented here. The format follows
   `HYPRUSE_AUTH_GUARD=strict`.** A middle-button press pastes the primary
   selection, which the agent can set by selecting text, into the field
   under the pointer, so it put text into a password field without the
-  consent typing there needs. Under strict, a `pointer` middle click or
-  `down`, and a foreground `click_ui` with `button=middle`, into a window
-  whose accessibility tree shows a password field are refused without
-  `allow_auth=true`. Which field is under the point is not worked out, so
-  a password field anywhere in the window counts; a tree hypruse cannot
-  read in full (a large web page) is not refused, so a middle click on a
-  link still opens it.
+  consent typing there needs. Under strict, a middle-button `pointer`
+  click, `down`, `drag` or `up` (Qt pastes on the release), and a
+  foreground `click_ui` with `button=middle`, into a window whose
+  accessibility tree shows a password field are refused without
+  `allow_auth=true`; a refused release is let go somewhere safe, as any
+  refused release is. Which field is under the point is not worked out,
+  so a password field anywhere in the window counts, the focused one
+  included; a tree hypruse cannot read in full (a large web page) with no
+  password field found is not refused, so a middle click on a link still
+  opens it.
 - **Typing says when an unrecognized layer may have the keys.** Whether a
   layer holds the keyboard was read off its namespace, which its own
   client picks, and Hyprland's layer list does not say which layer has

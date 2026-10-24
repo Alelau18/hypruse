@@ -656,3 +656,18 @@ def test_a_close_or_move_credits_the_windows_on_its_workspace(monkeypatch):
         assert {w["address"] for w in caused["windows"]} == {"0xa", "0xb"}  # not 0xf
     assert srv._hypr_causes("focus_window", "0xa", None) == {"warped": [MINE]}
     assert srv._hypr_causes("toggle_floating", "", OTHER) == {"windows": [OTHER]}
+
+
+def test_the_screenshot_and_zoom_tools_still_rearm_the_seat_guard(monkeypatch):
+    # review of b4112ae: only a capture appended to an action stopped
+    # re-arming; a read of its own is what a warning tells the agent to make
+    rearmed = []
+    monkeypatch.setattr(srv.trust, "remember_seat", lambda: rearmed.append(1))
+    monkeypatch.setattr(srv, "_grab_env", lambda *a, **k: (b"IMG", {}))
+    monkeypatch.setattr(srv, "_package", lambda data, meta: [TextContent(type="text", text="I")])
+    monkeypatch.setattr(srv.shot, "zoom_region", lambda *a, **k: (0, 0, 10, 10))
+    srv.screenshot()
+    srv.zoom(x=10, y=10)
+    assert rearmed == [1, 1]
+    srv._acted("typed", "screenshot")
+    assert rearmed == [1, 1]
