@@ -918,8 +918,12 @@ def guard_keyboard_layer(window_given: bool, allow_auth: bool) -> str:
     launcher after use_bind is the documented flow) and the returned
     note, appended to the tool result, records where they went. The
     on-screen keyboard kind feeds keys rather than eating them, so it
-    does not count. Positive detection: an unreadable layer list yields
-    '', except that while the auth guard is on it refuses, since an
+    does not count. These refusals cover the kinds hypruse recognizes by
+    namespace, which the layer's own client picks; with none of those
+    mapped, a layer of a kind not known to take no keyboard (unknown, a
+    panel), at any level, is only noted, under confinement too (V39).
+    Positive detection: an unreadable layer list yields '', except that
+    while the auth guard is on it refuses, since an
     authentication prompt holding the keyboard cannot be ruled out."""
     surfaces = _read_layers()
     if surfaces is None:
@@ -933,16 +937,17 @@ def guard_keyboard_layer(window_given: bool, allow_auth: bool) -> str:
     grabbers = [s for s in surfaces if s.get("kind") in hyprctl.KEYBOARD_GRABBING_KINDS]
     if not grabbers:
         # V39: a kind is read off the namespace the layer's own client chose,
-        # and the layer dump does not say which layer holds the keyboard, so
-        # one hypruse does not recognize over the windows may have the keys
-        # (a warning, not a refusal: most such layers are a shell's widgets)
-        unknown = sorted({s["namespace"] for s in surfaces if s.get("kind") == "unknown"
-                          and s.get("level") in ("top", "overlay")})
-        if unknown:
-            names = ", ".join(repr(n) for n in unknown)
-            return (f"; NOTE: a layer hypruse does not recognize is mapped over the windows "
-                    f"({names}); if it holds the keyboard, the keys went to it, not to "
-                    + ("the window" if window_given else "the focused window"))
+        # and the layer dump does not say which layer holds the keyboard;
+        # Hyprland gives it to a layer that asks for it at any level, so any
+        # mapped layer not known to take none may have the keys (a note, not
+        # a refusal: most such layers are a shell's widgets)
+        maybe = sorted({s["namespace"] for s in surfaces
+                        if s.get("kind") not in hyprctl.KEYBOARD_QUIET_KINDS})
+        if maybe:
+            names = ", ".join(repr(n) for n in maybe)
+            return (f"; NOTE: a layer that may hold the keyboard is mapped ({names}), and "
+                    "Hyprland does not say which layer has it; if it does, the keys went to "
+                    "it, not to " + ("the window" if window_given else "the focused window"))
         return ""
     # a lock screen outranks an authentication prompt, which outranks a
     # launcher, when several are somehow mapped

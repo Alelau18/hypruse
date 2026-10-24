@@ -370,12 +370,18 @@ All notable changes to this project are documented here. The format follows
   the keyboard: a layer named outside hypruse's table (`notes`) with an
   exclusive grab got the keys while the result said "typed N characters
   into X" (reproduced). With no recognized grabber, a `keyboard` result
-  now ends with a NOTE naming any unrecognized layer at the top or
-  overlay level. It is a note, not a refusal, since most such layers are a
-  shell's widgets. Noctalia 5's layers are recognized: its panels, overview
-  launcher, window switcher and screenshot region as launchers (they take
-  the keyboard while open), its bar, notifications and OSD, and its
-  screen corners as a new `decoration` kind.
+  now ends with a NOTE naming any mapped layer not known to take no
+  keyboard, at any level (Hyprland gives the keyboard to a layer that asks
+  for it whatever its level, and an on-demand one when it maps). It is a
+  note, not a refusal, since most such layers are a shell's widgets.
+  Noctalia 5.3's layers are recognized: the click shield behind its
+  panels, its bar-attached panels, overview launcher, window switcher,
+  screenshot region and annotation overlay as launchers; a persistent
+  panel (which shares the `noctalia-panel` name and takes the keyboard on
+  demand) as a new `panel` kind, which is noted; its bar and dock,
+  notifications and OSD; and its screen and hot corners, desktop widgets,
+  backdrop and idle dimming as a new `decoration` kind. Its polkit prompt
+  is one of its panels and reads as a launcher, not as `auth`.
 - **`HYPRUSE_STRICT` takes in only the seat changes an action made.**
   Every acting tool re-baselined the seat guard with whatever the seat was
   once it finished, so a popup that took the focus mid-action, or the

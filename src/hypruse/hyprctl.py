@@ -751,12 +751,20 @@ LAYER_LEVELS = ("background", "bottom", "top", "overlay")
 # and a click dismisses it, so it is its own kind rather than a lock: the
 # real lock is a session lock, which trust.session_locked() detects.
 #
-# The noctalia-* names are Noctalia 5's (src/shell): its panels (the
-# launcher and control center, and the click shield laid over the screen
-# behind them), overview launcher, window switcher and screenshot region
-# take the keyboard while open (exclusive or on demand); its bar,
-# notifications, OSD and screen corners take none. Its lock is a session
-# lock too.
+# The noctalia-* names are Noctalia 5.3's (src/shell, src/capture,
+# src/idle). A panel it opens and closes (launcher, control center, its
+# polkit prompt, a panel attached to the bar) comes with a click shield
+# over the rest of the screen, which takes the keyboard exclusively on
+# Hyprland, so the shield, the attached panel, the overview launcher, the
+# window switcher, the screenshot region and the annotation overlay are
+# launchers. A persistent panel, which stays open beside the apps, shares
+# the `noctalia-panel` name and takes the keyboard on demand, which
+# Hyprland also gives it when it maps: its own `panel` kind, which the
+# keyboard guard notes rather than refuses. Its polkit prompt is one of
+# those panels, so it reads as a launcher, never as `auth`: nothing in the
+# layer list tells it apart. Its bar, dock, notifications, OSD, screen and
+# hot corners, desktop widgets, backdrop and idle dimming take no
+# keyboard. Its lock is a session lock.
 _AUTH_MARK = "polkit"
 _LAYER_KINDS = (
     (
@@ -766,14 +774,20 @@ _LAYER_KINDS = (
             "omarchy-menu", "omarchy-clipboard", "omarchy-emojis",
             "omarchy-image-selector", "omarchy-keyboard-panel", "omarchy-reminders",
             "omarchy-network-qr", "omarchy-network-speedtest", "omarchy-disk-speedtest",
-            "noctalia-panel", "noctalia-overview-launcher", "noctalia-window-switcher",
-            "noctalia-screenshot-region",
+            "noctalia-panel-click-shield", "noctalia-attached-panel",
+            "noctalia-overview-launcher", "noctalia-window-switcher",
+            "noctalia-screenshot-region", "noctalia-annotate",
         ),
     ),
-    ("bar", ("waybar", "hyprpanel", "ags-", "bar", "omarchy-bar", "noctalia-bar")),
+    # after "launcher": noctalia-panel-click-shield is one, noctalia-panel is not
+    ("panel", ("noctalia-panel", "noctalia-desktop-widgets-editor",
+               "noctalia-lockscreen-widgets-editor")),
+    ("bar", ("waybar", "hyprpanel", "ags-", "bar", "omarchy-bar", "noctalia-bar",
+             "noctalia-dock")),
     ("notifications", ("mako", "dunst", "swaync", "notification", "omarchy-notifications",
                        "noctalia-notification", "noctalia-osd")),
-    ("decoration", ("noctalia-screen-corner",)),
+    ("decoration", ("noctalia-screen-corner", "hot_corner_", "noctalia-desktop-widget-",
+                    "noctalia-backdrop", "noctalia-idle-grace")),
     ("lock-preview", ("omarchy-lock-preview",)),
     ("lock", ("hyprlock", "swaylock", "lockscreen")),
     ("osk", ("wvkbd", "squeekboard", "osk")),
@@ -802,6 +816,12 @@ FOCUS_STEALING_KINDS = frozenset({"auth", "launcher", "lock", "lock-preview", "o
 # the subset that actually holds a keyboard grab, so synthetic keys reach
 # the layer no matter which window was focused
 KEYBOARD_GRABBING_KINDS = frozenset({"auth", "launcher", "lock", "lock-preview"})
+
+# the kinds known to take no keyboard: any other layer mapped (an unknown
+# one, a panel) may hold it, since Hyprland gives the keyboard to a layer
+# that asks for it on map, at any level, and its layer list does not say
+# which one has it
+KEYBOARD_QUIET_KINDS = frozenset({"bar", "notifications", "decoration", "osk"})
 
 
 def parse_layers(raw: dict[str, Any]) -> list[dict[str, Any]]:

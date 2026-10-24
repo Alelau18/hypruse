@@ -864,14 +864,23 @@ def test_init_marking_warns_instead_of_dying_when_the_rule_will_not_install(
         ("omarchy-osd", "unknown"),
         # Noctalia 5 (src/shell)
         ("noctalia-bar-default", "bar"),
-        ("noctalia-panel", "launcher"),
-        ("noctalia-panel-click-shield", "launcher"),  # exclusive on Hyprland
+        ("noctalia-panel", "panel"),  # a persistent one stays open beside the apps
+        ("noctalia-panel-click-shield", "launcher"),  # with every other panel, exclusive
+        ("noctalia-attached-panel", "launcher"),
         ("noctalia-overview-launcher", "launcher"),
         ("noctalia-window-switcher", "launcher"),
         ("noctalia-screenshot-region", "launcher"),
+        ("noctalia-annotate", "launcher"),
+        ("noctalia-desktop-widgets-editor", "panel"),
+        ("noctalia-lockscreen-widgets-editor", "panel"),  # not a lock screen
+        ("noctalia-dock", "bar"),
         ("noctalia-notification", "notifications"),
         ("noctalia-osd", "notifications"),
         ("noctalia-screen-corner", "decoration"),
+        ("hot_corner_top_left", "decoration"),
+        ("noctalia-desktop-widget-clock-1", "decoration"),
+        ("noctalia-idle-grace", "decoration"),
+        ("noctalia-backdrop", "decoration"),
     ],
 )
 def test_omarchy_layer_kinds(namespace, kind):
@@ -1339,8 +1348,27 @@ def test_an_unrecognized_layer_over_the_windows_is_noted(monkeypatch, window_giv
     assert "'notes'" in note and f"the keys went to it, not to {where}" in note
 
 
-@pytest.mark.parametrize("raw", [_layer("notes", level="1"),  # below the windows
-                                 _layer("noctalia-bar-default", level="2")])  # a known bar
-def test_known_or_lower_layers_are_not_noted(monkeypatch, raw):
+@pytest.mark.parametrize("raw", [_layer("noctalia-bar-default", level="2"),
+                                 _layer("noctalia-desktop-widget-clock-1", level="1"),
+                                 _layer("wvkbd-mobintl")])  # an on-screen keyboard sends keys
+def test_layers_known_to_take_no_keyboard_are_not_noted(monkeypatch, raw):
     monkeypatch.setattr(trust.hyprctl, "query", lambda cmd: raw)
     assert trust.guard_keyboard_layer(True, False) == ""
+
+
+@pytest.mark.parametrize("raw", [_layer("notes", level="1"),  # Hyprland: any level grabs
+                                 _layer("noctalia-panel", level="2")])  # on demand, on map
+def test_a_layer_that_may_hold_the_keyboard_is_noted_at_any_level(monkeypatch, raw):
+    # review of f44b789
+    monkeypatch.setattr(trust.hyprctl, "query", lambda cmd: raw)
+    assert "may hold the keyboard" in trust.guard_keyboard_layer(True, False)
+
+
+def test_an_open_noctalia_panel_refuses_typing_into_a_named_window(monkeypatch):
+    # its click shield takes the keyboard, so the keys cannot reach the window
+    shielded = {"DP-1": {"levels": {"3": [
+        {"namespace": "noctalia-panel", "x": 0, "y": 0, "w": 400, "h": 600},
+        {"namespace": "noctalia-panel-click-shield", "x": 0, "y": 0, "w": 1920, "h": 1080}]}}}
+    monkeypatch.setattr(trust.hyprctl, "query", lambda cmd: shielded)
+    with pytest.raises(trust.TrustError, match="noctalia-panel-click-shield"):
+        trust.guard_keyboard_layer(True, False)
