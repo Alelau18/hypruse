@@ -248,7 +248,8 @@ def test_a_window_that_opened_since_the_last_action_is_already_there(clients, mo
     _no_stream(monkeypatch)
     out = srv.wait_for("window_open", match="lg-remote")
     assert out == {"event": "openwindow", "address": "0xB", "workspace": "2",
-                   "class": "lg-remote", "title": "LG Remote", "already": True}
+                   "class": "lg-remote", "title": "LG Remote", "launched_by_agent": False,
+                   "already": True}
 
 
 def test_it_is_reported_once_then_the_next_one_is_waited_for(clients, monkeypatch):
@@ -371,3 +372,17 @@ def test_a_window_that_maps_while_subscribing_is_already(clients, monkeypatch):
     monkeypatch.setattr(srv.events, "EventStream", subscribe)
     out = srv.wait_for("window_open", match="lg-remote")
     assert out["already"] is True and out["address"] == "0xB"
+
+
+def test_an_opened_window_says_whether_the_agent_launched_it(clients, monkeypatch):
+    # V61: a new window's class and title are the app's claim; the token
+    # in its process is not
+    srv._note_clients()
+    clients["clients"] = [KITTY, dict(LG, pid=777)]
+    monkeypatch.setattr(srv, "_launch_token_of", lambda pid: "tok" if pid == 777 else None)
+    monkeypatch.setattr(srv.trust, "launch_known", lambda token: token == "tok")
+    _no_stream(monkeypatch)
+    assert srv.wait_for("window_open", match="lg-remote")["launched_by_agent"] is True
+    stream = ScriptedStream([("openwindow", {"address": "0xC", "class": "lg-remote"})])
+    monkeypatch.setattr(srv.events, "EventStream", lambda: stream)
+    assert srv.wait_for("window_open", match="lg")["launched_by_agent"] is False

@@ -252,6 +252,12 @@ All notable changes to this project are documented here. The format follows
   is to the workspace the step's window (or a `hypr workspace` step's
   absolute target) is on. An app that opens a second window during a
   wait step (a splash, a helper) now stops the sequence after it.
+- **A selector says when it picked a window the agent never saw.**
+  `class:`/`title:` match whatever an app calls itself; `keyboard`,
+  `click_ui` and `hypr` results now note when their selector matched a
+  window that was not there at the agent's previous call, in one
+  wording, and
+  `wait_for(window_open)` results carry `launched_by_agent`.
 - **`click_ui` never clicks a control another process placed.** When a
   window's accessibility tree comes from another process (the title
   fallback found a frame named like it there), its controls were still

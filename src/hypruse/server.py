@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import contextvars
 import functools
 import inspect
 import json
@@ -500,8 +501,28 @@ def _select(window: str) -> str:
     when the call starts, so every guard, focus and result after it names
     the same window. An address, '' and 'active' pass through unchanged."""
     if hyprctl.is_selector(window):
-        return _resolve_window(window)["address"]
+        client = _resolve_window(window)
+        _note_if_unseen(window, client)
+        return client["address"]
     return window
+
+
+# What an acting tool's result says when its selector matched a window the
+# agent never saw (V44): class:X and title:X are whatever the app chose, so
+# while the window meant is absent, any app that claims the name is picked.
+# One wording in every tool, so the agent learns one phrase. Set by _select,
+# appended by _acted, cleared by _check_then at the start of every call.
+_UNSEEN_NOTE = ("; note: {selector} matched {address} ({cls}), a window that was not there at "
+                "the agent's previous call: its class and title are the app's own claim")
+_unseen: contextvars.ContextVar[str] = contextvars.ContextVar("hypruse_unseen", default="")
+
+
+def _note_if_unseen(selector: str, client: dict[str, Any]) -> None:
+    key = hyprctl.window_key(client)
+    if _known_clients is None or key in _known_clients or key in trust.owned():
+        return
+    _unseen.set(_UNSEEN_NOTE.format(selector=selector, address=client.get("address"),
+                                    cls=client.get("class", "")))
 
 
 def _active_address() -> str | None:
@@ -981,6 +1002,8 @@ def _acted(msg: str, then: str, window: str = "", fallback: bool = True) -> list
     tokens instead of an image: best after typing or toggling in an app
     that exposes a tree, degrades to a note when it does not);
     `'none'` appends nothing."""
+    msg += _unseen.get()
+    _unseen.set("")
     if then == "none":
         return msg
     head = _text(msg)
@@ -1048,6 +1071,7 @@ def _require_finite(**values: Any) -> None:
 def _check_then(then: str) -> None:
     """Refuse an unknown `then` before acting: found only when observing,
     it raised after the click had already landed, and read as a failure."""
+    _unseen.set("")  # a note from an earlier call does not belong to this one
     if then not in _OBSERVE_MODES:
         raise ValueError(f"unknown then {then!r}: {'|'.join(_OBSERVE_MODES)}")
 
@@ -2784,6 +2808,7 @@ def _already_satisfied(event: str, needle: str) -> dict[str, Any] | None:
                     "workspace": str((c.get("workspace") or {}).get("name", "")),
                     "class": c.get("class", ""),
                     "title": c.get("title", ""),
+                    "launched_by_agent": _launched_by_agent(c),
                     "already": True,
                 }
     if event == "workspace" and needle:
@@ -2831,7 +2856,10 @@ def wait_for(event: str, match: str = "", timeout_s: float = 10) -> dict[str, An
     opened since your last action or desktop call, the window is already
     gone, the workspace already active, the layer already mapped) returns
     instantly with `already: true` instead of missing an event that fired
-    before it could subscribe. A window_close filtered by class or title
+    before it could subscribe. An opened window carries `launched_by_agent`:
+    whether its process is one the agent started, or a child of one (its
+    class and title are the app's own claim). A window_close filtered by
+    class or title
     waits for any of the matching windows to close. Use it after actions with
     delayed effects: app startups, page loads that change a window title,
     a launcher bind that pops a layer."""
@@ -2871,7 +2899,22 @@ def wait_for(event: str, match: str = "", timeout_s: float = 10) -> dict[str, An
         return f"timeout: no matching {event} event within {timeout_s:.0f}s"
     if hit[0] == "openwindow":
         _learn_client(hit[1].get("address"))
-    return {"event": hit[0], **hit[1]}
+    return _opened(hit[0], hit[1])
+
+
+def _launched_by_agent(window: dict[str, Any]) -> bool:
+    """Whether a window's process carries one of this agent's launch tokens,
+    which everything a launched app starts inherits (V61). A window's class
+    and title are the app's own claim; this is not."""
+    return trust.launch_known(_launch_token_of(_record_of(window).get("pid")))
+
+
+def _opened(name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """A wait's answer; an opened window says whether the agent launched it."""
+    out = {"event": name, **payload}
+    if name == "openwindow":
+        out["launched_by_agent"] = _launched_by_agent(payload)
+    return out
 
 
 _SEQ_HANDLERS = {
@@ -3154,7 +3197,7 @@ def _seq_wait_for(
             del backlog[i]
             if n == "openwindow":
                 _learn_client(p.get("address"))
-            return {"event": n, **p}
+            return _opened(n, p)
     try:
         # what it skips stays on the stream, for the change check after it
         hit = stream.wait_for(names, matcher, timeout_s, keep=_WATCHED_EVENTS)
@@ -3164,7 +3207,7 @@ def _seq_wait_for(
         return f"timeout: no matching {event} event within {timeout_s:.0f}s"
     if hit[0] == "openwindow":
         _learn_client(hit[1].get("address"))
-    return {"event": hit[0], **hit[1]}
+    return _opened(hit[0], hit[1])
 
 
 @journal.journaled("act")
@@ -3252,11 +3295,13 @@ def sequence(
             if step.get("op") == "wait_for":  # never let one wait outlast the budget
                 run["timeout_s"] = min(float(step.get("timeout_s", 10)), max(budget_left, 1.0))
             target_ws = None
+            step_note = ""
             try:
                 if step.get("op") == "hypr" and hyprctl.is_selector(step.get("target")):
                     # resolved here, not only inside hypr: the step's own
                     # move or close is excused by the address its event names
                     run["target"] = _select(str(step["target"]).strip())
+                    step_note = _unseen.get()  # the step's own call starts afresh
                 # both read before this step runs: the workspace its window is
                 # on, and what the next step, if a wait, will consume
                 if _step_may_switch_workspace(step):
@@ -3296,7 +3341,7 @@ def sequence(
                 stopped = f"step {i} raised: {exc}"
                 break
             label = step.get("action") or step.get("event") or ""
-            results.append(f"[{i}] {step.get('op')} {label}: {res}".rstrip())
+            results.append(f"[{i}] {step.get('op')} {label}: {res}{step_note}".rstrip())
             prev_expected = _step_expected_signatures(run)
             if target_ws is not None:
                 # A step that focuses a window (or `hypr workspace` with a

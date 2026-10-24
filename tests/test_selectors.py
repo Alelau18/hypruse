@@ -162,3 +162,43 @@ def test_a_sequence_excuses_its_own_move_of_a_selected_window(desk, monkeypatch)
              {"op": "pointer", "action": "click", "x": 1, "y": 1}]
     out = srv.sequence(steps, then="none")
     assert "all 2/2" in out
+
+
+# V44: a selector names whichever window claims that class or title; when it
+# picks one the agent never saw, every acting tool says so, in one wording
+
+UNSEEN = ("a window that was not there at the agent's previous call: its class and title are "
+          "the app's own claim")
+
+
+@pytest.fixture
+def unseen_desk(desk, monkeypatch):
+    from conftest import REAL_NOTE_CLIENTS
+
+    monkeypatch.setattr(srv, "_known_clients", set())  # the agent has seen nothing
+    monkeypatch.setattr(srv, "_note_clients", lambda *a: None)
+    monkeypatch.setattr(srv.hinput, "type_text", lambda t: None)
+    monkeypatch.setattr(srv.trust, "guard_session_lock", lambda *a: "")
+    monkeypatch.setattr(srv.trust, "guard_keyboard_layer", lambda *a: "")
+    return REAL_NOTE_CLIENTS
+
+
+def test_every_acting_tool_says_its_selector_picked_an_unseen_window(unseen_desk):
+    outs = [srv.keyboard("type", text="hi", window="title:^htop$"),
+            srv.hypr("focus_window", target="class:streetfighter")]
+    assert all(UNSEEN in str(o) for o in outs)
+    assert "title:^htop$ matched 0xa2" in str(outs[0])
+
+
+def test_a_window_the_agent_saw_or_launched_has_no_note(unseen_desk, monkeypatch):
+    unseen_desk()  # the agent looked at the desktop
+    assert UNSEEN not in str(srv.hypr("focus_window", target="class:streetfighter"))
+
+
+def test_a_note_never_reaches_a_later_call(unseen_desk, monkeypatch):
+    monkeypatch.setattr(srv.trust, "guard_window", lambda t: (_ for _ in ()).throw(
+        srv.trust.TrustError("outside the scope")))
+    with pytest.raises(srv.trust.TrustError):
+        srv.hypr("close_window", target="class:streetfighter")  # set the note, then refused
+    monkeypatch.setattr(srv.trust, "guard_window", lambda t: None)
+    assert UNSEEN not in str(srv.hypr("workspace", workspace="2"))
