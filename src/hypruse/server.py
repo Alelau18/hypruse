@@ -494,6 +494,20 @@ def _active_address() -> str | None:
     return None
 
 
+def _focus_landed(address: str, what: str) -> None:
+    """Refuse unless `address` holds the focus now. Every guard ran on that
+    window before the focus dispatch, and what follows (keys from the
+    virtual keyboard, fullscreen) goes to whichever window is focused when
+    it arrives: a dialog or the human taking the focus in between would get
+    it. Nothing of `what` has been sent when this refuses."""
+    active = _active_address()
+    if str(active or "").lower() != str(address).lower():
+        raise trust.TrustError(
+            f"the focus did not move to {address} (the focused window is {active or 'none'}), "
+            f"so {what} would go to another window; nothing was sent"
+        )
+
+
 def _active_client() -> dict[str, Any] | None:
     """The focused window's client, or None when nothing is focused (a bare
     key press must still work). Used by the trust guards."""
@@ -1098,6 +1112,9 @@ def pointer(
     safety.touch(f"pointer:{action}")
     _require_finite(x=x, y=y, to_x=to_x, to_y=to_y, scroll_dy=scroll_dy, scroll_dx=scroll_dx,
                     duration_ms=duration_ms, hold_ms=hold_ms)
+    # the cursor goes to the whole pixel: the guards check that one, not a
+    # point 0.4 px outside the window or the dialog they would refuse
+    x, y, to_x, to_y = (None if v is None else int(round(v)) for v in (x, y, to_x, to_y))
     _check_then(then)
     _note_clients()  # what wait_for(window_open) counts as already there
     # releasing the button hypruse holds, where the cursor is, only ends a
@@ -1313,6 +1330,8 @@ def keyboard(
     if window:
         hyprctl.dispatch("focuswindow", addr_str)
         time.sleep(0.05)  # let keyboard focus settle before typing into it
+        what = f"the {len(text)} characters" if action == "type" else "the keys"
+        _focus_landed(target_client["address"], what)
     if action == "type":
         hinput.type_text(text)
         trust.remember_seat()
@@ -1685,6 +1704,12 @@ def _keyboard_in_background(
         return _acted(f"{_DRY} send {what} to {addr} with sendshortcut", then, window=addr)
     seat = _seat_now()
     for sent, (mods_, key_) in enumerate(chords):
+        if sent and len(chords) > 1 and hyprctl.layout_group()[0] != 0:
+            # the human switched layout mid-text: the keys left would be
+            # read as other characters
+            raise hyprctl.HyprctlError(
+                f"sent {sent} of {len(chords)} keys to {addr}, then the keyboard switched "
+                "away from its first layout; switch back and send the rest")
         try:
             hyprctl.send_shortcut(mods_, key_, addr)
         except hyprctl.HyprctlError:  # say how much landed, so a retry does not repeat it
@@ -2030,6 +2055,9 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
     elif action == "fullscreen":
         if target:
             hyprctl.dispatch("focuswindow", _addr(target))
+            # fullscreen acts on the focused window: the one the guards
+            # checked must be it
+            _focus_landed(_addr(target).removeprefix("address:"), "the fullscreen")
         hyprctl.dispatch("fullscreen", "0")
         msg = "fullscreen toggled"
     else:  # toggle_floating, the last of _HYPR_PLANS

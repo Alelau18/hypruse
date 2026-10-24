@@ -68,7 +68,12 @@ def wired_bg(monkeypatch):
         return {}
 
     monkeypatch.setattr(srv.hyprctl, "query", query)
-    monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: s["dispatch"].append(a))
+    def dispatch(*a):
+        s["dispatch"].append(a)
+        if a[0] == "focuswindow":  # the compositor moves the focus there
+            s["active"] = a[1].removeprefix("address:")
+
+    monkeypatch.setattr(srv.hyprctl, "dispatch", dispatch)
     monkeypatch.setattr(srv.hyprctl, "send_shortcut",
                         lambda mods, key, addr: s["shortcuts"].append((mods, key, addr)))
     monkeypatch.setattr(srv.hyprctl, "active_layout", lambda: ("us", "", ""))
@@ -1491,3 +1496,37 @@ def test_a_press_that_landed_is_not_reported_as_an_error_when_its_read_back_fail
     out = str(srv.click_ui(name="Save", window="0xa"))
     assert wired_bg["actions"] == [("svc", "/save")]
     assert "pressed" in out and "could not be read back" in out
+
+
+# C13: what the guards checked is what is delivered (F29, V55, V67, V10, V58)
+
+
+def test_keys_are_not_typed_when_the_focus_did_not_land(wired_bg, monkeypatch):
+    # F29: a dialog took the focus in the 50 ms after focuswindow
+    dispatched = []
+    monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: dispatched.append(a))
+    with pytest.raises(srv.trust.TrustError, match="did not move to 0xa"):
+        srv.keyboard("type", text="secret", window="0xa", background=False)
+    assert ("focuswindow", "address:0xa") in dispatched and wired_bg["typed"] == []
+
+
+def test_a_guard_checks_the_pixel_the_click_goes_to(wired_bg, monkeypatch):
+    # V10: the guard saw 99.6 (outside), the cursor went to 100 (inside)
+    checked = []
+    monkeypatch.setattr(srv.trust, "guard_pointer", lambda x, y, *a, **k: checked.append((x, y)))
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "0")
+    srv.pointer("move", x=99.6, y=50.4)
+    assert checked in ([], [(100, 50)])  # a bare move is checked only under confinement
+    monkeypatch.setattr(srv.trust, "_click_scene", lambda: (MONS, []))
+    monkeypatch.setattr(srv.hinput, "click", lambda x, y, **k: wired_bg["clicks"].append((x, y)))
+    srv.pointer("click", x=99.6, y=50.4)
+    assert checked[-1] == (100, 50) and wired_bg["clicks"][-1] == (100, 50)
+
+
+def test_typing_stops_when_the_layout_switches_partway(wired_bg, monkeypatch):
+    # V58: the group was checked once, then N keys were sent through it
+    groups = iter([(0, 2), (0, 2), (1, 2)])
+    monkeypatch.setattr(srv.hyprctl, "layout_group", lambda: next(groups, (1, 2)))
+    with pytest.raises(srv.hyprctl.HyprctlError, match="sent 2 of 3 keys"):
+        srv.keyboard("type", text="abc", window="0xa")
+    assert len(wired_bg["shortcuts"]) == 2

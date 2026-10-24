@@ -120,6 +120,10 @@ def test_hypr_targetless_fullscreen_honors_seat_guard(monkeypatch):
         srv.hypr("fullscreen")  # no target -> guarded
     # an address-targeted action names its window, so it is not seat-gated
     srv.trust._seat.update(cursor=(1, 1), active="0xa")
+    focused = {"address": "0xb"}
+    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: focused)
+    monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: focused.update(
+        address=a[1].removeprefix("address:")) if a[0] == "focuswindow" else None)
     assert srv.hypr("fullscreen", target="0xabc") == "fullscreen toggled"
 
 
@@ -467,3 +471,14 @@ def test_a_foreground_screenshot_says_it_is_the_humans_monitor(monkeypatch):
     srv._acted("clicked", "screenshot")
     assert [kw.get("window") for kw in seen] == [None, None]
     assert all(kw["extra"]["view"].startswith("the focused monitor") for kw in seen)
+
+
+def test_fullscreen_of_a_target_needs_the_focus_to_have_landed(monkeypatch):
+    # V55/V67: fullscreen acts on the focused window, which is checked now
+    monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
+    sent = []
+    monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: sent.append(a))
+    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: {"address": "0xother"})
+    with pytest.raises(srv.trust.TrustError, match="did not move to 0xabc"):
+        srv.hypr("fullscreen", target="0xabc")
+    assert ("fullscreen", "0") not in sent

@@ -246,6 +246,15 @@ All notable changes to this project are documented here. The format follows
   window's process, so background typing went into that process's field
   instead of the terminal. A root on another process whose connection
   descends from the window's process is no longer the window's.
+- **What the guards checked is what gets the input.** Foreground
+  `keyboard(window=...)` and `hypr fullscreen` with a target now confirm
+  the target holds the focus after the focus dispatch and send nothing
+  otherwise (a dialog or the human could take it in between); `pointer`
+  rounds its coordinates before the guards, which used to check a point
+  0.4 px outside a dialog the cursor then landed inside; background
+  key-by-key typing stops if the keyboard switches away from its first
+  layout partway; and a window capture that finishes after the session
+  locked is discarded.
 - **A malformed accessibility reply reads as "not there".** An app
   chooses its replies' types and values, and a string where an integer
   belongs, an empty reply or an infinite double raised an exception that

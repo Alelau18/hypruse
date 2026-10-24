@@ -85,9 +85,17 @@ def test_the_screenshot_lookup_takes_a_selector():
 @pytest.fixture
 def desk(monkeypatch):
     sent = []
+    active = [KITTY1]
     monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
-    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: CLIENTS if cmd == "clients" else KITTY1)
-    monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: sent.append(a))
+    monkeypatch.setattr(srv.hyprctl, "query",
+                        lambda cmd: CLIENTS if cmd == "clients" else active[0])
+
+    def dispatch(*a):
+        sent.append(a)
+        if a[0] == "focuswindow":  # the compositor moves the focus there
+            active[0] = next(c for c in CLIENTS if f"address:{c['address']}" == a[1])
+
+    monkeypatch.setattr(srv.hyprctl, "dispatch", dispatch)
     monkeypatch.setattr(srv.trust, "guard_window", lambda t: None)
     monkeypatch.setattr(srv.trust, "remember_seat", lambda: None)
     monkeypatch.setattr(srv.time, "sleep", lambda s: None)

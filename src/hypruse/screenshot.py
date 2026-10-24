@@ -553,6 +553,12 @@ def capture(
     if grabbed is not None:
         data, fmt, factor = grabbed
         meta["source"] = "window"
+        locker = trust.session_locked()  # checked again: a lock can land during the grab
+        if locker:
+            raise CaptureRefused(
+                f"the session locked during the capture ({locker}): the image is discarded, "
+                "since it would show what the lock screen hides"
+            )
     else:
         # a monitor, a region, or a window cropped from the screen
         _refuse_if_asleep(monitors, tuple(meta["geometry"]))  # type: ignore[arg-type]

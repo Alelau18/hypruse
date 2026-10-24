@@ -616,3 +616,12 @@ def test_capture_stable_does_not_retry_a_sleeping_monitor(monkeypatch):
     with pytest.raises(screenshot.CaptureRefused):
         screenshot.capture_stable()
     assert calls == []
+
+
+def test_a_window_captured_as_the_session_locks_is_discarded(monkeypatch):
+    # V59: the lock was checked before the grab only
+    _desktop(monkeypatch)
+    answers = iter([None, "hyprlock"])  # unlocked when asked first, locked after the grab
+    monkeypatch.setattr(screenshot.trust, "session_locked", lambda: next(answers, "hyprlock"))
+    with pytest.raises(screenshot.ScreenshotError, match="locked during the capture"):
+        screenshot.capture(window="0xb")
