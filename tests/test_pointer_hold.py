@@ -786,3 +786,36 @@ def test_a_window_with_no_password_field_found_takes_the_middle_click(login_form
     monkeypatch.setattr(srv, "_census", lambda client, every_field: census)
     srv.pointer("click", x=1, y=2, button="middle")
     assert [c[0] for c in login_form["input"]] == ["click"]
+
+
+@pytest.mark.parametrize("call", [
+    lambda: srv.pointer("click", x=1, y=2, button="middle"),
+    lambda: srv.pointer("down", x=1, y=2, button="middle"),
+    lambda: srv.pointer("drag", x=1, y=2, to_x=5, to_y=6, button="middle"),
+    lambda: srv.pointer("up", x=1, y=2, button="middle"),
+])
+def test_a_rehearsal_refuses_a_middle_press_the_real_run_would(login_form, monkeypatch, call):
+    # review of fd14e71: the release was checked only at delivery, which a
+    # dry run never reaches, so its plan read as allowed
+    monkeypatch.setenv("HYPRUSE_DRYRUN", "1")
+    with pytest.raises(srv.trust.TrustError, match="middle click pastes"):
+        call()
+
+
+@pytest.mark.parametrize("action, what", [("click", "the click"), ("up", "the release")])
+def test_a_password_field_that_appears_before_delivery_is_caught_there(login_form, monkeypatch,
+                                                                        action, what):
+    # checked first with no password field, then again right before the
+    # press or release, when one is there; the refusal names the paste check
+    found = iter([_census(61), _census(61, srv.a11y.PASSWORD_ROLE)])
+    monkeypatch.setattr(srv, "_census", lambda client, every_field: next(found))
+
+    def click(*a, precheck=None, **k):
+        precheck()
+        login_form["input"].append(("click",))
+
+    monkeypatch.setattr(hinput, "click", click)
+    with pytest.raises(srv.trust.TrustError,
+                       match=f"the paste check refused {what}.* right before it was delivered"):
+        srv.pointer(action, x=1, y=2, button="middle")
+    assert login_form["input"] == []

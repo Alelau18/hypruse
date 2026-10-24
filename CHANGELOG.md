@@ -361,8 +361,9 @@ All notable changes to this project are documented here. The format follows
   click, `down`, `drag` or `up` (Qt pastes on the release), and a
   foreground `click_ui` with `button=middle`, into a window whose
   accessibility tree shows a password field are refused without
-  `allow_auth=true`; a refused release is let go somewhere safe, as any
-  refused release is. Which field is under the point is not worked out,
+  `allow_auth=true`, checked before any input (so a dry run refuses too)
+  and again right before the button event; a refused release is let go
+  somewhere safe, as any refused release is. Which field is under the point is not worked out,
   so a password field anywhere in the window counts, the focused one
   included; a tree hypruse cannot read in full (a large web page) with no
   password field found is not refused, so a middle click on a link still

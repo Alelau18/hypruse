@@ -1195,15 +1195,23 @@ def _release_and_sync() -> None:
         _sync_cli_hold()
 
 
-def _release_check(x: float | None, y: float | None, button: str, allow_auth: bool) -> None:
-    """What a release is checked against right before it lands: the
-    pointer guard, and for the middle button the paste check, since Qt
-    pastes the primary selection on the release (a caller-paced down,
-    move, up). A refusal releases it somewhere safe (hinput.button_up), so
-    a hold that ends here is never left down."""
-    trust.guard_pointer(x, y, allow_auth)
+def _point_checks(x: float | None, y: float | None, button: str, what: str,
+                  allow_auth: bool, guard: str = "the pointer guard") -> Callable[[], None]:
+    """What a press or a release at (x, y) is checked against right before
+    it lands, each refusal named for its check: the pointer guard, and for
+    the middle button the paste check (GTK pastes the primary selection on
+    the press, Qt on the release). Both also run before any input, so a
+    dry run refuses what the real run would."""
+    checks = [_at_delivery(guard, what, lambda: trust.guard_pointer(x, y, allow_auth))]
     if button == "middle":
-        _guard_middle_paste(trust.windows_at(x, y), allow_auth)
+        checks.append(_at_delivery("the paste check", what, lambda: _guard_middle_paste_at(
+            [(x, y)], allow_auth)))
+
+    def run() -> None:
+        for check in checks:
+            check()
+
+    return run
 
 
 def _release_refused(x: float | None, ending_hold: bool) -> str:
@@ -1354,7 +1362,7 @@ def pointer(
             hinput.check_down(button)
         trust.guard_pointer(x, y, allow_auth)  # None x/y = click at current cursor
         if button == "middle":
-            _guard_middle_paste(trust.windows_at(x, y), allow_auth)
+            _guard_middle_paste_at([(x, y)], allow_auth)
         note = note or _layer_note(x, y)
         plan = f"{'double-' if double else ''}click {button} at {_at(x, y)}"
         if hold_ms:
@@ -1362,8 +1370,7 @@ def pointer(
         if not dry:
             with _hold_synced():  # its release lets go of a `down` of that button too
                 hinput.click(x, y, button=button, double=double, hold_ms=hold_ms,
-                             precheck=_at_delivery("the pointer guard", "the click", lambda: (
-                                 trust.guard_pointer(x, y, allow_auth))))
+                             precheck=_point_checks(x, y, button, "the click", allow_auth))
     elif action in ("down", "up"):
         # the same guards as a click: a press or a release is input
         # delivered at a point, and `down` is half of a click there
@@ -1375,23 +1382,24 @@ def pointer(
         if not ending_hold:
             trust.guard_pointer(x, y, allow_auth)  # None x/y = at the current cursor
             note = note or _layer_note(x, y)
-        if action == "down" and button == "middle":  # the press is what pastes
-            _guard_middle_paste(trust.windows_at(x, y), allow_auth)
+        if button == "middle" and not ending_hold:  # a press or a release can paste
+            # (an up ending the hold is checked at its delivery only, where a
+            # refusal lets it go somewhere safe instead of leaving it down)
+            _guard_middle_paste_at([(x, y)], allow_auth)
         plan = f"{'press' if action == 'down' else 'release'} {button} at {_at(x, y)}"
         if action == "down":
             plan += " and keep it held until pointer action='up'"
         if not dry and action == "down":
             with _hold_synced():
-                hinput.button_down(x, y, button=button, precheck=_at_delivery(
-                    "the pointer guard", "the press",
-                    lambda: trust.guard_pointer(x, y, allow_auth)))
+                hinput.button_down(x, y, button=button,
+                                   precheck=_point_checks(x, y, button, "the press", allow_auth))
         elif not dry:
             # a release is the drop of a caller-paced drag (down, moves, up),
             # checked again right before it lands, the up ending the hold too
             with _hold_synced():
-                hinput.button_up(x, y, button=button, precheck=_at_delivery(
-                    "the pointer guard", f"the release ({_release_refused(x, ending_hold)})",
-                    lambda: _release_check(x, y, button, allow_auth)))
+                hinput.button_up(x, y, button=button, precheck=_point_checks(
+                    x, y, button, f"the release ({_release_refused(x, ending_hold)})",
+                    allow_auth))
     elif action == "drag":
         if None in (x, y, to_x, to_y):
             raise ValueError("drag needs x, y, to_x, to_y")
@@ -1400,8 +1408,7 @@ def pointer(
         trust.guard_pointer(x, y, allow_auth)
         trust.guard_pointer(to_x, to_y, allow_auth)  # the drag ends elsewhere; guard that too
         if button == "middle":  # pressed at the start, released at the end: either can paste
-            _guard_middle_paste(trust.windows_at(x, y) + trust.windows_at(to_x, to_y),
-                                allow_auth)
+            _guard_middle_paste_at([(x, y), (to_x, to_y)], allow_auth)
         note = note or _layer_note(x, y)
         plan = f"drag {button} from {_at(x, y)} to {_at(to_x, to_y)}"
         if (duration_ms, steps) != (hinput.DRAG_DURATION_MS, hinput.DRAG_STEPS):
@@ -1409,10 +1416,10 @@ def pointer(
         if not dry:
             hinput.drag(x, y, to_x, to_y, button=button,  # type: ignore[arg-type]
                         duration_ms=duration_ms, steps=steps,
-                        drop_check=_at_delivery(
-                            "the pointer guard at the drop point",
+                        drop_check=_point_checks(
+                            to_x, to_y, button,
                             "the drop (cancelled: released back where it started)",
-                            lambda: trust.guard_pointer(to_x, to_y, allow_auth)))
+                            allow_auth, guard="the pointer guard at the drop point"))
     elif action == "scroll":
         hinput.check_scroll(scroll_dy, scroll_dx)
         hinput.check_xy(x, y)
@@ -1835,6 +1842,15 @@ def _guard_middle_paste(clients: list[dict[str, Any]], allow_auth: bool) -> None
                 f"a middle click pastes the primary selection into the field under the pointer, "
                 f"and {client.get('class', 'the window')} has a password field; refusing it. "
                 "Pass allow_auth=true only if a human intends this credential entry.")
+
+
+def _guard_middle_paste_at(points: list[tuple[float | None, float | None]],
+                           allow_auth: bool) -> None:
+    """_guard_middle_paste for the windows under these points (None, None:
+    the cursor), read only when the check is on."""
+    if allow_auth is True or not trust.auth_strict():
+        return
+    _guard_middle_paste([w for px, py in points for w in trust.windows_at(px, py)], allow_auth)
 
 
 def _refuse_password(census: _Census, cls: str, moves_focus: str, allow_auth: bool) -> None:

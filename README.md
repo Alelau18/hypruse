@@ -271,7 +271,7 @@ Read this section before installing. **hypruse hands an agent your mouse, your k
    - On a Hyprland too old to report `stableId`, hypruse tells windows apart by address, pid and class, so a later window of the same app at a reused address passes as the earlier one.
    - GTK 4 password entries report the plain text role over the accessibility interface, so the password-field checks cannot see them; GTK 3 and Qt ones are seen.
    - Under `HYPRUSE_STRICT`, when `launch` moves an already-running app's window away, Hyprland refocuses a window where it opened, which counts as the launch's doing; if you had switched to that window yourself just before the launch, that change is taken in too.
-   - Noctalia's panels share one layer name, `noctalia-panel`, which hypruse reads as a launcher: its polkit prompt is one too, so typing with no `window=` while it is open is noted, not refused as an authentication prompt, and a plugin's persistent panel (one that stays open beside your apps) refuses `keyboard` with `window=` while it is open, as a launcher would, although it takes the keyboard only when you click it.
+   - Noctalia's panels share one layer name, `noctalia-panel`, which hypruse reads as a launcher: its polkit prompt is one too, so typing with no `window=` while it is open is noted, not refused as an authentication prompt, and a plugin's persistent panel (one that stays open beside your apps) refuses `keyboard` with `window=`, and all typing under `HYPRUSE_CONFINE`, while it is open, as a launcher would, although by default it takes the keyboard only when you click it (a plugin can set its mode).
 
 ### Optional confinement
 
