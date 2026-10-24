@@ -2686,11 +2686,18 @@ def launch(
         "title": win.get("title", ""),
         "workspace": hyprctl.workspace_ref(ws),
     }
+    # an already-running process the agent launched earlier (it re-launched
+    # its own single-instance app) carries that launch's token: the
+    # guarantee counts its windows as the agent's, launched confinement,
+    # which counts only a launch's own window, does not
+    earlier = not proven and bg.owned_by_agent(win, trust.owned())
     unproven = "" if proven else (
         "it opened from an already-running process of the app, so nothing ties it to this "
         "launch rather than to a window opened at the same moment: it is not counted as "
-        "one the agent opened (HYPRUSE_CONFINE=launched, HYPRUSE_MARK), and the "
-        "background guarantee (HYPRUSE_BACKGROUND=1) refuses input to it")
+        "one the agent opened (HYPRUSE_CONFINE=launched, HYPRUSE_MARK)"
+        + ("; that process is one the agent launched earlier, so the background guarantee "
+           "(HYPRUSE_BACKGROUND=1) counts it as the agent's" if earlier
+           else ", and the background guarantee (HYPRUSE_BACKGROUND=1) refuses input to it"))
     if unproven:  # carried into every note below, the moved one included
         note = (f"{note}; " if note else "") + unproven
     if note:

@@ -1723,3 +1723,19 @@ def test_a_scope_the_window_would_be_in_still_moves_it(launch_fake, monkeypatch)
     launch_fake["lands"], launch_fake["proven"] = "1", False
     srv.launch("foot")
     assert ("movetoworkspacesilent", "99,address:0xnew") in launch_fake["dispatch"]
+
+
+def test_under_the_guarantee_the_agents_own_running_app_is_still_moved(launch_fake,
+                                                                       monkeypatch):
+    # review of 795491b: re-launching a single-instance app the agent
+    # launched earlier, the window comes from that process, which carries the
+    # earlier launch's token: the guarantee counts it as the agent's, so it
+    # goes where it was sent, and the note does not say input to it is refused
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    monkeypatch.setattr(srv.trust, "_launches", {})
+    srv.trust.note_launch("earlier")
+    monkeypatch.setattr(srv.trust, "launch_token_of", lambda pid: "earlier")
+    launch_fake["lands"], launch_fake["proven"] = "1", False
+    out = srv.launch("foot")
+    assert ("movetoworkspacesilent", "99,address:0xnew") in launch_fake["dispatch"]
+    assert "counts it as the agent's" in out["note"] and "refuses input" not in out["note"]
