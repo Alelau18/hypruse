@@ -1301,7 +1301,11 @@ def pointer(
             hinput.button_down(x, y, button=button, precheck=_at_delivery(
                 "the pointer guard", "the press", lambda: trust.guard_pointer(x, y, allow_auth)))
         elif not dry:
-            hinput.button_up(x, y, button=button)
+            # an up ending the recorded hold is never refused; any other is
+            # the drop of a caller-paced drag, checked again at the release
+            hinput.button_up(x, y, button=button, precheck=None if ending_hold else _at_delivery(
+                "the pointer guard", "the release (cancelled: released back where the cursor "
+                "was)", lambda: trust.guard_pointer(x, y, allow_auth)))
     elif action == "drag":
         if None in (x, y, to_x, to_y):
             raise ValueError("drag needs x, y, to_x, to_y")

@@ -194,7 +194,9 @@ def tool(monkeypatch):
         calls["input"].append(("down", x, y, button))
         hinput.restore_held(button)
 
-    def up(x=None, y=None, button="left"):
+    def up(x=None, y=None, button="left", precheck=None):
+        if precheck is not None:
+            precheck()
         calls["input"].append(("up", x, y, button))
         hinput.restore_held(None)
 
@@ -213,7 +215,8 @@ def test_down_and_up_go_through_the_click_guards(tool):
     assert "right button is held down until pointer action='up'" in out
     out = srv.pointer("up", x=30, y=40, button="right")  # a move first: guarded
     assert tool["input"][-1] == ("up", 30, 40, "right")
-    assert tool["guard"][-1] == (30, 40) and tool["lock"] == 2
+    # checked, then again right before the release, the drop of a paced drag
+    assert tool["guard"][-2:] == [(30, 40), (30, 40)] and tool["lock"] == 2
     assert out == "up ok; cursor now at (7, 8)"
 
 
@@ -548,4 +551,18 @@ def test_a_click_refused_at_delivery_names_the_guard(tool, monkeypatch):
     with pytest.raises(srv.trust.TrustError,
                        match="the pointer guard refused the click right before it was delivered"):
         srv.pointer("click", x=1, y=2)
+    assert tool["input"] == []
+
+
+def test_a_release_at_a_point_refused_at_delivery_names_the_guard(tool, monkeypatch):
+    answers = iter([None])
+
+    def guard(x, y, allow_auth=False):
+        if next(answers, "refuse") == "refuse":
+            raise srv.trust.TrustError("an authentication dialog covers (30, 40)")
+
+    monkeypatch.setattr(srv.trust, "guard_pointer", guard)
+    with pytest.raises(srv.trust.TrustError, match="the pointer guard refused the release "
+                       r"\(cancelled: released back where the cursor was\) right before"):
+        srv.pointer("up", x=30, y=40, button="right")
     assert tool["input"] == []

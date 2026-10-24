@@ -295,7 +295,9 @@ All notable changes to this project are documented here. The format follows
   the same way. The same guards now run again right before the press,
   scroll or release, under the seat lock; a refusal names the guard and
   delivers nothing, and a refused drop is released back where it
-  started.
+  started. That includes `pointer up` at a point, the drop of a drag the
+  caller paces: refused there, the button is released back where the
+  cursor was.
 - **Actions on "the active window" are pinned to the window checked.**
   `hypr toggle_floating` and `fullscreen` with no target acted on
   whatever had the focus when the dispatch landed. Floating (and

@@ -329,3 +329,38 @@ def test_a_drop_refused_at_delivery_is_released_back_where_it_started(pointer_lo
 def test_a_drop_that_passes_is_released_at_the_target(pointer_log):
     hinput.drag(1, 2, 9, 9, steps=2, drop_check=lambda: None)
     assert pointer_log[-2:] == [("move", 9, 9), ("button", "left", hinput.RELEASED)]
+
+
+def test_a_release_refused_at_the_point_goes_back_before_releasing(pointer_log, monkeypatch):
+    # review of d30e11c: pointer up at a point is the drop of a paced drag
+    monkeypatch.setattr(hinput.hyprctl, "cursor_pos", lambda: (40, 50))
+    with pytest.raises(RuntimeError, match="mapped over"):
+        hinput.button_up(5, 6, precheck=_refuse)
+    assert pointer_log == [("move", 5, 6), ("move", 40, 50), ("button", "left", hinput.RELEASED)]
+
+
+def test_a_release_with_no_known_way_back_is_refused_before_moving(pointer_log, monkeypatch):
+    def unreadable():
+        raise hinput.hyprctl.HyprctlError("no compositor")
+
+    monkeypatch.setattr(hinput.hyprctl, "cursor_pos", unreadable)
+    with pytest.raises(hinput.InputError, match="nothing was released"):
+        hinput.button_up(5, 6, precheck=lambda: None)
+    assert pointer_log == []
+
+
+def test_a_cancelled_drop_that_cannot_go_back_says_where_it_was_released(pointer_log,
+                                                                       monkeypatch):
+    moves = []
+
+    def move(x, y):
+        moves.append((x, y))
+        if (x, y) == (1, 2) and len(moves) > 1:  # moving back to the start fails
+            raise hinput.WireError("compositor gone")
+        pointer_log.append(("move", x, y))
+
+    monkeypatch.setattr(hinput, "move", move)
+    with pytest.raises(hinput.InputError, match="released at the drop point"):
+        hinput.drag(1, 2, 9, 9, steps=2, drop_check=_refuse)
+    assert pointer_log[-1] == ("button", "left", hinput.RELEASED)
+    assert hinput.held_button() is None

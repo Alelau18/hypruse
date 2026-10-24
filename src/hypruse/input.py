@@ -433,20 +433,50 @@ def button_down(x: float | None = None, y: float | None = None, button: str = "l
         _with_pointer(press)
 
 
-def button_up(x: float | None = None, y: float | None = None, button: str = "left") -> None:
+def button_up(x: float | None = None, y: float | None = None, button: str = "left",
+              precheck: Callable[[], None] | None = None) -> None:
     """Release a button, after moving to (x, y) when given. Releasing one
     that is not down is harmless, so this never refuses for want of a
-    matching `down` (a CLI `down` happened in another process)."""
+    matching `down` (a CLI `down` happened in another process).
+
+    `precheck` runs right before the release, as for click: a release at a
+    point is the drop of a drag the caller paces. If it refuses after the
+    move, the button is released back where the cursor was before this
+    call moved it, so nothing is dropped at (x, y); when that position
+    cannot be read, the call refuses before moving and the button stays
+    held (an up with no point releases it where it is)."""
     journal.refuse_if_dry("button_up")
     _check_button(button)
     has_xy = _check_xy(x, y)
-    with _seat_lock:
-        if has_xy:
-            move(x, y)  # type: ignore[arg-type]
-            time.sleep(0.02)
+
+    def release() -> None:
         _with_pointer(lambda p: p.button(button, RELEASED))
         if _down == button:
             restore_held(None)
+
+    with _seat_lock:
+        back = None
+        if has_xy and precheck is not None:
+            with contextlib.suppress(Exception):
+                back = hyprctl.cursor_pos()
+            if back is None:
+                raise InputError(
+                    "cannot read where the cursor is, so a release refused at the point could "
+                    "not go back there; nothing was released (an up with no point releases "
+                    "the button where it is)")
+        if has_xy:
+            move(x, y)  # type: ignore[arg-type]
+            time.sleep(0.02)
+        if precheck is not None:
+            try:
+                precheck()
+            except Exception:
+                if back is not None:
+                    move(*back)
+                    time.sleep(0.02)
+                    release()
+                raise
+        release()
 
 
 DRAG_STEPS = 12
@@ -506,9 +536,17 @@ def drag(
             if drop_check is not None:
                 try:
                     drop_check()
-                except Exception:
-                    move(x1, y1)  # cancelled: released where it was picked up
-                    time.sleep(0.03)
+                except Exception as refusal:
+                    try:
+                        move(x1, y1)  # cancelled: released where it was picked up
+                        time.sleep(0.03)
+                    except Exception as exc:
+                        # the release below must still happen, at the drop point:
+                        # say so rather than report a cancelled drop
+                        raise InputError(
+                            f"the drop was refused ({refusal}), and moving back to the start "
+                            f"failed ({exc}), so the button was released at the drop point"
+                        ) from exc
                     raise
         finally:
             p.button(button, RELEASED)
