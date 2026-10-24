@@ -828,7 +828,8 @@ def test_a_middle_drags_press_is_checked_when_it_lands(login_form, monkeypatch):
     monkeypatch.setattr(srv, "_census", lambda client, every_field: next(found))
 
     def drag(*a, press_check=None, drop_check=None, **k):
-        press_check()
+        if press_check is not None:  # the code before it had none: the drag went through
+            press_check()
         login_form["input"].append(("drag",))
 
     monkeypatch.setattr(hinput, "drag", drag)

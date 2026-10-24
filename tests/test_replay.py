@@ -363,7 +363,11 @@ def test_replay_does_not_steal_a_running_servers_beacon(tmp_path, monkeypatch):
     from hypruse import safety
 
     state = tmp_path / "state.json"
-    state.write_text(json.dumps({"pid": os.getpid(), "started": 0, "last_action": ""}))
+    # the start time proves the writer is alive; without it the check falls
+    # back to "hypruse" in the pid's command line, which a pytest run from a
+    # path without that word does not have
+    state.write_text(json.dumps({"pid": os.getpid(), "start": safety.start_ticks(os.getpid()),
+                                 "started": 0, "last_action": ""}))
     monkeypatch.setattr(safety, "state_path", lambda: state)
     took = cli._take_beacon()
     assert took is False
