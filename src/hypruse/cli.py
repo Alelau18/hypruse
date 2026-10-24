@@ -435,7 +435,8 @@ _VALUE_MAX = 120
 def _escape(text: str) -> str:
     return "".join(
         _NAMED.get(ch) or (
-            (f"\\x{ord(ch):02x}" if ord(ch) < 0x100 else f"\\u{ord(ch):04x}")
+            (f"\\x{ord(ch):02x}" if ord(ch) < 0x100 else f"\\u{ord(ch):04x}"
+             if ord(ch) <= 0xFFFF else f"\\U{ord(ch):08x}")
             if unicodedata.category(ch) in _UNPRINTED else ch)
         for ch in text
     )

@@ -175,8 +175,8 @@ All notable changes to this project are documented here. The format follows
   proved. One decision now serves typed text, a key that types a
   character or pastes, both paths: it refuses a focused password field,
   one among several when focus is not reported, a field census cut
-  short, and text with a Tab or a line break into a window that has (or
-  may have) a password field. The foreground still checks only under
+  short, text with a Tab or a line break into a window with a password
+  field, and a Tab into one whose fields could not all be read. The foreground still checks only under
   `HYPRUSE_AUTH_GUARD=strict`; the keyboard tool's description no longer
   says it is the default. A `keys` combo that types a character is
   journaled as a digest, like typed text, and a result names it "a
@@ -212,8 +212,11 @@ All notable changes to this project are documented here. The format follows
   letters with any word of the command counted as the program's. A
   launch now exports a random `HYPRUSE_LAUNCH` token to its command and
   waits for a window on its rule's workspace, one whose process carries
-  the token, or one of the program's class; only the first two are
-  recorded as the agent's. A single-instance app's window, which opens
+  the token, or one of the program's class; only one carrying the token,
+  or one on an agent workspace off screen, is recorded as the agent's (on
+  a workspace the human can see, they may open a window there too). A
+  command that hands off to another process (`xdg-open`, D-Bus
+  activation, a systemd service) carries no token to its window. A single-instance app's window, which opens
   from the already-running process, is still found and moved, and the
   result says it is not counted as the agent's.
 - **The replay plan is the plan that runs.** It cut every value at 120
@@ -238,7 +241,9 @@ All notable changes to this project are documented here. The format follows
   check, only the one event the wait's own filter accepts is let through
   (resolved before the step ahead of it, so a `window_close` filter can
   still name its window), and a switch counts as the step's only when it
-  is to the workspace the step's window was on.
+  is to the workspace the step's window (or a `hypr workspace` step's
+  absolute target) is on. An app that opens a second window during a
+  wait step (a splash, a helper) now stops the sequence after it.
 - **A root registered by a process inside the window proves nothing.**
   A terminal has no accessibility tree, so the title fallback could find
   a root that a process started in it registered, with a frame named

@@ -28,6 +28,7 @@ import re
 import shlex
 import shutil
 import sys
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -266,6 +267,12 @@ def build_parser() -> argparse.ArgumentParser:
 # --- normalization --------------------------------------------------------------
 
 
+def journal_keys_are_text(keys: Any) -> bool:
+    from hypruse import journal
+
+    return isinstance(keys, str) and journal.keys_are_text(keys)
+
+
 def _stdin_text(value: str) -> str:
     if value != "-":
         return value
@@ -328,6 +335,10 @@ def normalize(verb: str, ns: argparse.Namespace) -> tuple[dict[str, Any], dict[s
             if "at" in d:
                 d["x"], d["y"] = d.pop("at")
     elif verb == "keyboard":
+        if d.get("allow_auth") is True and journal_keys_are_text(d.get("keys")):
+            print("hypruse: warning: --allow-auth with a character key on the command line puts "
+                  "it where any local user can read it (/proc/PID/cmdline); type it with "
+                  "`keyboard type - --allow-auth` and the text on stdin instead", file=sys.stderr)
         if "text" in d:
             if d.get("allow_auth") is True and d["text"] != "-":
                 # a credential on this verb's own argv is in /proc/<pid>/cmdline,
@@ -350,6 +361,10 @@ def normalize(verb: str, ns: argparse.Namespace) -> tuple[dict[str, Any], dict[s
         if d.pop("no_stop", False):
             d["stop_on_change"] = False
     elif verb == "clipboard" and "text" in d:
+        if d["text"] != "-":  # clipboards hold passwords; see keyboard above
+            print("hypruse: warning: the clipboard text is on the command line, where any local "
+                  "user can read it (/proc/PID/cmdline); pass - and the text on stdin for "
+                  "anything secret", file=sys.stderr)
         d["text"] = _stdin_text(d["text"])
     return d, opts
 
@@ -464,12 +479,15 @@ def run(tool: str, kwargs: dict[str, Any], *, json_out: bool = False,
 # characters and line separators (which would reorder or split a line) are
 # shown as escapes.
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
-_INVISIBLE = re.compile(r"[\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]")
 
 
 def _safe(value: Any) -> str:
     text = _CONTROL.sub(".", str(value))
-    return _INVISIBLE.sub(lambda m: f"\\u{ord(m.group()):04x}", text)
+    return "".join(
+        (f"\\u{ord(ch):04x}" if ord(ch) <= 0xFFFF else f"\\U{ord(ch):08x}")
+        if unicodedata.category(ch) in ("Cf", "Zl", "Zp") else ch
+        for ch in text
+    )
 
 
 def _q(value: Any) -> str:

@@ -93,8 +93,17 @@ def _run(*args: str) -> str:
         rest.pop(0)
     what = " ".join(args)
     if rest and rest[0] == "--batch":
-        return _request("[[BATCH]]" + " ".join(rest[1:]), what)
+        if any(ch in rest[1] for ch in "[]") or len(rest) != 2:
+            raise HyprctlError("a batch is only queries hypruse names")
+        return _request("[[BATCH]]" + rest[1], what)
+    if not rest or not _COMMAND.fullmatch(rest[0]):
+        # Hyprland strips the flags and matches the command by prefix, so a
+        # first word of "[[BATCH]]..." would still make a batch
+        raise HyprctlError(f"hyprctl {what}: not a hyprctl command")
     return _request(f"{flags}/{' '.join(rest)}", what)
+
+
+_COMMAND = re.compile(r"[a-z]+")
 
 
 def query(command: str) -> Any:
@@ -111,6 +120,8 @@ def batch_query(commands: list[str]) -> list[Any]:
     socket round-trip) instead of one per command, ~4x faster for the
     snapshot. hyprctl concatenates the JSON documents, so split them by
     decoding successive values."""
+    if any(not _COMMAND.fullmatch(c.split(" ", 1)[0]) or ";" in c for c in commands):
+        raise HyprctlError("batch_query takes hyprctl query names")
     spec = " ; ".join(f"j/{c}" for c in commands)
     out = _run("--batch", spec)
     decoder = json.JSONDecoder()
@@ -408,8 +419,10 @@ def window_key(client: Any) -> str | None:
     hands to a new window once the old one is freed, so ownership, the
     seat baseline and the known-window list keyed on it alone passed a
     recycled address to an unrelated window. Hyprland's stableId is never
-    reused; a Hyprland without one gets the pid and the initial class. None
-    for a record with no address (nothing focused)."""
+    reused; a Hyprland without one gets the pid and the initial class,
+    which a later window of the same process (a browser's second window)
+    shares, so there the old weakness remains for one app's own windows.
+    None for a record with no address (nothing focused)."""
     if not isinstance(client, dict) or not client.get("address"):
         return None
     address = str(client["address"]).lower()

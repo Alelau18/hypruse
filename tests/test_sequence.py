@@ -620,3 +620,25 @@ def test_a_dry_run_does_not_sleep(wired, monkeypatch):
 def test_unknown_op_lists_sleep():
     with pytest.raises(ValueError, match="sleep"):
         srv._dispatch_step({"op": "nap"})
+
+
+def test_after_a_switch_to_a_named_workspace_the_humans_own_switch_stops(wired, monkeypatch):
+    # review of C10: `hypr workspace 5` excused whatever was active afterwards
+    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: (
+        {"id": 3, "name": "3"} if cmd == "activeworkspace" else {} if cmd == "layers"
+        else [] if cmd == "clients" else {"name": ""}))
+    _stream(monkeypatch, [[("workspace", {"name": "5"}), ("workspace", {"name": "3"})]])
+    steps = [{"op": "hypr", "action": "workspace", "workspace": "5"},
+             {"op": "keyboard", "action": "key", "keys": "enter"}]
+    out = srv.sequence(steps, then="none")
+    assert [s["op"] for s in wired] == ["hypr"] and "desktop changed (workspace)" in _head(out)
+
+
+def test_a_relative_switch_is_still_the_steps_own(wired, monkeypatch):
+    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: (
+        {"id": 6, "name": "6"} if cmd == "activeworkspace" else {} if cmd == "layers"
+        else [] if cmd == "clients" else {"name": ""}))
+    _stream(monkeypatch, [[("workspace", {"name": "6"})]])
+    steps = [{"op": "hypr", "action": "workspace", "workspace": "+1"},
+             {"op": "keyboard", "action": "key", "keys": "enter"}]
+    assert "all 2/2" in _head(srv.sequence(steps, then="none"))

@@ -756,3 +756,13 @@ def test_no_compositor_is_a_hyprctl_error(monkeypatch, tmp_path):
     monkeypatch.delenv("HYPRLAND_INSTANCE_SIGNATURE")
     with pytest.raises(hyprctl.HyprctlError, match="HYPRLAND_INSTANCE_SIGNATURE"):
         real_query("clients")
+
+
+def test_a_request_starts_with_one_of_hypruses_own_command_words(hyprland):
+    # review of C4: Hyprland strips the flags and matches by prefix, so a
+    # first word of [[BATCH]] would still make a batch
+    with pytest.raises(hyprctl.HyprctlError, match="not a hyprctl command"):
+        real_query("[[BATCH]]dispatch exec x")
+    with pytest.raises(hyprctl.HyprctlError):
+        real_batch_query(["clients; dispatch exec x"])
+    assert hyprland.requests == []

@@ -1322,8 +1322,8 @@ def keyboard(
             # move the human's focus
             if allow_auth is not True and trust.auth_strict() and (
                     action == "type" or _key_types_text(*hinput.parse_combo(keys))):
-                moves_focus = action == "type" and any(ch in _MOVES_FOCUS for ch in text)
-                _refuse_password(_census(target, every_field=moves_focus),
+                moves_focus = _focus_keys(text) if action == "type" else ""
+                _refuse_password(_census(target, every_field=bool(moves_focus)),
                                  target.get("class", "the window"), moves_focus, allow_auth)
     into = f" into {window}" if window else ""
     # focusing the target is itself a visible change to the seat, so the
@@ -1541,7 +1541,12 @@ def _census(client: dict[str, Any], every_field: bool) -> _Census:
 _MOVES_FOCUS = frozenset("\t\n\r")
 
 
-def _password_refusal(census: _Census, cls: str, moves_focus: bool) -> tuple[str, str] | None:
+def _focus_keys(text: str) -> str:
+    """The focus-moving characters in `text`, as a string ("" for none)."""
+    return "".join(sorted({ch for ch in text if ch in _MOVES_FOCUS}))
+
+
+def _password_refusal(census: _Census, cls: str, moves_focus: str) -> tuple[str, str] | None:
     """Why text must not go into this window without allow_auth, and what
     to do instead ("" when nothing else works), or None.
     One decision for every way text gets in: typed text, a key that types a
@@ -1549,8 +1554,12 @@ def _password_refusal(census: _Census, cls: str, moves_focus: bool) -> tuple[str
     strict check alike. It refuses a password field that has the focus, a
     window that does not say which field has it while one of its fields is
     a password field or its fields could not all be read, and text that
-    moves the focus while the window has (or may have) a password field,
-    since the check sees only the field focused when the call starts."""
+    moves the focus while the window has a password field, since the check
+    sees only the field focused when the call starts. `moves_focus` holds
+    the focus-moving characters in the text: a Tab into a window whose
+    fields could not all be read is refused too, a line break (which in a
+    text area or a terminal moves no focus) only with a password field
+    known."""
     password = [f for f in census.fields if f[2] == a11y.PASSWORD_ROLE]
     if census.field is not None and census.field[2] == a11y.PASSWORD_ROLE:
         which = "the focused field" if census.focused else "its only text field"
@@ -1564,7 +1573,7 @@ def _password_refusal(census: _Census, cls: str, moves_focus: bool) -> tuple[str
         if not census.complete:
             return (f"{cls} has more elements than hypruse reads ({a11y.WALK_BUDGET}) and does "
                     "not say which text field has its focus, so it may be a password field", "")
-    if moves_focus and (password or not census.complete):
+    if (moves_focus and password) or ("\t" in moves_focus and not census.complete):
         has = "has a password field" if password else (
             f"has more elements than hypruse reads ({a11y.WALK_BUDGET}), so a password field "
             "may be next")
@@ -1575,7 +1584,7 @@ def _password_refusal(census: _Census, cls: str, moves_focus: bool) -> tuple[str
     return None
 
 
-def _refuse_password(census: _Census, cls: str, moves_focus: bool, allow_auth: bool) -> None:
+def _refuse_password(census: _Census, cls: str, moves_focus: str, allow_auth: bool) -> None:
     refusal = _password_refusal(census, cls, moves_focus)
     if refusal is not None and allow_auth is not True:
         reason, instead = refusal
@@ -1627,8 +1636,8 @@ def _keyboard_in_background(
     layout = hyprctl.active_layout()
     kmap = keymap.for_layout(*layout)
     if action == "type":
-        moves_focus = any(ch in _MOVES_FOCUS for ch in text)
-        census = _census(client, every_field=moves_focus)
+        moves_focus = _focus_keys(text)
+        census = _census(client, every_field=bool(moves_focus))
         _refuse_password(census, cls, moves_focus, allow_auth)
         bus, field, fields, complete, unsure = (
             census.bus, census.field, census.fields, census.complete, census.unsure)
@@ -1677,7 +1686,7 @@ def _keyboard_in_background(
         if key is None:
             bg.refuse("a bare modifier tap cannot be sent to one window")
         if _key_types_text(mods, key):  # the same field decision as typed text
-            _refuse_password(_census(client, every_field=False), cls, False, allow_auth)
+            _refuse_password(_census(client, every_field=False), cls, "", allow_auth)
         names = [_HYPR_MODS.get(m, m.upper()) for m in mods]
         if len(key) == 1:  # a character key: its base key on this layout
             chord = kmap.chord(key)
@@ -2136,26 +2145,49 @@ def _carries_token(pid: Any, token: str) -> bool:
         return False
 
 
+def _on_workspace(workspace: str, ws: Any) -> bool:
+    """Whether a workspace record (or an event's workspace name) is the one
+    a launch's rule names."""
+    rec = ws if isinstance(ws, dict) else {"name": str(ws)}
+    name = str(rec.get("name", ""))
+    return bg.matches(workspace, rec) or name in (workspace, workspace.removeprefix("name:"))
+
+
+def _record_of(win: dict[str, Any]) -> dict[str, Any]:
+    """A window's client record: an event names the workspace by NAME, which
+    a workspace rule's default name can make differ from its number, and
+    carries no pid. The record can trail the event by a beat."""
+    if "pid" in win and isinstance(win.get("workspace"), dict) or not win.get("address"):
+        return win
+    for attempt in range(2):
+        with contextlib.suppress(Exception):
+            record = _client_by_address(win["address"])
+            if record is not None:
+                return record
+        if attempt == 0:
+            time.sleep(0.1)
+    return win
+
+
 def _launched_window(
-    workspace: str, command: str, token: str = ""
+    workspace: str, command: str, token: str = "", workspace_proves: bool = True
 ) -> Callable[[dict[str, Any]], str | None]:
     """How a new window relates to a launch. "proven" when its process
     carries the launch's token, or it opened on the launch's own workspace
-    (the rule Hyprland applies to the launched command): the agent opened
-    it. "class" when only its class is the program's own: a single-instance
-    app's window opens from the process that was already running, which
-    ignores the rule and carries no token, so nothing ties it to this launch
-    rather than to the human opening one at the same moment. None: someone
-    else's, often the human's, and never taken over. A launch waits for a
-    window that is either; only a proven one is recorded as the agent's.
-    `workspace` is "" for a launch with no placement rule. An event names
-    the workspace by name and carries no pid: its client record is read."""
+    (the rule Hyprland applies to the launched command) and that workspace
+    proves it (`workspace_proves`: one of the agent's, off screen, where the
+    human does not open windows): the agent opened it. "class" when only
+    its class is the program's own: a single-instance app's window opens
+    from the process that was already running, which ignores the rule and
+    carries no token, so nothing ties it to this launch rather than to the
+    human opening one at the same moment. None: someone else's, often the
+    human's, and never taken over. A launch waits for a window that is
+    either; only a proven one is recorded as the agent's. `workspace` is ""
+    for a launch with no placement rule. A command that hands off to
+    another process (xdg-open, gtk-launch, D-Bus activation, a systemd
+    service) carries no token to its window, so that window is at most
+    "class"."""
     prog = _norm(_program(command))
-
-    def on_it(ws: Any) -> bool:
-        rec = ws if isinstance(ws, dict) else {"name": str(ws)}
-        name = str(rec.get("name", ""))
-        return bg.matches(workspace, rec) or name in (workspace, workspace.removeprefix("name:"))
 
     def same_app(cls: str) -> bool:
         c, last = _norm(cls), _norm(cls.rsplit(".", 1)[-1])
@@ -2164,16 +2196,12 @@ def _launched_window(
         return prog in c or c in prog or (len(last) >= 3 and (last in prog or prog in last))
 
     def classify(win: dict[str, Any]) -> str | None:
-        record = win
-        if ("pid" not in win or not isinstance(win.get("workspace"), dict)) and win.get(
-                "address"):
-            # an event names the workspace by NAME, which a workspace rule's
-            # default name can make differ from its number, and has no pid
-            with contextlib.suppress(Exception):
-                record = _client_by_address(win["address"]) or win
+        record = _record_of(win)
         if _carries_token(record.get("pid"), token):
             return "proven"
-        if workspace and (on_it(win.get("workspace")) or on_it(record.get("workspace"))):
+        if workspace_proves and workspace and (
+                _on_workspace(workspace, win.get("workspace"))
+                or _on_workspace(workspace, record.get("workspace"))):
             return "proven"
         if same_app(str(win.get("class", ""))):
             return "class"
@@ -2290,7 +2318,12 @@ def launch(
     # never "the next window anyone opens": that was the human's, as often
     # as not, and it became the agent's (in `launched` scope, tagged)
     token = secrets.token_hex(8)
-    match = _launched_window(workspace, command, token)
+    # opening on the rule's workspace proves a window only on an agent
+    # workspace off screen: on the human's own one, any window they open
+    # during the wait lands there too
+    proves = bool(rule) and bg.is_agent_workspace(workspace) and not any(
+        bg.matches(workspace, ws) for ws in _shown_workspaces(hyprctl.query("monitors")))
+    match = _launched_window(workspace, command, token, workspace_proves=proves)
     win = _launch_and_wait(rule + _with_token(command, token), wait_s,
                            lambda w: match(w) is not None)
     if win is None:
@@ -2319,7 +2352,7 @@ def launch(
             "one the agent opened (HYPRUSE_CONFINE=launched, HYPRUSE_MARK)")
     if note:
         result["note"] = note
-    moved = bool(workspace) and not _launched_window(workspace, "")(win)
+    moved = bool(workspace) and not _on_workspace(workspace, win.get("workspace", {}))
     if moved:
         hyprctl.dispatch("movetoworkspacesilent", f"{workspace},address:{win['address']}")
         result["workspace"] = workspace
@@ -2808,11 +2841,17 @@ def _step_wait_excuse(step: dict[str, Any]) -> Callable[[str, dict[str, Any]], b
 def _step_target_workspace(step: dict[str, Any]) -> Any:
     """For a step that may switch the workspace by focusing a window, the
     workspace that window is on, read BEFORE the step: the switch the step
-    causes is to there. _ANY_WORKSPACE for `hypr workspace`, a switch by
-    definition (and '+1' cannot be predicted); None when the step names no
+    causes is to there. For `hypr workspace`, the workspace it names, or
+    _ANY_WORKSPACE for a relative or alias one ('+1', 'e-1', 'previous'),
+    whose destination cannot be predicted; None when the step names no
     window, so any switch during it is someone else's."""
     op, action = step.get("op"), step.get("action", "")
     if op == "hypr" and action == "workspace":
+        name = str(step.get("workspace", "")).strip()
+        if name.isdigit():
+            return {"id": int(name)}
+        if name.startswith(("name:", "special")):
+            return {"name": name.removeprefix("name:")}
         return _ANY_WORKSPACE
     if op == "hypr":
         window = step.get("target", "")

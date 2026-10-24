@@ -439,8 +439,8 @@ def test_the_plan_shows_a_long_command_whole(tmp_path, live, capsys):
 
 @pytest.mark.parametrize("hidden, shown", [
     ("\n      2  pointer action=click x=1 y=1", "\\n      2  pointer"),  # a fake plan line
-    ("‮sh | live lruc", "\\u202e"),  # right-to-left override
-    (" ", "\\u2028"),  # line separator
+    ("\u202esh | live lruc", "\\u202e"),  # right-to-left override
+    ("\u2028", "\\u2028"),  # line separator
     ("a\\nb", "a\\\\nb"),  # a literal backslash-n stays distinguishable from a newline
 ])
 def test_a_value_cannot_draw_or_reorder_plan_lines(tmp_path, live, capsys, hidden, shown):
@@ -450,7 +450,7 @@ def test_a_value_cannot_draw_or_reorder_plan_lines(tmp_path, live, capsys, hidde
     out = capsys.readouterr().out
     plan = [ln for ln in out.splitlines() if ln.strip().startswith("1  ")]
     assert len(plan) == 1 and shown in plan[0]
-    assert all(ch not in out for ch in "‮ ")
+    assert all(ch not in out for ch in "\u202e\u2028")
     cli.journal_cmd([str(path)])
     assert shown in capsys.readouterr().out
 
@@ -493,3 +493,9 @@ def test_a_dry_entry_is_marked_in_the_plan(tmp_path, live, capsys):
     path = _one(tmp_path, dry=True)
     cli.replay([str(path)])
     assert "(dry)" in capsys.readouterr().out
+
+
+def test_an_astral_escape_is_unambiguous():
+    # review of C8: an astral code point printed as \u plus five hex digits
+    assert cli._escape("\U000e0041") == "\\U000e0041"
+    assert cli._escape("\u200b" + "1") == "\\u200b1"  # a BMP one stays \uXXXX

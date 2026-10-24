@@ -767,5 +767,18 @@ def test_a_credential_on_the_command_line_is_warned_about(monkeypatch, capsys):
 
 def test_output_cannot_reorder_or_split_a_line():
     # V32: a window title with a bidi override or a line separator
-    out = verbs._safe("evil‮title next")
-    assert "‮" not in out and " " not in out and "\\u202e" in out
+    out = verbs._safe("evil\u202etitle\u2028next")
+    assert "\u202e" not in out and "\u2028" not in out and "\\u202e" in out
+
+
+def test_output_escapes_tag_characters_too():
+    # review of C8: U+E0000-E007F are invisible format characters
+    out = verbs._safe("open \U000e0041\U000e0042 x")
+    assert "\U000e0041" not in out and "\\U000e0041" in out
+
+
+def test_a_character_key_or_clipboard_text_on_the_command_line_is_warned_about(capsys):
+    kwargs_of("keyboard", "key", "h", "--allow-auth")
+    assert "character key on the command line" in capsys.readouterr().err
+    kwargs_of("keyboard", "key", "ctrl+s", "--allow-auth")
+    assert capsys.readouterr().err == ""

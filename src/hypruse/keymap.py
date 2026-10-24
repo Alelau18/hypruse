@@ -54,6 +54,8 @@ class Keymap:
     def __init__(self, layout: str, variant: str = "", options: str = ""):
         self._table: dict[str, tuple[str, str]] = {}
         self._bases: set[str] = set()
+        # keysym value -> (mods, base key) that produces it, a base-level one first
+        self._sym_chords: dict[int, tuple[str, str]] = {}
         lib = _lib()
         if lib is None:
             return
@@ -74,6 +76,9 @@ class Keymap:
                 if lvl == 0:
                     base = buf.value.decode()
                     self._bases.add(base)
+                if base and (syms[0] not in self._sym_chords or lvl == 0
+                             and self._sym_chords[syms[0]][0]):
+                    self._sym_chords[syms[0]] = (_LEVEL_MODS[lvl], base)
                 ch = lib.xkb_keysym_to_utf32(syms[0])
                 if ch and base and chr(ch) not in self._table:
                     self._table[chr(ch)] = (_LEVEL_MODS[lvl], base)
@@ -100,6 +105,8 @@ class Keymap:
         if lib is None or name.startswith("KP_"):  # a keypad key is not its main-row twin
             return None
         sym = lib.xkb_keysym_from_name(name.encode(), 0)
+        if sym in self._sym_chords:  # another name for a key: Page_Up is Prior
+            return self._sym_chords[sym]
         ch = lib.xkb_keysym_to_utf32(sym) if sym else 0
         return self.chord(chr(ch)) if ch and chr(ch).isprintable() else None
 

@@ -211,3 +211,14 @@ def test_an_older_hypruses_bare_addresses_do_not_survive_a_merge():
     saved = json.loads(cli_state.path().read_text())
     assert saved["flags"]["known_clients"] == ["0xa#1", "0xb#2"]
     assert "0xold" not in saved["trust"]["owned"]
+
+
+def test_a_closed_window_leaves_the_file_too(monkeypatch):
+    # review of C6: the merge re-unioned the file's dead keys on every save
+    trust._owned.update({AAA, DEAD})
+    cli_state.save()
+    monkeypatch.setattr(hyprctl, "query", lambda cmd: [{"address": "0xaaa", "stableId": "1"}])
+    trust._owned.clear()
+    cli_state.restore()
+    cli_state.save()
+    assert json.loads(cli_state.path().read_text())["trust"]["owned"] == [AAA]

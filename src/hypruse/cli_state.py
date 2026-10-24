@@ -89,7 +89,10 @@ def restore() -> None:
     remembered = dict(remembered) if isinstance(remembered, dict) else {}
     # every consumer, not only `launched` confinement: launch placement
     # reads the owned-set too
-    remembered["owned"] = _prune_owned(remembered.get("owned"))
+    global _closed
+    before = remembered.get("owned")
+    remembered["owned"] = _prune_owned(before)
+    _closed = set(before if isinstance(before, list) else []) - set(remembered["owned"])
     trust.restore_state(remembered)
     server.restore_marks(state.get("marks"))
     flags = state.get("flags")
@@ -99,6 +102,9 @@ def restore() -> None:
         "marks": _plain(server.marks_state()),
         "flags": _plain(_flags),
     }
+
+
+_closed: set[Any] = set()  # owned windows the last restore found gone; the merge drops them
 
 
 def _prune_owned(owned: Any) -> list[str]:
@@ -132,8 +138,8 @@ def _merge(current: dict[str, Any], mine: dict[str, Any]) -> dict[str, Any]:
     my_trust, old_trust = mine["trust"], _restored.get("trust", {})
     # a bare address an older hypruse wrote proves nothing and is dropped,
     # here as on restore: the union would otherwise carry it forever
-    owned = {a for a in cur_trust.get("owned") or [] if hyprctl.is_window_key(a)} | set(
-        my_trust["owned"])
+    owned = {a for a in cur_trust.get("owned") or []
+             if hyprctl.is_window_key(a) and a not in _closed} | set(my_trust["owned"])
     seat = my_trust["seat"] if my_trust["seat"] != old_trust.get("seat") else (
         cur_trust.get("seat") or my_trust["seat"]
     )

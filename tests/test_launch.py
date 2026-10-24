@@ -82,9 +82,10 @@ def test_launch_moves_single_instance_window(monkeypatch, no_sleep):
 
 
 def test_launch_no_move_when_rule_worked(monkeypatch, no_sleep):
-    landed_right = dict(CHROME, workspace={"id": 2, "name": "2"})
+    landed_right = dict(CHROME, workspace={"id": 2, "name": "2"}, pid=4242)
     fake = FakeHyprctl([[EXISTING], [EXISTING, landed_right]])
     _patch(monkeypatch, fake)
+    monkeypatch.setattr(server, "_carries_token", lambda pid, token: pid == 4242)
     out = server.launch("google-chrome", workspace="2")
     assert out["workspace"] == 2
     assert "note" not in out
@@ -293,3 +294,21 @@ def test_a_process_carries_the_token_it_was_started_with():
     finally:
         child.kill()
         child.wait()
+
+
+def test_a_window_on_the_humans_own_workspace_is_not_proven_by_landing(monkeypatch, no_sleep,
+                                                                      owned):
+    # review of C7: launch(workspace=1) with 1 on screen; the human opens a
+    # window there during the wait
+    human_here = dict(HUMAN, address="0xh2", workspace={"id": 1, "name": "1"})
+    fake = FakeHyprctl([[EXISTING], [EXISTING, human_here]])
+    monkeypatch.setattr(server.hyprctl, "query", lambda cmd: [{
+        "activeWorkspace": {"id": 1, "name": "1"}, "specialWorkspace": {}}]
+        if cmd == "monitors" else fake.query(cmd))
+    monkeypatch.setattr(server.hyprctl, "dispatch", fake.dispatch)
+    monkeypatch.setattr(server.events, "EventStream", NoSocket)
+    clock = itertools.count(start=0, step=1.0)
+    monkeypatch.setattr(server.time, "monotonic", lambda: next(clock))
+    out = server.launch("sleep 30", workspace="1", wait_s=3)
+    assert isinstance(out, str) and "no new window" in out
+    assert owned() == set()

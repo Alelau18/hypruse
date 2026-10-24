@@ -1311,7 +1311,8 @@ def test_a_key_that_types_or_pastes_into_a_password_field_is_refused(wired_bg, k
     assert len(wired_bg["shortcuts"]) == 1
 
 
-@pytest.mark.parametrize("keys", ["ctrl+s", "Return", "Tab", "esc", "F5", "alt+F4"])
+@pytest.mark.parametrize("keys", ["ctrl+s", "Return", "Tab", "esc", "F5", "alt+F4", "pgup",
+                                  "pgdn", "shift+Tab", "Page_Up", "ISO_Left_Tab"])
 def test_a_shortcut_into_a_password_field_is_not_typing(wired_bg, keys):
     wired_bg["focused_text"] = PW
     srv.keyboard("key", keys=keys, window="0xa")
@@ -1530,3 +1531,21 @@ def test_typing_stops_when_the_layout_switches_partway(wired_bg, monkeypatch):
     with pytest.raises(srv.hyprctl.HyprctlError, match="sent 2 of 3 keys"):
         srv.keyboard("type", text="abc", window="0xa")
     assert len(wired_bg["shortcuts"]) == 2
+
+
+def test_a_line_break_into_a_large_window_with_no_password_field_known_goes(wired_bg):
+    # review of C9: a newline in a text area moves no focus, and a large
+    # tree read only in part refused every multi-line text
+    wired_bg["focused_text"] = USER
+    wired_bg["fields"], wired_bg["fields_complete"] = [USER], False
+    srv.keyboard("type", text="one\ntwo", window="0xa")
+    assert len(wired_bg["shortcuts"]) == 7
+    with pytest.raises(srv.trust.TrustError, match="Tab or a line break"):
+        srv.keyboard("type", text="one\ttwo", window="0xa")  # a Tab still moves the focus
+
+
+def test_a_keysyms_other_name_goes_as_the_key_the_layout_has(wired_bg):
+    # review of c2ba565: Page_Up (the pgup alias) is xkb's Prior
+    srv.keyboard("key", keys="pgup", window="0xa")
+    srv.keyboard("key", keys="ISO_Left_Tab", window="0xa")
+    assert wired_bg["shortcuts"] == [("", "Prior", "0xa"), ("SHIFT", "Tab", "0xa")]
