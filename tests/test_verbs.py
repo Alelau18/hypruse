@@ -491,7 +491,8 @@ def test_dry_run_flag_turns_the_rehearsal_on(stub, monkeypatch):
 
 def test_state_is_saved_after_every_call_and_restored_before_the_next(stub, monkeypatch):
     def marks(**kw):
-        srv._last_marks = {"window": "0xaaa", "items": {1: {"dx": 1, "dy": 2, "label": "b"}}}
+        srv._last_marks = {"window": "0xaaa", "key": "0xaaa#1",
+                           "items": {1: {"dx": 1, "dy": 2, "label": "b"}}}
         return "legend only"
 
     monkeypatch.setattr(srv, "marks", marks)
@@ -514,7 +515,7 @@ def test_strict_seat_baseline_survives_between_calls(stub, monkeypatch):
     monkeypatch.setenv("HYPRUSE_STRICT", "1")
 
     def act(**kw):
-        trust._seat.update(cursor=(5, 6), active="0x1")
+        trust._seat.update(cursor=(5, 6), active="0x1#1")
         return "ok"
 
     monkeypatch.setattr(srv, "pointer", act)
@@ -530,7 +531,7 @@ def test_strict_seat_baseline_survives_between_calls(stub, monkeypatch):
     verbs.main(["pointer", "click"])
     # without this, guard_seat is a no-op in every new process: strict mode
     # would fail open
-    assert seen["seat"] == {"cursor": (5, 6), "active": "0x1"}
+    assert seen["seat"] == {"cursor": (5, 6), "active": "0x1#1"}
 
 
 def test_a_live_servers_beacon_is_left_alone_but_cleanup_is_armed(stub, monkeypatch):
@@ -652,7 +653,7 @@ def test_stale_or_foreign_marks_are_refused_not_clicked(monkeypatch):
     with pytest.raises(ValueError, match="now belongs to 'kitty'"):
         srv.click_ui(mark=1)
     # a persisted record without a timestamp is expired, not fresh
-    srv.restore_marks({"window": "0x1", "class": "kitty", "items": {"1": item}})
+    srv.restore_marks({"window": "0x1", "key": "0x1#1", "class": "kitty", "items": {"1": item}})
     with pytest.raises(ValueError, match="minutes old"):
         srv.click_ui(mark=1)
 
@@ -663,8 +664,8 @@ def test_an_observe_verb_does_not_clobber_what_another_verb_saved(stub, monkeypa
     stub("desktop", SNAP)
     verbs.main(["desktop"])  # creates the state file
     on_disk = json.loads(cli_state.path().read_text())
-    on_disk["trust"]["owned"] = ["0xaaa"]
-    on_disk["marks"] = {"window": "0x1", "class": "kitty", "ts": 1.0,
+    on_disk["trust"]["owned"] = ["0xaaa#1"]
+    on_disk["marks"] = {"window": "0x1", "key": "0x1#1", "class": "kitty", "ts": 1.0,
                         "items": {"1": {"dx": 1, "dy": 2, "label": "l"}}}
 
     def slow_desktop(**kw):
@@ -674,7 +675,7 @@ def test_an_observe_verb_does_not_clobber_what_another_verb_saved(stub, monkeypa
     monkeypatch.setattr(srv, "desktop", slow_desktop)
     verbs.main(["desktop"])
     after = json.loads(cli_state.path().read_text())
-    assert after["trust"]["owned"] == ["0xaaa"]
+    assert after["trust"]["owned"] == ["0xaaa#1"]
     assert after["marks"]["items"]["1"]["label"] == "l"
 
 

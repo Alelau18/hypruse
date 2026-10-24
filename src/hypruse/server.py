@@ -276,9 +276,8 @@ def _note_clients(clients: Any = None) -> None:
             return
     if not isinstance(clients, list):
         return
-    _known_clients = {
-        str(c["address"]).lower() for c in clients if isinstance(c, dict) and c.get("address")
-    }
+    # by window_key: a new window at an address a closed one held is new
+    _known_clients = {k for c in clients if (k := hyprctl.window_key(c)) is not None}
 
 
 def known_clients_state() -> list[str] | None:
@@ -287,17 +286,28 @@ def known_clients_state() -> list[str] | None:
 
 
 def restore_known_clients(state: Any) -> None:
+    """What known_clients_state saved. A list from an older hypruse holds
+    bare addresses, which say nothing about the window at one now: it
+    counts as no list at all, so the pre-check is skipped, not misled."""
     global _known_clients
-    _known_clients = (
-        {str(a).lower() for a in state if isinstance(a, str)} if isinstance(state, list) else None
-    )
+    ok = isinstance(state, list) and all(hyprctl.is_window_key(a) for a in state)
+    _known_clients = set(state) if ok else None
 
 
-def _learn_client(address: Any) -> None:
+def _learn_client(window: Any) -> None:
     """A window the agent has now been told about (an openwindow result, a
-    launch): a later window_open wait must not report it again."""
-    if _known_clients is not None and address:
-        _known_clients.add(str(address).lower())
+    launch): a later window_open wait must not report it again. Takes the
+    client, or an event's address, which is looked up for its window_key."""
+    if _known_clients is None or not window:
+        return
+    if not isinstance(window, dict):
+        address = str(window).lower()
+        with contextlib.suppress(Exception):
+            window = next((c for c in hyprctl.query("clients")
+                           if str(c.get("address", "")).lower() == address), None)
+    key = hyprctl.window_key(window)
+    if key is not None:
+        _known_clients.add(key)
 
 
 @journal.journaled("observe")
@@ -314,8 +324,9 @@ def desktop() -> dict[str, Any]:
     visibility matters. Call first; act on the addresses it returns."""
     snap = hyprctl.snapshot()
     # every window it lists is one the agent has now seen: a later
-    # wait_for(window_open) must wait for a new one, not answer with these
-    _note_clients(snap.get("windows"))
+    # wait_for(window_open) must wait for a new one, not answer with these.
+    # Read again, whole: the snapshot's trimmed windows carry no stableId
+    _note_clients()
     # under HYPRUSE_STRICT a seat that moved without hypruse blocks every
     # acting tool until the agent re-observes; this read IS that
     # re-observation, so it re-arms the guard (as its error advises)
@@ -749,8 +760,10 @@ def restore_marks(state: Any) -> None:
         with contextlib.suppress(ValueError, TypeError):
             if isinstance(item, dict) and {"dx", "dy", "label"} <= set(item):
                 items[int(key)] = item
-    if items and isinstance(state.get("window"), str):
-        _last_marks = {"window": state["window"], "items": items}
+    # without the window's key (an older hypruse wrote it) the numbering
+    # cannot be tied to the window at that address now: no marks
+    if items and isinstance(state.get("window"), str) and hyprctl.is_window_key(state.get("key")):
+        _last_marks = {"window": state["window"], "key": state["key"], "items": items}
         if isinstance(state.get("class"), str):
             _last_marks["class"] = state["class"]
         size = state.get("size")
@@ -808,7 +821,8 @@ def marks(window: str = "", name: str = "") -> list[Any] | str:
     # checks both, since the CLI carries this record across processes and an
     # address can be handed to a different window later
     _last_marks = {
-        "window": addr, "class": client.get("class", ""), "ts": time.time(), "items": stored,
+        "window": addr, "key": hyprctl.window_key(client), "class": client.get("class", ""),
+        "ts": time.time(), "items": stored,
         "size": list(client.get("size") or []),  # a resized window invalidates the offsets
     }
     hint = (
@@ -1330,6 +1344,12 @@ def click_ui(
                 "the window has surely changed; call marks() again"
             )
         client = _resolve_window(_last_marks["window"])  # raises if the window is gone
+        if _last_marks.get("key") and hyprctl.window_key(client) != _last_marks["key"]:
+            # Hyprland hands a closed window's address to a later window
+            raise ValueError(
+                f"no mark {mark}: the window marks() numbered is gone, and its address now "
+                f"belongs to another window ({client.get('class')!r}); call marks() again"
+            )
         if _last_marks.get("class") and client.get("class") != _last_marks["class"]:
             raise ValueError(
                 f"no mark {mark}: the last marks capture was of {_last_marks['class']!r} and "
@@ -2147,8 +2167,8 @@ def launch(
             "desktop() to find the window, then hypr move_window if needed"
         )
     # owned-set for `launched` confinement; tag + notify when HYPRUSE_MARK
-    trust.note_launched(win["address"], win.get("class", ""))
-    _learn_client(win["address"])  # the result names it: not a window_open to wait for
+    trust.note_launched(win, win.get("class", ""))
+    _learn_client(win)  # the result names it: not a window_open to wait for
     ws = win.get("workspace", {})
     result: dict[str, Any] = {
         "address": win["address"],
@@ -2443,11 +2463,11 @@ def _already_satisfied(event: str, needle: str) -> dict[str, Any] | None:
     # unfiltered means 'the next window, whatever it is'.
     if event == "window_open" and needle and _known_clients is not None:
         for c in hyprctl.query("clients") or []:
-            addr = str(c.get("address", "")).lower()
-            if not addr or addr in _known_clients or not c.get("mapped", True):
+            key = hyprctl.window_key(c)
+            if key is None or key in _known_clients or not c.get("mapped", True):
                 continue
             if needle in _client_hay(c):
-                _learn_client(addr)  # reported once: a second wait waits for the next
+                _learn_client(c)  # reported once: a second wait waits for the next
                 return {
                     "event": "openwindow",
                     "address": c.get("address"),

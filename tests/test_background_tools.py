@@ -1423,3 +1423,17 @@ def test_a_character_key_is_not_named_in_the_result(wired_bg):
     out = str(srv.keyboard("key", keys="h", window="0xa"))
     assert "sent a character key to 0xa" in out
     assert "ctrl+s" in str(srv.keyboard("key", keys="ctrl+s", window="0xa"))
+
+
+def test_a_mark_is_refused_once_its_address_belongs_to_another_window(wired_bg, monkeypatch):
+    # F28: class and size do not tell two kitty windows apart
+    monkeypatch.setattr(srv, "_grab_env", lambda **kw: (b"IMG", {
+        "geometry": [100, 50, 800, 600], "scale": 1.0, "image": [800, 600],
+        "format": "jpeg"}))
+    monkeypatch.setattr(srv, "_draw_marks", lambda *a: None)
+    srv._last_marks.clear()
+    srv.marks(window="0xa")
+    monkeypatch.setattr(srv, "_resolve_window", lambda w="": dict(CLIENT, stableId="later"))
+    with pytest.raises(ValueError, match="belongs to another window"):
+        srv.click_ui(mark=1)
+    assert wired_bg["actions"] == []

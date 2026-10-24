@@ -402,6 +402,29 @@ SHORTCUT_MODS = frozenset(
 _ADDRESS = re.compile(r"0x[0-9a-fA-F]+")
 
 
+def window_key(client: Any) -> str | None:
+    """A window's identity that no later window can inherit. The address
+    is the heap pointer of Hyprland's window object, which the allocator
+    hands to a new window once the old one is freed, so ownership, the
+    seat baseline and the known-window list keyed on it alone passed a
+    recycled address to an unrelated window. Hyprland's stableId is never
+    reused; a Hyprland without one gets the pid and the initial class. None
+    for a record with no address (nothing focused)."""
+    if not isinstance(client, dict) or not client.get("address"):
+        return None
+    address = str(client["address"]).lower()
+    sid = client.get("stableId")
+    if sid not in (None, ""):
+        return f"{address}#{sid}"
+    return f"{address}#{client.get('pid')}:{client.get('initialClass', client.get('class', ''))}"
+
+
+def is_window_key(value: Any) -> bool:
+    """Whether a stored value is a window_key, not a bare address an older
+    hypruse wrote (which proves nothing about the window there now)."""
+    return isinstance(value, str) and value.startswith("0x") and "#" in value
+
+
 def send_shortcut(mods: str, key: str, address: str) -> None:
     """Send one key, with modifiers, to a window without focusing it.
     Hyprland moves keyboard focus to the window, sends the key and restores

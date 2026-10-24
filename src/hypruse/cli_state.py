@@ -87,8 +87,9 @@ def restore() -> None:
     state = load()
     remembered = state.get("trust")
     remembered = dict(remembered) if isinstance(remembered, dict) else {}
-    if os.environ.get("HYPRUSE_CONFINE", "").strip() == "launched":
-        remembered["owned"] = _prune_owned(remembered.get("owned"))
+    # every consumer, not only `launched` confinement: launch placement
+    # reads the owned-set too
+    remembered["owned"] = _prune_owned(remembered.get("owned"))
     trust.restore_state(remembered)
     server.restore_marks(state.get("marks"))
     flags = state.get("flags")
@@ -101,15 +102,15 @@ def restore() -> None:
 
 
 def _prune_owned(owned: Any) -> list[str]:
-    """An address the compositor no longer lists can be handed to a new,
-    unrelated window later, and a persisted owned-set outlives windows far
-    more often than a server session does. Drop the dead ones before a
-    confinement decision leans on them. An unreadable window list leaves the
-    set alone: the action about to run will fail on the same IPC anyway."""
+    """The owned windows still open. Entries are hyprctl.window_key values,
+    which a later window at the same address does not match, so a dead one
+    cannot be inherited; dropping them keeps the file from growing for the
+    compositor's lifetime. An unreadable window list leaves the set alone:
+    the action about to run will fail on the same IPC anyway."""
     if not isinstance(owned, list) or not owned:
         return []
     with contextlib.suppress(Exception):
-        live = {c.get("address") for c in hyprctl.query("clients")}
+        live = {hyprctl.window_key(c) for c in hyprctl.query("clients")}
         return sorted(a for a in owned if a in live)
     return list(owned)
 
@@ -129,7 +130,10 @@ def _merge(current: dict[str, Any], mine: dict[str, Any]) -> dict[str, Any]:
     another process is as much ours as one here."""
     cur_trust = current.get("trust") if isinstance(current.get("trust"), dict) else {}
     my_trust, old_trust = mine["trust"], _restored.get("trust", {})
-    owned = set(cur_trust.get("owned") or []) | set(my_trust["owned"])
+    # a bare address an older hypruse wrote proves nothing and is dropped,
+    # here as on restore: the union would otherwise carry it forever
+    owned = {a for a in cur_trust.get("owned") or [] if hyprctl.is_window_key(a)} | set(
+        my_trust["owned"])
     seat = my_trust["seat"] if my_trust["seat"] != old_trust.get("seat") else (
         cur_trust.get("seat") or my_trust["seat"]
     )
@@ -146,7 +150,8 @@ def _merge(current: dict[str, Any], mine: dict[str, Any]) -> dict[str, Any]:
     # verbs that each refreshed it do not drop each other's windows
     known = changed.get("known_clients")
     if isinstance(known, list) and isinstance(flags.get("known_clients"), list):
-        changed["known_clients"] = sorted(set(flags["known_clients"]) | set(known))
+        changed["known_clients"] = sorted(
+            {a for a in flags["known_clients"] if hyprctl.is_window_key(a)} | set(known))
     flags.update(changed)
     return {
         "trust": {"owned": sorted(owned), "seat": seat, "notify_ts": notify_ts},

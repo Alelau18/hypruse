@@ -193,6 +193,18 @@ All notable changes to this project are documented here. The format follows
   builds a batch. A reply that is not valid UTF-8 (a hostile title) is
   read with replacement characters instead of failing. The `hyprctl`
   binary is still used for `hyprctl -j instances`.
+- **Windows are told apart by more than their address.** An address is
+  the heap pointer of Hyprland's window object, which it hands to a new
+  window once the old one is freed. `launched` confinement, launch
+  placement on the agent's workspaces, the `HYPRUSE_STRICT` seat baseline,
+  the windows `wait_for(window_open)` counts as already seen, and `marks`
+  all compared the address alone, so the human's next window could
+  inherit the agent's trust, a focus change could go unnoticed, and a
+  new window could be skipped as already known. They now use
+  `hyprctl.window_key`: the address with Hyprland's `stableId`, which is
+  never reused (pid and initial class on a Hyprland without one). The
+  CLI state drops a bare address an older hypruse wrote, and prunes
+  closed windows from the owned-set whatever `HYPRUSE_CONFINE` says.
 - **`keyboard type --allow-auth TEXT` warns** that the text is on the
   verb's own command line, readable from /proc; the skill says to pass it
   on stdin (`keyboard type - --allow-auth`).

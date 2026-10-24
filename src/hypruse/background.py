@@ -132,7 +132,7 @@ _matches = matches
 def _owned(client: dict[str, Any], owned: set[str]) -> bool:
     """The agent opened it: in this session's owned set, or tagged
     hypruse-owned by an earlier one under HYPRUSE_MARK."""
-    return client.get("address") in owned or any(
+    return hyprctl.window_key(client) in owned or any(
         str(t).rstrip("*") == "hypruse-owned" for t in client.get("tags") or ()
     )
 

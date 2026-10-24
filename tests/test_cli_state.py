@@ -22,19 +22,23 @@ def runtime(tmp_path, monkeypatch):
     trust._owned.clear()
 
 
-MARKS = {"window": "0xaaa", "class": "kitty", "ts": 1234.5,
+MARKS = {"window": "0xaaa", "key": "0xaaa#1", "class": "kitty", "ts": 1234.5,
          "items": {1: {"dx": 10, "dy": 20, "label": "b 'Ok'"}}}
 
 
+# what trust records: hyprctl.window_key, an address plus its stableId
+AAA, BBB, DEAD = "0xaaa#1", "0xbbb#2", "0xdead#3"
+
+
 def _remember_everything():
-    trust._owned.update({"0xaaa", "0xbbb"})
+    trust._owned.update({AAA, BBB})
     trust._seat["cursor"] = (640, 480)
-    trust._seat["active"] = "0xaaa"
+    trust._seat["active"] = AAA
     srv._last_marks = dict(MARKS)
     cli_state.set_flag("marking_installed", True)
 
 
-def test_round_trip_restores_marks_owned_seat_and_flags():
+def test_round_trip_restores_marks_owned_seat_and_flags(monkeypatch):
     _remember_everything()
     cli_state.save()
     # a fresh process starts with nothing
@@ -43,10 +47,12 @@ def test_round_trip_restores_marks_owned_seat_and_flags():
     srv._last_marks = {}
     cli_state._flags = {}
 
+    live = [{"address": "0xaaa", "stableId": "1"}, {"address": "0xbbb", "stableId": "2"}]
+    monkeypatch.setattr(hyprctl, "query", lambda cmd: live)
     cli_state.restore()
-    assert trust.owned() == {"0xaaa", "0xbbb"}
+    assert trust.owned() == {AAA, BBB}
     # a tuple again: guard_seat compares with != against hyprctl's tuple
-    assert trust._seat == {"cursor": (640, 480), "active": "0xaaa"}
+    assert trust._seat == {"cursor": (640, 480), "active": AAA}
     # mark numbers come back as ints after the JSON round trip
     assert srv.marks_state() == MARKS
     assert cli_state.flag("marking_installed") is True
@@ -77,19 +83,41 @@ def test_unreadable_or_foreign_files_mean_nothing_remembered():
     assert trust.owned() == set() and srv.marks_state() == {}
 
 
-def test_launched_confinement_prunes_windows_that_are_gone(monkeypatch):
-    trust._owned.update({"0xaaa", "0xdead"})
+def test_the_owned_set_drops_windows_that_are_gone(monkeypatch):
+    # every consumer reads it, not only `launched` confinement (V51)
+    trust._owned.update({AAA, DEAD})
     cli_state.save()
-    monkeypatch.setenv("HYPRUSE_CONFINE", "launched")
-    monkeypatch.setattr(hyprctl, "query", lambda cmd: [{"address": "0xaaa"}])
+    monkeypatch.setattr(hyprctl, "query", lambda cmd: [{"address": "0xaaa", "stableId": "1"}])
     trust._owned.clear()
     cli_state.restore()
-    # 0xdead can be handed to an unrelated window later; it is not ours any more
-    assert trust.owned() == {"0xaaa"}
+    assert trust.owned() == {AAA}
+
+
+def test_a_window_at_a_recycled_address_is_not_owned(monkeypatch):
+    # F6/F17/F18/F28: Hyprland hands a freed window's address to the next one
+    trust._owned.update({AAA})
+    cli_state.save()
+    monkeypatch.setenv("HYPRUSE_CONFINE", "launched")
+    human = {"address": "0xaaa", "stableId": "77", "class": "kitty", "pid": 9}
+    monkeypatch.setattr(hyprctl, "query", lambda cmd: [human])
+    trust._owned.clear()
+    cli_state.restore()
+    assert trust.owned() == set()
+    with pytest.raises(trust.TrustError, match="confinement scope"):
+        trust.guard_client(human)
+
+
+def test_a_bare_address_from_an_older_hypruse_owns_nothing(monkeypatch):
+    path = cli_state.path()
+    path.write_text(json.dumps({"v": 1, "instance": "sig-a", "trust": {
+        "owned": ["0xaaa"], "seat": {"cursor": [1, 2], "active": "0xaaa"}}}))
+    monkeypatch.setattr(hyprctl, "query", lambda cmd: [{"address": "0xaaa", "stableId": "1"}])
+    cli_state.restore()
+    assert trust.owned() == set() and trust._seat["active"] is None
 
 
 def test_pruning_keeps_the_set_when_the_window_list_is_unreadable(monkeypatch):
-    trust._owned.update({"0xaaa"})
+    trust._owned.update({AAA})
     cli_state.save()
     monkeypatch.setenv("HYPRUSE_CONFINE", "launched")
 
@@ -99,7 +127,7 @@ def test_pruning_keeps_the_set_when_the_window_list_is_unreadable(monkeypatch):
     monkeypatch.setattr(hyprctl, "query", down)
     trust._owned.clear()
     cli_state.restore()
-    assert trust.owned() == {"0xaaa"}  # the action itself will hit the same IPC
+    assert trust.owned() == {AAA}  # the action itself will hit the same IPC
 
 
 def test_save_survives_an_unwritable_directory(monkeypatch, tmp_path):
@@ -109,10 +137,15 @@ def test_save_survives_an_unwritable_directory(monkeypatch, tmp_path):
 
 
 def test_restore_marks_rejects_malformed_items():
-    srv.restore_marks({"window": "0xaaa", "items": {"1": {"dx": 1}, "x": {"dx": 1, "dy": 2,
-                                                                        "label": "l"}}})
+    srv.restore_marks({"window": "0xaaa", "key": "0xaaa#1", "items": {
+        "1": {"dx": 1}, "x": {"dx": 1, "dy": 2, "label": "l"}}})
     assert srv.marks_state() == {}
+    # an older hypruse's record has no window key: it cannot be tied to the
+    # window at that address now
     srv.restore_marks({"window": "0xaaa", "items": {"2": {"dx": 1, "dy": 2, "label": "l"}}})
+    assert srv.marks_state() == {}
+    srv.restore_marks({"window": "0xaaa", "key": "0xaaa#1",
+                       "items": {"2": {"dx": 1, "dy": 2, "label": "l"}}})
     assert srv.marks_state()["items"] == {2: {"dx": 1, "dy": 2, "label": "l"}}
     assert srv.marks_state()["ts"] == 0.0  # no timestamp recorded: expired, never fresh
 
@@ -126,10 +159,10 @@ def test_a_flag_this_process_did_not_change_keeps_the_files_value():
     on_disk = json.loads(cli_state.path().read_text())
     on_disk["flags"]["held_button"] = None  # another verb released it
     cli_state.path().write_text(json.dumps(on_disk))
-    cli_state.set_flag("known_clients", ["0xa"])  # what the wait itself changed
+    cli_state.set_flag("known_clients", ["0xa#1"])  # what the wait itself changed
     cli_state.save()
     flags = json.loads(cli_state.path().read_text())["flags"]
-    assert flags["held_button"] is None and flags["known_clients"] == ["0xa"]
+    assert flags["held_button"] is None and flags["known_clients"] == ["0xa#1"]
 
 
 def test_each_compositor_instance_keeps_its_own_file(monkeypatch):
@@ -155,13 +188,26 @@ def test_the_file_name_is_sanitised(monkeypatch):
 
 
 def test_known_windows_from_two_verbs_are_merged():
-    cli_state.set_flag("known_clients", ["0xa"])
+    cli_state.set_flag("known_clients", ["0xa#1"])
     cli_state.save()
     cli_state.restore()  # this verb starts
     on_disk = json.loads(cli_state.path().read_text())
-    on_disk["flags"]["known_clients"] = ["0xa", "0xb"]  # another verb saw 0xb meanwhile
+    on_disk["flags"]["known_clients"] = ["0xa#1", "0xb#2"]  # another verb saw 0xb meanwhile
     cli_state.path().write_text(json.dumps(on_disk))
-    cli_state.set_flag("known_clients", ["0xa", "0xc"])  # this one saw 0xc
+    cli_state.set_flag("known_clients", ["0xa#1", "0xc#3"])  # this one saw 0xc
     cli_state.save()
     assert json.loads(cli_state.path().read_text())["flags"]["known_clients"] == [
-        "0xa", "0xb", "0xc"]
+        "0xa#1", "0xb#2", "0xc#3"]
+
+
+def test_an_older_hypruses_bare_addresses_do_not_survive_a_merge():
+    # a list mixing them in would restore as "nothing known" on every verb
+    on_disk = {"v": 1, "instance": "sig-a", "trust": {"owned": ["0xold", "0xa#1"]},
+               "flags": {"known_clients": ["0xold", "0xa#1"]}}
+    cli_state.path().write_text(json.dumps(on_disk))
+    cli_state.restore()
+    cli_state.set_flag("known_clients", ["0xb#2"])
+    cli_state.save()
+    saved = json.loads(cli_state.path().read_text())
+    assert saved["flags"]["known_clients"] == ["0xa#1", "0xb#2"]
+    assert "0xold" not in saved["trust"]["owned"]

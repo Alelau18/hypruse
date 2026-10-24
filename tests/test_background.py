@@ -1,7 +1,7 @@
 import pytest
 
 from hypruse import background as bg
-from hypruse import trust
+from hypruse import hyprctl, trust
 
 
 @pytest.mark.parametrize("raw, mode", [
@@ -80,13 +80,18 @@ def test_a_malformed_range_refuses(monkeypatch, raw):
 
 
 def _c(addr, ws):
-    return {"address": addr, "workspace": _ws(ws)}
+    return {"address": addr, "stableId": addr[2:], "workspace": _ws(ws)}
+
+
+def _k(*addrs):
+    """The owned-set for these windows: hyprctl.window_key, as launch records."""
+    return {hyprctl.window_key(_c(a, 0)) for a in addrs}
 
 
 def test_next_workspace_fills_from_the_top(monkeypatch):
     monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-97")
     monkeypatch.setenv("HYPRUSE_AGENT_FILL", "1")
-    owned = {"0xa"}
+    owned = _k("0xa")
     assert bg.next_workspace([], owned) == "99"
     assert bg.next_workspace([_c("0xa", 99)], owned) == "98"
 
@@ -99,14 +104,14 @@ def test_next_workspace_skips_a_workspace_holding_the_humans_window(monkeypatch)
 def test_fill_stacks_windows_before_moving_down(monkeypatch):
     monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-97")
     monkeypatch.setenv("HYPRUSE_AGENT_FILL", "2")
-    owned = {"0xa", "0xb"}
+    owned = _k("0xa", "0xb")
     assert bg.next_workspace([_c("0xa", 99)], owned) == "99"
     assert bg.next_workspace([_c("0xa", 99), _c("0xb", 99)], owned) == "98"
 
 
 def test_a_full_range_overflows_onto_the_emptiest(monkeypatch):
     monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-98")
-    owned = {"0xa", "0xb", "0xc"}
+    owned = _k("0xa", "0xb", "0xc")
     cl = [_c("0xa", 99), _c("0xb", 99), _c("0xc", 98)]
     assert bg.next_workspace(cl, owned) == "98"
 
@@ -140,13 +145,13 @@ def test_a_workspace_on_screen_is_never_picked(monkeypatch):
     monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-97")
     assert bg.next_workspace([], set(), shown=[_ws(99)]) == "98"
     monkeypatch.setenv("HYPRUSE_AGENT_FILL", "2")
-    owned = {"0xa"}
+    owned = _k("0xa")
     assert bg.next_workspace([_c("0xa", 99)], owned, shown=[_ws(99)]) == "98"
 
 
 def test_the_overflow_skips_a_workspace_on_screen(monkeypatch):
     monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-98")
-    owned = {"0xa", "0xb", "0xc"}
+    owned = _k("0xa", "0xb", "0xc")
     cl = [_c("0xa", 99), _c("0xb", 98), _c("0xc", 98)]
     assert bg.next_workspace(cl, owned, shown=[_ws(99)]) == "98"
 
@@ -201,3 +206,11 @@ def test_matches_a_name_selector_and_numbers():
     assert bg.matches("name:research", {"id": -1337, "name": "research"})
     assert bg.matches("99", {"id": 99, "name": "99"})
     assert not bg.matches("99", {"id": 9, "name": "9"})
+
+
+def test_a_human_window_at_an_agent_windows_old_address_is_not_the_agents(monkeypatch):
+    # V51: launch placement read the owned-set by address
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99")
+    human = dict(_c("0xa", 99), stableId="later")
+    with pytest.raises(trust.TrustError, match="not open"):
+        bg.next_workspace([human], _k("0xa"))

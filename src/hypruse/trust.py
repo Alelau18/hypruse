@@ -58,18 +58,22 @@ def _flag(name: str, default: str = "") -> bool:
 
 # --- confinement ------------------------------------------------------------
 
-_owned: set[str] = set()  # window addresses hypruse launched this session
+_owned: set[str] = set()  # hyprctl.window_key of each window hypruse launched
 
 _OWNED_TAG = "hypruse-owned"
 
 
-def note_launched(address: str, label: str = "") -> None:
-    """Record a window hypruse opened (for `launched` confinement), and when
-    HYPRUSE_MARK is on, make it legible: tag it `hypruse-owned` (which the
-    border rule from init_marking colors) and flash an on-screen notice."""
-    if not address:
+def note_launched(client: dict[str, Any], label: str = "") -> None:
+    """Record a window hypruse opened (for `launched` confinement), by its
+    hyprctl.window_key, not its address, which a later window can be given;
+    and when HYPRUSE_MARK is on, make it legible: tag it `hypruse-owned`
+    (which the border rule from init_marking colors) and flash an
+    on-screen notice."""
+    key = hyprctl.window_key(client)
+    if key is None:
         return
-    _owned.add(address)
+    address = client["address"]
+    _owned.add(key)
     if _flag("HYPRUSE_MARK"):
         with contextlib.suppress(hyprctl.HyprctlError):
             hyprctl.dispatch("tagwindow", f"+{_OWNED_TAG}", f"address:{address}")
@@ -109,15 +113,15 @@ def restore_state(state: Any) -> None:
         state = {}
     owned = state.get("owned")
     _owned.clear()
-    if isinstance(owned, list):
-        _owned.update(a for a in owned if isinstance(a, str))
+    if isinstance(owned, list):  # a bare address from an older hypruse proves nothing
+        _owned.update(a for a in owned if hyprctl.is_window_key(a))
     seat = state.get("seat")
     seat = seat if isinstance(seat, dict) else {}
     cursor = seat.get("cursor")
     is_pair = isinstance(cursor, list | tuple) and len(cursor) == 2
     _seat["cursor"] = tuple(cursor) if is_pair else None
     active = seat.get("active")
-    _seat["active"] = active if isinstance(active, str) else None
+    _seat["active"] = active if hyprctl.is_window_key(active) else None
     ts = state.get("notify_ts")
     _last_notify["ts"] = float(ts) if isinstance(ts, int | float) else 0.0
 
@@ -165,7 +169,7 @@ def _client_in_scope(client: dict[str, Any], scope: tuple[str, Any]) -> bool:
             vals is None or _client_in_scope(client, vals)
         )
     if kind == "launched":
-        return client.get("address") in _owned
+        return hyprctl.window_key(client) in _owned
     if kind == "class":
         return client.get("class") in vals
     ws = client.get("workspace", {}) or {}
@@ -978,7 +982,9 @@ def remember_seat() -> None:
         return
     with contextlib.suppress(Exception):
         _seat["cursor"] = hyprctl.cursor_pos()
-        _seat["active"] = (hyprctl.query("activewindow") or {}).get("address")
+        # the window, not its address: a new window at a recycled address
+        # after the human closed theirs is a change of focus
+        _seat["active"] = hyprctl.window_key(hyprctl.query("activewindow") or {})
 
 
 def guard_seat() -> None:
@@ -991,7 +997,7 @@ def guard_seat() -> None:
         return
     try:
         cursor = hyprctl.cursor_pos()
-        active = (hyprctl.query("activewindow") or {}).get("address")
+        active = hyprctl.window_key(hyprctl.query("activewindow") or {})
     except Exception as exc:
         raise TrustError(
             f"cannot read the seat to check for contention ({exc}); refusing "

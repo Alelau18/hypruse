@@ -305,7 +305,25 @@ def test_acting_tools_refresh_the_known_windows(clients, monkeypatch):
     monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: None)
     monkeypatch.setattr(srv.trust, "remember_seat", lambda: None)
     srv.hypr("workspace", workspace="3")
-    assert srv.known_clients_state() == ["0xa"]
+    assert srv.known_clients_state() == [srv.hyprctl.window_key(KITTY)]
+
+
+def test_a_new_window_at_a_closed_ones_address_is_new(clients, monkeypatch):
+    # V47/V50: Hyprland hands a freed window's address to the next window;
+    # keyed on the address alone, the new one counted as already seen
+    srv._note_clients()
+    reborn = dict(LG, address=KITTY["address"], stableId="later")
+    clients["clients"] = [reborn]
+    _no_stream(monkeypatch)
+    assert srv.wait_for("window_open", match="lg-remote")["already"] is True
+
+
+def test_a_known_list_of_bare_addresses_means_none_known():
+    # written by an older hypruse: it says nothing about the windows now
+    srv.restore_known_clients(["0xa", "0xb"])
+    assert srv.known_clients_state() is None
+    srv.restore_known_clients(["0xa#1"])
+    assert srv.known_clients_state() == ["0xa#1"]
 
 
 # --- window_close: the event carries only the address -----------------------------

@@ -708,7 +708,8 @@ def test_a_window_class_in_a_notice_never_becomes_a_batch(hyprland, monkeypatch)
     monkeypatch.setenv("HYPRUSE_MARK", "1")
     from hypruse import trust
 
-    trust.note_launched("0xabc", "x;dispatch exec touch /tmp/pwn;/--batch")
+    trust.note_launched({"address": "0xabc", "stableId": "1"},
+                        "x;dispatch exec touch /tmp/pwn;/--batch")
     notices = [r for r in hyprland.requests if b"notify" in r]
     assert notices and all(r.startswith(b"/notify ") for r in notices)
     assert not any(r.startswith(b"[[BATCH]]") for r in hyprland.requests)

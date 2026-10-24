@@ -19,9 +19,10 @@ def clean_env(monkeypatch):
     trust._seat["active"] = None
 
 
-def client(addr="0xa", cls="kitty", ws=1):
+def client(addr="0xa", cls="kitty", ws=1, sid=None):
     return {"address": addr, "class": cls, "at": [0, 0], "size": [100, 100],
-            "workspace": {"id": ws}, "mapped": True, "pid": 1, "title": ""}
+            "workspace": {"id": ws}, "mapped": True, "pid": 1, "title": "",
+            "stableId": sid or addr[2:]}
 
 
 # --- confinement ------------------------------------------------------------
@@ -35,10 +36,13 @@ def test_no_confine_allows_everything(monkeypatch):
 
 def test_confine_launched_only_owned(monkeypatch):
     monkeypatch.setenv("HYPRUSE_CONFINE", "launched")
-    trust.note_launched("0xowned")
+    trust.note_launched(client(addr="0xowned"))
     trust.guard_client(client(addr="0xowned"))  # ok
     with pytest.raises(trust.TrustError, match="confinement scope"):
         trust.guard_client(client(addr="0xother"))
+    # F6/F28: the same address, handed to a later window, is not the window
+    with pytest.raises(trust.TrustError, match="confinement scope"):
+        trust.guard_client(client(addr="0xowned", sid="later"))
 
 
 def test_confine_by_class(monkeypatch):
@@ -282,8 +286,8 @@ def test_note_launched_tags_and_notifies_when_marking(monkeypatch):
     dispatched, notes = [], []
     monkeypatch.setattr(trust.hyprctl, "dispatch", lambda *a: dispatched.append(a))
     monkeypatch.setattr(trust.hyprctl, "notify", lambda msg, **k: notes.append(msg))
-    trust.note_launched("0xnew", "firefox")
-    assert "0xnew" in trust.owned()
+    trust.note_launched(client(addr="0xnew"), "firefox")
+    assert "0xnew#new" in trust.owned()
     assert ("tagwindow", "+hypruse-owned", "address:0xnew") in dispatched
     assert notes == ["hypruse opened firefox"]  # visible presence toast
 
@@ -292,8 +296,8 @@ def test_note_launched_no_tag_or_notify_without_marking(monkeypatch):
     dispatched, notes = [], []
     monkeypatch.setattr(trust.hyprctl, "dispatch", lambda *a: dispatched.append(a))
     monkeypatch.setattr(trust.hyprctl, "notify", lambda *a, **k: notes.append(a))
-    trust.note_launched("0xnew", "firefox")
-    assert "0xnew" in trust.owned()  # still tracked for `launched` confinement
+    trust.note_launched(client(addr="0xnew"), "firefox")
+    assert "0xnew#new" in trust.owned()  # still tracked for `launched` confinement
     assert dispatched == [] and notes == []  # but no tag, no toast
 
 
@@ -1110,3 +1114,17 @@ def test_a_layer_that_may_take_no_input_does_not_let_the_pointer_through(monkeyp
         {"namespace": "hyprshade", "kind": "", "level": "overlay",
          "geometry": [0, 0, 1920, 1080]}])
     assert trust.other_window_at(1000, 100, "0xme")["address"] == "0xb"
+
+
+def test_a_new_window_at_the_focused_windows_old_address_moves_the_seat(monkeypatch):
+    # V13: the human closes the focused window and a new one is focused at
+    # the same address, the cursor where it was
+    monkeypatch.setenv("HYPRUSE_STRICT", "1")
+    active = {"address": "0xa", "stableId": "1"}
+    monkeypatch.setattr(trust.hyprctl, "cursor_pos", lambda: (5, 5))
+    monkeypatch.setattr(trust.hyprctl, "query", lambda cmd: active)
+    trust.remember_seat()
+    trust.guard_seat()  # nothing moved
+    active = {"address": "0xa", "stableId": "2"}
+    with pytest.raises(trust.TrustError, match="seat moved"):
+        trust.guard_seat()
