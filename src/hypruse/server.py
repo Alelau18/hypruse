@@ -2128,6 +2128,11 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
     safety.touch(f"hypr:{action}")
     _check_then(then)
     target = _select(target.strip()) if hyprctl.is_selector(target) else target
+    if target and journal.enabled():
+        # which window a bare address is, for replay: a selector was noted
+        # when it resolved, but an address never goes through _resolve_window
+        with contextlib.suppress(Exception):
+            journal.note_target(_client_by_address(_addr(target).removeprefix("address:")))
     _note_clients()  # what wait_for(window_open) counts as already there
     workspace = workspace.strip()
     # every argument is checked before any guard runs and before anything

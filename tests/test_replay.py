@@ -555,3 +555,36 @@ def test_an_acted_on_window_is_recorded_by_its_key(tmp_path, monkeypatch):
     act(window="0xabc")
     (entry,) = list(journal.read(path))
     assert entry["targets"] == {"0xabc": {"key": "0xabc#12", "class": "kitty"}}
+
+
+def test_a_hypr_target_given_by_address_is_recorded_and_checked(tmp_path, live, calls,
+                                                                monkeypatch, capsys):
+    # review of 3c2505d: a bare-address hypr target never went through
+    # _resolve_window, so its entry kept no key and a recycled address passed
+    from hypruse import journal
+
+    path = tmp_path / "journal.ndjson"
+    monkeypatch.setenv("HYPRUSE_JOURNAL", str(path))
+    monkeypatch.setattr(journal, "_seq", 0)
+    monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
+    win = {"address": "0xabc", "stableId": "12", "class": "kitty"}
+    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: [win])
+    monkeypatch.setattr(srv, "_close_and_confirm", lambda target: f"closed {target}")
+    srv.TOOLS["hypr"]("close_window", target="0xabc")  # the real tool: `calls` stubs srv.hypr
+    (entry,) = [e for e in journal.read(path) if e.get("tool") == "hypr"]
+    assert entry["targets"]["0xabc"]["key"] == "0xabc#12"
+    monkeypatch.delenv("HYPRUSE_JOURNAL")
+    recycled = {"address": "0xabc", "stableId": "99", "class": "firefox"}
+    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: [recycled])
+    assert execute(path, "--yes") == 1
+    assert calls == [] and "belongs to another window: 0xabc" in capsys.readouterr().out
+
+
+def test_a_key_recorded_for_another_window_does_not_vouch_for_the_target(tmp_path, live,
+                                                                         monkeypatch, capsys):
+    # then='ui' recorded the focused window's key, not the target's
+    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: [{"address": "0xabc"}])
+    path = _targeted(tmp_path, {"0xfocused": {"key": "0xfocused#3", "class": "kitty"}})
+    cli.replay([str(path)])
+    out = capsys.readouterr().out
+    assert "(address only, no key recorded)" in out and "checked by address only" in out

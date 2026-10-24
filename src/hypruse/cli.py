@@ -653,11 +653,19 @@ def _stale(entries: list[dict[str, Any]]) -> list[str]:
     return sorted(gone)
 
 
+def _unkeyed(entry: dict[str, Any]) -> list[str]:
+    """The entry's own window/target addresses with no key recorded for
+    them: an older journal, or a window hypruse could not read when the
+    call ran. A key recorded for some other window (then='ui' reads the
+    focused one) says nothing about these."""
+    targets = entry.get("targets") if isinstance(entry.get("targets"), dict) else {}
+    return [a for a in _addresses(entry)
+            if not isinstance(targets.get(a.lower()), dict) or not targets[a.lower()].get("key")]
+
+
 def _unidentified(entries: list[dict[str, Any]]) -> list[Any]:
-    """Seqs of entries that name a window but not which one it was (written
-    before the journal kept window identities): checked by address only."""
-    return [e.get("seq") for e in entries
-            if _addresses(e) and not isinstance(e.get("targets"), dict)]
+    """Seqs of entries whose own window is checked by address only."""
+    return [e.get("seq") for e in entries if _unkeyed(e)]
 
 
 def _replay_args(entry: dict[str, Any]) -> dict[str, Any]:
@@ -840,7 +848,7 @@ def replay(argv: list[str]) -> int:
         seq = _safe(entry.get("seq"))
         line = _fmt_args(_call_args(entry), entry.get("tool"), full=True)
         dry = "  (dry)" if entry.get("dry") else ""
-        if _addresses(entry) and not isinstance(entry.get("targets"), dict):
+        if _unkeyed(entry):
             dry += "  (address only, no key recorded)"
         print(f"  {seq:>5}  {_safe(entry.get('tool'))} {line}{dry}")
 
@@ -857,8 +865,10 @@ def replay(argv: list[str]) -> int:
 
     unidentified = _unidentified(plan)
     if unidentified:
-        print(f"\nseq {unidentified} name a window by address only (recorded before the "
-              "journal kept which window it was): a later window at that address would pass")
+        print(f"\nseq {unidentified} name a window with no key recorded for it (a journal from "
+              "before hypruse kept window keys, or a window it could not read when the call "
+              "ran), so it is checked by address only: a later window at that address would "
+              "pass")
     gone = _stale(plan)
     if gone:
         print(f"\n{len(gone)} recorded window(s) no longer exist, or their address now "
