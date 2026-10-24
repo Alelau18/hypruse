@@ -552,12 +552,17 @@ def _proven_frame(
     conn, pid = (bus.conn_pid(app[0]), client.get("pid")) if app is not None else (None, None)
     if app is None or not a11y.same_app(conn, pid):
         return None
-    if conn != pid and a11y.descends_from(conn, pid):
+    if conn != pid and not (a11y.descends_from(pid, conn) or a11y.same_flatpak(conn, pid)):
         # a root on another process is only found by the title fallback,
-        # and a process the window's own one started (anything run in a
-        # terminal, which has no tree of its own) can register one with a
-        # frame named after the window: same_app accepts it as a
-        # descendant, and typing then went into its field, not the window
+        # and any process run in a terminal (which has no tree of its own)
+        # can register one with a frame named after the window. same_app
+        # accepts it whether it is still the terminal's descendant or has
+        # detached (setsid, a double fork, a tmux server) but kept the
+        # terminal's app scope, and typing then went into its field. The
+        # root proves the window only when its process started the
+        # window's, or both run in one Flatpak instance (where the bus sees
+        # the sandbox's proxy). Children of a proven root still follow
+        # same_app (a11y.Owner): WebKitGTK's web process is a child.
         return None
     peers = _peers(client)
     if peers is None:

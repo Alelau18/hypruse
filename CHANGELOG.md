@@ -249,8 +249,10 @@ All notable changes to this project are documented here. The format follows
   a root that a process started in it registered, with a frame named
   after the terminal's title; `same_app` accepts a descendant of the
   window's process, so background typing went into that process's field
-  instead of the terminal. A root on another process whose connection
-  descends from the window's process is no longer the window's.
+  instead of the terminal, and one that had detached (`setsid`, a tmux
+  server) but kept the terminal's app scope passed the same way. A root
+  on another process now proves the window only when its process started
+  the window's, or both run in one Flatpak instance.
 - **The journal's text digest is keyed.** It was an unsalted SHA-256
   prefix beside the exact length, so a four-digit PIN came straight back
   from it. It is now an HMAC-SHA256 prefix (`hmac`, not `sha256`) under a

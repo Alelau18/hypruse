@@ -1482,8 +1482,30 @@ def test_a_root_a_process_inside_the_window_registered_proves_nothing(monkeypatc
     monkeypatch.setattr(srv, "_peers", lambda client: [])
     monkeypatch.setattr(srv.a11y, "window_frame_for", lambda *a, **k: ("evil", "/frame"))
     assert REAL_PROVEN_FRAME(Bus(), dict(CLIENT), ("evil", "/root")) is None
-    # the window's own process, or one that started it, still proves the root
+    # a process that started the window's still proves the root
     parents.clear()
+    parents[CLIENT["pid"]] = 4300
+    assert REAL_PROVEN_FRAME(Bus(), dict(CLIENT), ("evil", "/root")) == ("evil", "/frame")
+
+
+def test_a_root_whose_only_tie_is_the_windows_app_scope_proves_nothing(monkeypatch):
+    # V11, judged partial: a process that detached from the terminal's tree
+    # (setsid -f, a double fork, a tmux server) keeps its app-*.scope, and
+    # same_app's scope clause proved its root
+    class Bus:
+        def conn_pid(self, svc):
+            return 4300
+
+    scope = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-kitty-1.scope"
+    monkeypatch.setattr(srv.a11y, "_ppid", lambda pid: {4300: 1}.get(pid, 1))  # reparented
+    monkeypatch.setattr(srv.a11y, "_cgroup", lambda pid: scope)
+    monkeypatch.setattr(srv.a11y, "_flatpak_instance", lambda pid: None)
+    monkeypatch.setattr(srv, "_peers", lambda client: [])
+    monkeypatch.setattr(srv.a11y, "window_frame_for", lambda *a, **k: ("evil", "/frame"))
+    assert srv.a11y.same_app(4300, CLIENT["pid"])  # the tie the root proof used
+    assert REAL_PROVEN_FRAME(Bus(), dict(CLIENT), ("evil", "/root")) is None
+    # one Flatpak instance still proves it: the bus sees the sandbox's proxy
+    monkeypatch.setattr(srv.a11y, "_flatpak_instance", lambda pid: "1234")
     assert REAL_PROVEN_FRAME(Bus(), dict(CLIENT), ("evil", "/root")) == ("evil", "/frame")
 
 

@@ -277,6 +277,14 @@ def descends_from(pid: int | None, ancestor: int | None) -> bool:
     return False
 
 
+def same_flatpak(a: int | None, b: int | None) -> bool:
+    """Whether two processes run in one Flatpak instance."""
+    if not a or not b:
+        return False
+    fa = _flatpak_instance(a)
+    return fa is not None and fa == _flatpak_instance(b)
+
+
 def same_app(conn_pid: int | None, window_pid: int | None) -> bool:
     """Whether an accessibility connection's process belongs to the same
     app instance as a window's process: the same process, one an ancestor

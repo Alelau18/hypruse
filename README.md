@@ -349,7 +349,7 @@ By default the screenshot tool writes the image under `$XDG_RUNTIME_DIR/hypruse/
 
 ```sh
 uv sync --group dev
-uv run pytest            # unit tests, no compositor needed
+uv run pytest            # unit tests, no compositor needed (a bare `python -m pytest` may import an installed hypruse instead of src/, and the suite stops)
 uv run pytest -m e2e --override-ini addopts=   # live seat-safe checks
 uv run pytest -m background --override-ini addopts=   # live: drives yad forms on the agent's workspaces
 uv run python scripts/e2e_input.py             # supervised: takes the seat ~10s

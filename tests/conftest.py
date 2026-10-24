@@ -7,9 +7,20 @@ anything that touches the machine gets neutralized by default and a
 test that wants the interesting state opts in explicitly.
 """
 
+from pathlib import Path
+
 import pytest
 
+import hypruse
 from hypruse import a11y, dbuswire, hyprctl, journal, server, session, trust
+
+# A bare `python -m pytest` can import an installed hypruse (a distro
+# package in site-packages) instead of this checkout, and then every test
+# runs against code that is not the one being changed.
+_SRC = Path(__file__).resolve().parent.parent / "src"
+if not Path(hypruse.__file__).resolve().is_relative_to(_SRC):
+    pytest.exit(f"the tests imported hypruse from {hypruse.__file__}, not {_SRC}: run them "
+                "with `uv run pytest` (or PYTHONPATH=src)", returncode=2)
 
 
 @pytest.fixture(autouse=True)
