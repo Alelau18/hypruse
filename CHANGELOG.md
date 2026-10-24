@@ -30,9 +30,10 @@ All notable changes to this project are documented here. The format follows
   confinement, the auth interlock, the session lock and the background
   policy: refused under `HYPRUSE_BACKGROUND=1`, judged by the point like a
   click in automatic mode), rehearse under dry run, and are journaled. An
-  `up` with no x,y of the button hypruse holds is never refused, since it
-  only ends a press that was allowed and refusing it would strand the
-  button; an `up` elsewhere is guarded like a move.
+  `up` with no x,y of the button hypruse holds always ends the hold, since
+  refusing it would strand the button: the pointer guard checks it right
+  before the release, and a refusal releases it back where the `down`
+  pressed. An `up` elsewhere is guarded like a move.
   The CLI has `pointer down [X Y] [--button B]`, `pointer up [X Y]
   [--button B]` and `pointer click ... --hold-ms N`; a shell `down`
   carries over to the next verb, and `hypruse stop` releases it. The MCP
@@ -297,9 +298,12 @@ All notable changes to this project are documented here. The format follows
   the same way. The same guards now run again right before the press,
   scroll or release, under the seat lock; a refusal names the guard and
   delivers nothing, and a refused drop is released back where it
-  started. That includes `pointer up` at a point, the drop of a drag the
-  caller paces: refused there, the button is released back where the
-  cursor was.
+  started. That includes `pointer up`, the drop of a drag the caller
+  paces: refused at a point, the button is released back where the cursor
+  was; with no point, ending hypruse's own hold, back where the `down`
+  pressed (the CLI keeps that point with the hold), since that hold must
+  not stay down. When moving back fails, the error says where the button
+  is.
 - **Actions on "the active window" are pinned to the window checked.**
   `hypr toggle_floating` and `fullscreen` with no target acted on
   whatever had the focus when the dispatch landed. Floating (and

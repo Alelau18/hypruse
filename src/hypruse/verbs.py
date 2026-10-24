@@ -444,9 +444,10 @@ def run(tool: str, kwargs: dict[str, Any], *, json_out: bool = False,
     journal.set_source("cli")
     journal.start(__version__, source="cli")
     cli_state.restore()
-    # a `pointer down` outlives its process: adopt it, so this verb's
-    # SIGTERM cleanup releases it and a `pointer up` here clears it
-    hinput.restore_held(cli_state.flag("held_button"))
+    # a `pointer down` outlives its process: adopt it, and where it pressed,
+    # so this verb's SIGTERM cleanup releases it and a `pointer up` here
+    # clears it (or, refused, releases it back there)
+    hinput.restore_held(cli_state.flag("held_button"), cli_state.flag("held_at"))
     # and the windows the agent has seen, which wait_for(window_open)
     # needs to tell a window that opened since the last action
     server.restore_known_clients(cli_state.flag("known_clients"))
@@ -463,6 +464,7 @@ def run(tool: str, kwargs: dict[str, Any], *, json_out: bool = False,
         return _fail("error", f"{type(exc).__name__}: {exc}", EXIT_ERROR)
     finally:
         cli_state.set_flag("held_button", hinput.held_button())
+        cli_state.set_flag("held_at", hinput.held_at())
         cli_state.set_flag("known_clients", server.known_clients_state())
         cli_state.save()
         if lock is not None:

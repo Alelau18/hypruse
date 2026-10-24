@@ -40,6 +40,7 @@ def vp(monkeypatch):
     monkeypatch.setattr(hinput, "_vp", p)
     monkeypatch.setattr(hinput, "_held_button", None)
     monkeypatch.setattr(hinput, "_down", None)
+    monkeypatch.setattr(hinput, "_down_at", None)
     monkeypatch.setattr(hinput.hyprctl, "dispatch", lambda *a: p.events.append(("warp",) + a[1:]))
     monkeypatch.setattr(hinput.time, "sleep", lambda s: p.events.append(("sleep", s)))
     return p
@@ -187,12 +188,14 @@ def tool(monkeypatch):
     monkeypatch.setattr(srv.hyprctl, "cursor_pos", lambda: (7, 8))
     monkeypatch.setattr(hinput, "_held_button", None)
     monkeypatch.setattr(hinput, "_down", None)
+    monkeypatch.setattr(hinput, "_down_at", None)
 
     def down(x=None, y=None, button="left", precheck=None):
         if precheck is not None:
             precheck()
         calls["input"].append(("down", x, y, button))
         hinput.restore_held(button)
+        hinput._down_at = (x, y) if x is not None else (7, 8)  # as the input layer records it
 
     def up(x=None, y=None, button="left", precheck=None):
         if precheck is not None:
@@ -355,19 +358,24 @@ def test_a_cli_hold_is_carried_to_the_next_process(tmp_path, monkeypatch):
 
     def pointer(**kw):
         seen.append(hinput.held_button())
+        seen_at.append(hinput.held_at())
         if kw["action"] == "down":
-            hinput.restore_held("left")
+            hinput.restore_held("left", (10, 20))
         else:
             hinput.restore_held(None)
         return f"{kw['action']} ok"
 
+    seen_at = []
     monkeypatch.setattr(srv, "pointer", pointer)
     assert verbs.run("pointer", {"action": "down"}) == 0
-    assert json.loads(cli_state.path().read_text())["flags"]["held_button"] == "left"
+    flags = json.loads(cli_state.path().read_text())["flags"]
+    assert flags["held_button"] == "left" and flags["held_at"] == [10.0, 20.0]
     hinput.restore_held(None)  # a new process starts with nothing held
     assert verbs.run("pointer", {"action": "up"}) == 0
     assert seen == [None, "left"]  # the second process adopted the hold
-    assert json.loads(cli_state.path().read_text())["flags"]["held_button"] is None
+    assert seen_at == [None, (10.0, 20.0)]  # and where it pressed, for a refused release
+    flags = json.loads(cli_state.path().read_text())["flags"]
+    assert flags["held_button"] is None and flags["held_at"] is None
 
 
 def test_stop_releases_a_hold_a_shell_down_left(tmp_path, monkeypatch, capsys):
@@ -435,7 +443,7 @@ def test_release_held_reports_a_failed_release_and_keeps_the_hold(monkeypatch):
     assert hinput.release_held() is False  # nothing held, nothing sent
 
 
-# --- an `up` that ends the hold is never refused ---------------------------------------
+# --- an `up` that ends the hold is never left down ------------------------------------
 
 
 def _refusing(monkeypatch, calls):
@@ -447,12 +455,112 @@ def _refusing(monkeypatch, calls):
     monkeypatch.setattr(srv, "_pointer_policy", refuse)
 
 
-def test_a_bare_up_of_the_held_button_always_releases(tool, monkeypatch):
+def test_a_bare_up_of_the_held_button_is_checked_only_right_before_the_release(tool):
+    # review of dab6be9: the drop of a paced drag (down, moves, bare up) went
+    # unchecked; the guards that would refuse before anything happens stay off
     srv.pointer("down", x=1, y=2)
-    _refusing(monkeypatch, tool)
+    tool["guard"].clear()
     out = srv.pointer("up")
-    assert tool["input"][-1] == ("up", None, None, "left")
+    assert tool["guard"] == [(None, None)]  # once, at delivery, at the cursor
     assert out.startswith("up ok") and hinput.held_button() is None
+
+
+def test_a_bare_up_refused_at_delivery_says_it_released_where_it_pressed(tool, monkeypatch):
+    srv.pointer("down", x=1, y=2)
+    _refusing(monkeypatch, tool)  # the seat and lock guards would refuse with a plain "refused"
+    with pytest.raises(srv.trust.TrustError, match=r"the pointer guard refused the release "
+                       r"\(cancelled: released back where it was pressed, at \(1, 2\)\) right "
+                       "before it was delivered: refused"):
+        srv.pointer("up")
+
+
+def test_a_bare_up_with_nothing_held_says_nothing_was_released(tool, monkeypatch):
+    answers = iter([None])
+
+    def guard(x, y, allow_auth=False):  # passes the first check, refuses at delivery
+        if next(answers, "refuse") == "refuse":
+            raise srv.trust.TrustError("refused")
+
+    monkeypatch.setattr(srv.trust, "guard_pointer", guard)
+    with pytest.raises(srv.trust.TrustError, match=r"the release \(nothing was released\)"):
+        srv.pointer("up")
+
+
+def _no(*a):
+    raise srv.trust.TrustError("a dialog mapped under the cursor")
+
+
+def _warps(vp):
+    return [e[1:] for e in vp.events if e[0] == "warp"]
+
+
+def test_a_refused_bare_up_goes_back_to_where_the_down_pressed(vp):
+    hinput.button_down(10, 20)
+    hinput.move(50, 60)  # the paced drag
+    with pytest.raises(srv.trust.TrustError, match="mapped"):
+        hinput.button_up(precheck=_no)
+    assert _warps(vp)[-1] == ("10", "20")
+    assert vp.events[-1][:2] == ("left", RELEASED) and hinput.held_button() is None
+
+
+def test_a_refused_bare_up_whose_press_point_is_unknown_still_releases(vp):
+    hinput.button_down()  # the cursor cannot be read here
+    assert hinput.held_at() is None
+    with pytest.raises(srv.trust.TrustError, match="mapped"):
+        hinput.button_up(precheck=_no)
+    assert _warps(vp) == []  # released where it is
+    assert vp.events[-1][:2] == ("left", RELEASED) and hinput.held_button() is None
+
+
+def test_a_refused_bare_up_that_cannot_go_back_releases_and_says_where(vp, monkeypatch):
+    hinput.button_down(10, 20)
+
+    def stuck(x, y):
+        raise hinput.WireError("compositor gone")
+
+    monkeypatch.setattr(hinput, "move", stuck)
+    with pytest.raises(hinput.InputError, match=r"moving back to \(10, 20\), where the left "
+                       "button was pressed, failed .* released where the cursor is"):
+        hinput.button_up(precheck=_no)
+    assert vp.events[-1][:2] == ("left", RELEASED) and hinput.held_button() is None
+
+
+def test_a_refused_bare_up_with_nothing_held_releases_nothing(vp):
+    with pytest.raises(srv.trust.TrustError, match="mapped"):
+        hinput.button_up(precheck=_no)
+    assert vp.events == []
+
+
+def test_a_release_at_a_point_that_cannot_go_back_says_the_button_is_still_down(vp,
+                                                                                monkeypatch):
+    hinput.button_down(10, 20)
+    monkeypatch.setattr(hinput.hyprctl, "cursor_pos", lambda: (40, 50))
+    moved = []
+
+    def move(x, y):
+        moved.append((x, y))
+        if (x, y) == (40, 50):
+            raise hinput.WireError("compositor gone")
+
+    monkeypatch.setattr(hinput, "move", move)
+    with pytest.raises(hinput.InputError, match=r"moving back to \(40, 50\) failed .* the left "
+                       r"button was not released; the cursor is still at \(5, 6\)"):
+        hinput.button_up(5, 6, precheck=_no)
+    buttons = [e[:2] for e in vp.events if e[0] == "left"]
+    assert moved == [(5, 6), (40, 50)] and buttons == [("left", PRESSED)]
+    assert hinput.held_button() == "left"  # a bare up ends it, back where it was pressed
+
+
+@pytest.mark.parametrize(("button", "at", "kept"), [
+    ("left", [10, 20], (10.0, 20.0)),  # JSON brings a list back
+    ("left", ["10", 20], None),
+    ("left", [10, float("nan")], None),
+    ("left", [True, 2], None),
+    (None, [10, 20], None),
+])
+def test_a_restored_press_point_is_two_numbers_or_none(vp, button, at, kept):
+    hinput.restore_held(button, at)
+    assert hinput.held_at() == kept
 
 
 def test_an_up_elsewhere_or_of_another_button_keeps_the_guards(tool, monkeypatch):

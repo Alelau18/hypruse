@@ -1172,6 +1172,18 @@ def _pointer_policy(
 _POINTER_ACTIONS = ("move", "click", "down", "up", "drag", "scroll")
 
 
+def _release_refused(x: float | None, ending_hold: bool) -> str:
+    """What hinput.button_up does instead of a release its check refuses."""
+    if x is not None:
+        return "cancelled: released back where the cursor was"
+    if not ending_hold:
+        return "nothing was released"
+    at = hinput.held_at()
+    if at is None:
+        return "released where the cursor is: where it was pressed is not known"
+    return f"cancelled: released back where it was pressed, at ({at[0]:.0f}, {at[1]:.0f})"
+
+
 def _sync_cli_hold() -> None:
     """Tell the CLI's state file about a hold this server made or ended. A
     shell verb run beside the server reads its hold from there: without
@@ -1185,6 +1197,7 @@ def _sync_cli_hold() -> None:
 
     with contextlib.suppress(Exception):
         cli_state.set_flag_in_file("held_button", hinput.held_button())
+        cli_state.set_flag_in_file("held_at", hinput.held_at())
 
 
 @journal.journaled("act")
@@ -1210,7 +1223,9 @@ def pointer(
     10000 keeps the button down that long before releasing) | 'down' /
     'up' (press, or release, `button` and leave it there; optional x,y
     first: down, move, screenshot, up is a drag you pace yourself, and a
-    move while a button is down is guarded like a drag) | 'drag' (x,y →
+    move while a button is down is guarded like a drag; an up refused
+    right before its release lets go away from the refused point, a bare
+    up of the held button where it was pressed) | 'drag' (x,y →
     to_x,to_y holding button, over `duration_ms` (default 200, max 5000)
     in `steps` moves (default 12, max 100); slow it down for an app that
     samples the mouse per frame) | 'scroll' (scroll_dy notches, positive =
@@ -1233,11 +1248,12 @@ def pointer(
     x, y, to_x, to_y = (None if v is None else int(round(v)) for v in (x, y, to_x, to_y))
     _check_then(then)
     _note_clients()  # what wait_for(window_open) counts as already there
-    # releasing the button hypruse holds, where the cursor is, only ends a
-    # press that was allowed when it was made: refusing it (the human moved,
-    # the session locked, the cursor drifted over another window) would
-    # strand the button down. An `up` elsewhere is a move first and is
-    # guarded like one.
+    # releasing the button hypruse holds, where the cursor is, ends a press
+    # that was allowed when it was made: refusing it before anything happens
+    # (the human moved, the session locked) would strand the button down.
+    # The pointer guard still runs right before that release, and a refusal
+    # releases it back where it was pressed instead (hinput.button_up). An
+    # `up` elsewhere is a move first and is guarded like one.
     held_at_start = hinput.held_button()
     ending_hold = (action == "up" and x is None and y is None
                    and hinput.held_button() is not None and hinput.held_button() == button)
@@ -1315,11 +1331,11 @@ def pointer(
             hinput.button_down(x, y, button=button, precheck=_at_delivery(
                 "the pointer guard", "the press", lambda: trust.guard_pointer(x, y, allow_auth)))
         elif not dry:
-            # an up ending the recorded hold is never refused; any other is
-            # the drop of a caller-paced drag, checked again at the release
-            hinput.button_up(x, y, button=button, precheck=None if ending_hold else _at_delivery(
-                "the pointer guard", "the release (cancelled: released back where the cursor "
-                "was)", lambda: trust.guard_pointer(x, y, allow_auth)))
+            # a release is the drop of a caller-paced drag (down, moves, up),
+            # checked again right before it lands, the up ending the hold too
+            hinput.button_up(x, y, button=button, precheck=_at_delivery(
+                "the pointer guard", f"the release ({_release_refused(x, ending_hold)})",
+                lambda: trust.guard_pointer(x, y, allow_auth)))
     elif action == "drag":
         if None in (x, y, to_x, to_y):
             raise ValueError("drag needs x, y, to_x, to_y")

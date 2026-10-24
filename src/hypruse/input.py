@@ -16,6 +16,7 @@ with no uinput scancode guessing.
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 import shutil
 import subprocess
@@ -179,6 +180,11 @@ _held_button: str | None = None
 # are about. Kept apart so a drag in flight on another worker thread does
 # not read as a `down` waiting for its `up`.
 _down: str | None = None
+# Where that `down` pressed: a release of it the guards refuse goes back
+# there, as a refused drop goes back to where a drag started. None when the
+# cursor could not be read at the press, or for a hold from a CLI state
+# that recorded no point.
+_down_at: tuple[float, float] | None = None
 
 
 def release_held() -> bool:
@@ -196,14 +202,14 @@ def release_held() -> bool:
     True when a release was sent. A release that could not be sent leaves
     the hold on record, so whoever asked (`hypruse stop`, a stopped
     sequence) does not claim it was let go."""
-    global _held_button, _down
+    global _held_button, _down, _down_at
     if not _held_button:
         return False
     try:
         (_vp or VirtualPointer()).button(_held_button, RELEASED)
     except Exception:
         return False
-    _held_button = _down = None
+    _held_button = _down = _down_at = None
     return True
 
 
@@ -212,11 +218,21 @@ def held_button() -> str | None:
     return _down
 
 
-def restore_held(button: str | None) -> None:
-    """Adopt a hold an earlier CLI process left (cli_state), so this
-    process's SIGTERM cleanup releases it and a `pointer up` clears it."""
-    global _held_button, _down
+def held_at() -> tuple[float, float] | None:
+    """Where the held `down` pressed, when that is known."""
+    return _down_at if _down else None
+
+
+def restore_held(button: str | None, at: Any = None) -> None:
+    """Adopt a hold an earlier CLI process left (cli_state), and where it
+    pressed, so this process's SIGTERM cleanup releases it and a `pointer
+    up` clears it."""
+    global _held_button, _down, _down_at
     _held_button = _down = button if button in BUTTONS else None
+    point = at if isinstance(at, list | tuple) and len(at) == 2 else ()
+    numbers = all(isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v)
+                  for v in point)
+    _down_at = (float(point[0]), float(point[1])) if _down and point and numbers else None
 
 
 def _with_keyboard(fn: Callable[[VirtualKeyboard], Any]) -> Any:
@@ -424,10 +440,15 @@ def button_down(x: float | None = None, y: float | None = None, button: str = "l
             time.sleep(0.02)
         if precheck is not None:
             precheck()
+        at: tuple[float, float] | None = (x, y) if has_xy else None  # type: ignore[assignment]
+        if at is None:
+            with contextlib.suppress(Exception):
+                at = hyprctl.cursor_pos()
 
         def press(p: VirtualPointer) -> None:
-            global _held_button, _down
+            global _held_button, _down, _down_at
             _held_button = _down = button  # before the press: see drag
+            _down_at = at
             p.button(button, PRESSED)
 
         _with_pointer(press)
@@ -439,12 +460,18 @@ def button_up(x: float | None = None, y: float | None = None, button: str = "lef
     that is not down is harmless, so this never refuses for want of a
     matching `down` (a CLI `down` happened in another process).
 
-    `precheck` runs right before the release, as for click: a release at a
-    point is the drop of a drag the caller paces. If it refuses after the
-    move, the button is released back where the cursor was before this
-    call moved it, so nothing is dropped at (x, y); when that position
-    cannot be read, the call refuses before moving and the button stays
-    held (an up with no point releases it where it is)."""
+    `precheck` runs right before the release, as for click: a release is
+    the drop of a drag the caller paces. If it refuses, nothing is dropped
+    where it refused:
+    - at (x, y): the cursor goes back to where it was before this call
+      moved it and the button is released there; when that position cannot
+      be read, the call refuses before moving and the button stays held;
+    - with no point, ending the held `down`: the cursor goes back to where
+      that `down` pressed and the button is released there, or where the
+      cursor is when that point is not known, since a hold that ends is
+      never left down;
+    - with no point and no such hold: nothing is released.
+    A failed move back is an InputError that says where the button is."""
     journal.refuse_if_dry("button_up")
     _check_button(button)
     has_xy = _check_xy(x, y)
@@ -455,7 +482,8 @@ def button_up(x: float | None = None, y: float | None = None, button: str = "lef
             restore_held(None)
 
     with _seat_lock:
-        back = None
+        ending = not has_xy and _down == button
+        back = _down_at if ending else None
         if has_xy and precheck is not None:
             with contextlib.suppress(Exception):
                 back = hyprctl.cursor_pos()
@@ -470,10 +498,26 @@ def button_up(x: float | None = None, y: float | None = None, button: str = "lef
         if precheck is not None:
             try:
                 precheck()
-            except Exception:
+            except Exception as refusal:
                 if back is not None:
-                    move(*back)
-                    time.sleep(0.02)
+                    try:
+                        move(*back)
+                        time.sleep(0.02)
+                    except Exception as exc:
+                        where = f"({back[0]:.0f}, {back[1]:.0f})"
+                        if not ending:
+                            raise InputError(
+                                f"the release was refused ({refusal}), and moving back to "
+                                f"{where} failed ({exc}), so the {button} button was not "
+                                f"released; the cursor is still at ({x:.0f}, {y:.0f})"
+                            ) from exc
+                        release()  # the hold ends here whatever happens
+                        raise InputError(
+                            f"the release was refused ({refusal}), and moving back to {where}, "
+                            f"where the {button} button was pressed, failed ({exc}), so it was "
+                            "released where the cursor is"
+                        ) from exc
+                if back is not None or ending:
                     release()
                 raise
         release()
