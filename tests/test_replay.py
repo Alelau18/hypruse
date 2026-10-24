@@ -208,7 +208,7 @@ def test_execute_refuses_when_a_recorded_window_is_gone(tmp_path, live, calls, m
     }) + "\n")
     assert execute(path, "--yes") == 1
     out = capsys.readouterr().out
-    assert "no longer exist: 0xabc" in out
+    assert "belongs to another window: 0xabc" in out
     assert "--skip-missing" in out
     assert calls == []
 
@@ -499,3 +499,59 @@ def test_an_astral_escape_is_unambiguous():
     # review of C8: an astral code point printed as \u plus five hex digits
     assert cli._escape("\U000e0041") == "\\U000e0041"
     assert cli._escape("\u200b" + "1") == "\\u200b1"  # a BMP one stays \uXXXX
+
+
+# --- V48: a recorded window is the window, not its address ---------------------
+
+
+def _targeted(tmp_path, targets, address="0xabc"):
+    entry = {"v": 1, "seq": 1, "ts": "2026-08-02T09:00:00.000Z", "kind": "act",
+             "tool": "keyboard", "args": {"action": "key", "keys": "ctrl+s", "window": address},
+             "outcome": "ok", "ms": 1}
+    if targets is not None:
+        entry["targets"] = targets
+    path = tmp_path / "j.ndjson"
+    path.write_text(json.dumps(entry) + "\n")
+    return path
+
+
+def test_a_recycled_address_is_not_the_recorded_window(tmp_path, live, calls, monkeypatch,
+                                                      capsys):
+    monkeypatch.setattr(srv.hyprctl, "query",
+                        lambda cmd: [{"address": "0xabc", "stableId": "99", "class": "firefox"}])
+    path = _targeted(tmp_path, {"0xabc": {"key": "0xabc#12", "class": "kitty"}})
+    assert execute(path, "--yes") == 1
+    assert calls == [] and "belongs to another window: 0xabc" in capsys.readouterr().out
+
+
+def test_the_recorded_window_still_there_replays(tmp_path, live, calls, monkeypatch, capsys):
+    monkeypatch.setattr(srv.hyprctl, "query",
+                        lambda cmd: [{"address": "0xabc", "stableId": "12", "class": "kitty"}])
+    path = _targeted(tmp_path, {"0xabc": {"key": "0xabc#12", "class": "kitty"}})
+    assert execute(path, "--yes") == 0
+    assert [c[0] for c in calls] == ["keyboard"]
+
+
+def test_an_entry_without_a_recorded_key_says_so_in_the_plan(tmp_path, live, monkeypatch, capsys):
+    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: [{"address": "0xabc"}])
+    cli.replay([str(_targeted(tmp_path, None))])
+    assert "(address only, no key recorded)" in capsys.readouterr().out
+
+
+def test_an_acted_on_window_is_recorded_by_its_key(tmp_path, monkeypatch):
+    from hypruse import journal
+
+    path = tmp_path / "journal.ndjson"
+    monkeypatch.setenv("HYPRUSE_JOURNAL", str(path))
+    monkeypatch.setattr(journal, "_seq", 0)
+    win = {"address": "0xabc", "stableId": "12", "class": "kitty"}
+    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: [win])
+
+    @journal.journaled("act")
+    def act(window: str = "") -> str:
+        srv._resolve_window(window)
+        return "ok"
+
+    act(window="0xabc")
+    (entry,) = list(journal.read(path))
+    assert entry["targets"] == {"0xabc": {"key": "0xabc#12", "class": "kitty"}}

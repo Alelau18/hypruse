@@ -219,6 +219,11 @@ All notable changes to this project are documented here. The format follows
   activation, a systemd service) carries no token to its window. A single-instance app's window, which opens
   from the already-running process, is still found and moved, and the
   result says it is not counted as the agent's.
+- **Replay checks the window, not just its address.** The journal records
+  which window each call acted on (`targets`: its address with Hyprland's
+  `stableId`, and its class), and replay treats an address that now
+  belongs to another window as gone. An entry recorded before has no key
+  and says so in the plan ("address only, no key recorded").
 - **The replay plan is the plan that runs.** It cut every value at 120
   characters, so the tail of a long `launch` command ran unseen; it let
   newlines and bidi overrides through, so a value could draw plan lines

@@ -608,24 +608,41 @@ def _addresses(entry: dict[str, Any]) -> list[str]:
 
 
 def _stale(entries: list[dict[str, Any]]) -> list[str]:
-    """Recorded window addresses that no longer exist. Hyprland addresses
+    """Recorded window addresses whose window is gone. Hyprland addresses
     are per-window and not stable across a restart of the app, let alone a
     reboot, so a journal from yesterday mostly names windows that are gone.
-    An address CAN also be reused by a different window later, which no
-    check here can see: replay is for re-running a flow on a desktop that
-    still looks like the one recorded, not for reviving an old session."""
+    An address is also handed to a later window once its own closes: an
+    entry records each window's identity (journal.note_target), and an
+    address whose live window is another one counts as gone too. An entry
+    from before that was recorded is checked by address alone."""
     from hypruse import hyprctl
 
     wanted = {a for e in entries for a in _addresses(e)}
     if not wanted:
         return []
     try:
-        live = {c.get("address") for c in hyprctl.query("clients")}
+        live = {str(c.get("address", "")).lower(): hyprctl.window_key(c)
+                for c in hyprctl.query("clients")}
     except Exception as exc:
         raise SystemExit(
             f"cannot read the window list to check the journal's targets: {exc}"
         ) from exc
-    return sorted(wanted - live)
+    gone = set()
+    for e in entries:
+        targets = e.get("targets") if isinstance(e.get("targets"), dict) else {}
+        for a in _addresses(e):
+            recorded = targets.get(a.lower())
+            key = recorded.get("key") if isinstance(recorded, dict) else None
+            if a.lower() not in live or (key is not None and live[a.lower()] != key):
+                gone.add(a)
+    return sorted(gone)
+
+
+def _unidentified(entries: list[dict[str, Any]]) -> list[Any]:
+    """Seqs of entries that name a window but not which one it was (written
+    before the journal kept window identities): checked by address only."""
+    return [e.get("seq") for e in entries
+            if _addresses(e) and not isinstance(e.get("targets"), dict)]
 
 
 def _replay_args(entry: dict[str, Any]) -> dict[str, Any]:
@@ -808,6 +825,8 @@ def replay(argv: list[str]) -> int:
         seq = _safe(entry.get("seq"))
         line = _fmt_args(_call_args(entry), entry.get("tool"), full=True)
         dry = "  (dry)" if entry.get("dry") else ""
+        if _addresses(entry) and not isinstance(entry.get("targets"), dict):
+            dry += "  (address only, no key recorded)"
         print(f"  {seq:>5}  {_safe(entry.get('tool'))} {line}{dry}")
 
     blocked = _unreplayable(plan)
@@ -821,9 +840,14 @@ def replay(argv: list[str]) -> int:
         if args.execute:
             return 1
 
+    unidentified = _unidentified(plan)
+    if unidentified:
+        print(f"\nseq {unidentified} name a window by address only (recorded before the "
+              "journal kept which window it was): a later window at that address would pass")
     gone = _stale(plan)
     if gone:
-        print(f"\n{len(gone)} recorded window(s) no longer exist: {', '.join(gone)}")
+        print(f"\n{len(gone)} recorded window(s) no longer exist, or their address now "
+              f"belongs to another window: {', '.join(gone)}")
         if args.skip_missing:
             plan = [e for e in plan if not (set(_addresses(e)) & set(gone))]
             print(f"--skip-missing: {len(plan)} action(s) left")

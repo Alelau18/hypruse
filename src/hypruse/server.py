@@ -475,7 +475,9 @@ def _resolve_window(window: str) -> dict[str, Any]:
         target = (hyprctl.query("activewindow") or {}).get("address")
     if not target:
         raise ValueError("no active window; pass a window address from desktop()")
-    return hyprctl.select_client(target, clients)
+    client = hyprctl.select_client(target, clients)
+    journal.note_target(client)  # which window this was, for replay (address alone is reused)
+    return client
 
 
 def _select(window: str) -> str:

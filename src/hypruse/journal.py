@@ -427,6 +427,7 @@ def record(
     error: str = "",
     seq: int | None = None,
     parent: int | None = None,
+    targets: dict[str, Any] | None = None,
 ) -> None:
     """Write one tool call to the journal. No-op when recording is off."""
     if not enabled():
@@ -447,6 +448,8 @@ def record(
         entry["source"] = _source
     if parent is not None:
         entry["parent"] = parent
+    if targets:
+        entry["targets"] = targets
     if dry_run():
         entry["dry"] = True
     if error:
@@ -490,6 +493,7 @@ def journaled(
             token = None
             if name == "sequence":
                 token = _push_parent(seq)
+            outer, _local.targets = getattr(_local, "targets", None), {}
             try:
                 result = fn(*args, **kwargs)
             except Exception as exc:
@@ -497,20 +501,38 @@ def journaled(
                 record(
                     name, call_kind, bound, outcome, (time.monotonic() - started) * 1000,
                     error=f"{type(exc).__name__}: {exc}", seq=seq, parent=parent,
+                    targets=_local.targets,
                 )
                 raise
             finally:
+                targets, _local.targets = _local.targets, outer
                 if token is not None:
                     _pop_parent(token)
             record(
                 name, call_kind, bound, "ok", (time.monotonic() - started) * 1000,
-                result=result, seq=seq, parent=parent,
+                result=result, seq=seq, parent=parent, targets=targets,
             )
             return result
 
         return wrapper
 
     return decorate
+
+
+def note_target(client: Any) -> None:
+    """Record the identity of a window the current call acts on (its
+    window_key and class), so replay can tell the window recorded from a
+    later one Hyprland gave the same address. No-op outside a recorded
+    call."""
+    targets = getattr(_local, "targets", None)
+    if targets is None or not isinstance(client, dict) or not client.get("address"):
+        return
+    from hypruse import hyprctl
+
+    key = hyprctl.window_key(client)
+    if key is not None:
+        targets[str(client["address"]).lower()] = {"key": key,
+                                                   "class": str(client.get("class", ""))}
 
 
 def _is_refusal(exc: BaseException) -> bool:
