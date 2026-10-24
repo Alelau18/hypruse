@@ -265,3 +265,9 @@ def test_the_nudge_goes_inward_at_the_layouts_right_edge(seat, monkeypatch):
 def test_an_unreadable_layout_nudges_the_usual_way(seat):
     hinput.move(3839, 100)  # conftest: no compositor to ask
     assert seat.events[-1] == "nudge"
+
+
+def test_an_f_key_takes_only_ascii_digits():
+    assert hinput.parse_combo("F12") == ([], "F12")
+    with pytest.raises(hinput.InputError, match="not a key name"):
+        hinput.parse_combo("F٤")  # ARABIC-INDIC DIGIT FOUR: isdigit() but no key

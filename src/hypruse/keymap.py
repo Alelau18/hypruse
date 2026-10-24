@@ -78,6 +78,11 @@ class Keymap:
                 if ch and base and chr(ch) not in self._table:
                     self._table[chr(ch)] = (_LEVEL_MODS[lvl], base)
 
+    @property
+    def loaded(self) -> bool:
+        """Whether the layout's keymap was built (libxkbcommon is there)."""
+        return bool(self._bases)
+
     def chord(self, char: str) -> tuple[str, str] | None:
         """(mods, key) to send for `char`, or None when this layout has no key for it."""
         if char in _CONTROL:

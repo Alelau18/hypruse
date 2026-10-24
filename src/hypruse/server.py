@@ -1578,10 +1578,11 @@ def _keyboard_in_background(
             census.bus, census.field, census.fields, census.complete, census.unsure)
         keys_only = any(ch in keymap.CONTROL_CHARS for ch in text)
         if field is not None and bus is not None and not keys_only:
+            # before the dry run, so a rehearsal refuses what the real run would
+            _guard_owned(bus, client, field[0], f"the text field in {cls}")
             if journal.dry_run():
                 return _acted(f"{_DRY} type {len(text)} characters into the text field in "
                               f"{cls} through the accessibility interface", then, window=addr)
-            _guard_owned(bus, client, field[0], f"the text field in {cls}")
             seat = _seat_now()
             secret = field[2] == a11y.PASSWORD_ROLE  # never read, only typed with consent
             before = "" if secret else a11y.text_of(bus, field[0], field[1])
@@ -1628,6 +1629,10 @@ def _keyboard_in_background(
                 bg.refuse(f"the key has no key on the {layout[0]} keyboard layout")
         else:  # a keysym name: a shifted one ("plus") goes through its character
             chord = kmap.chord_for_key(key)
+            if chord is None and kmap.loaded:
+                # Hyprland finds a key only among the layout's own; forwarding
+                # the name would fail later as "the window may have closed"
+                bg.refuse(f"that key name is not a key on the {layout[0]} keyboard layout")
         if chord is not None:
             names += chord[0].split()
             key = chord[1]
@@ -2683,7 +2688,7 @@ def _arg_model(tool: Callable[..., Any]) -> Any:
     extra = "allow" if any(p.kind is p.VAR_KEYWORD for p in params) else "forbid"
     return pydantic.create_model(
         f"{fn.__name__}_arguments",
-        __config__=pydantic.ConfigDict(extra=extra, coerce_numbers_to_str=True),
+        __config__=pydantic.ConfigDict(extra=extra),
         **fields,
     )
 

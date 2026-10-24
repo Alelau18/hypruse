@@ -1437,3 +1437,18 @@ def test_a_mark_is_refused_once_its_address_belongs_to_another_window(wired_bg, 
     with pytest.raises(ValueError, match="belongs to another window"):
         srv.click_ui(mark=1)
     assert wired_bg["actions"] == []
+
+
+def test_a_rehearsal_refuses_text_into_a_foreign_field_like_the_real_run(wired_bg, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_DRYRUN", "1")
+    wired_bg["focused_text"] = ("other", "/entry", 79)
+    wired_bg["pids"]["other"] = 7777
+    with pytest.raises(srv.trust.TrustError, match="another process"):
+        srv.keyboard("type", text="hi", window="0xa")
+
+
+def test_a_key_name_the_layout_lacks_is_refused_before_hyprland(wired_bg):
+    # it used to reach sendshortcut and fail as "the window may have closed"
+    with pytest.raises(srv.trust.TrustError, match="not a key on the us keyboard layout"):
+        srv.keyboard("key", keys="NotAKeyName", window="0xa")
+    assert wired_bg["shortcuts"] == []

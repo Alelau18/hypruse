@@ -190,3 +190,29 @@ def test_the_journal_views_flags_are_the_tools_boolean_arguments():
         hints = typing.get_type_hints(inspect.unwrap(tool))
         flags |= {k for k, t in hints.items() if k != "return" and t in (bool, bool | None)}
     assert flags == cli._FLAGS
+
+
+@pytest.mark.parametrize("tool, args", [
+    ("hypr", {"action": "workspace", "workspace": 2}),
+    ("pointer", {"action": "move", "x": "10", "y": 20}),
+    ("click_ui", {"name": "Allow", "allow_auth": "false"}),
+    ("click_ui", {"name": "Allow", "allow_auth": "maybe"}),
+    ("keyboard", {"action": "key", "keys": "a", "background": "no"}),
+    ("wait_for", {"event": "window_open", "timeout_s": "5"}),
+])
+def test_a_step_is_coerced_exactly_as_a_direct_mcp_call(tool, args):
+    # the review found a step coerced a number to text where a direct call
+    # refused it: the two validators must agree
+    from mcp.server.fastmcp.utilities.func_metadata import func_metadata
+
+    fn = srv.TOOLS[tool]
+    try:
+        direct = func_metadata(inspect.unwrap(fn)).arg_model.model_validate(args)
+        expected = {k: getattr(direct, k) for k in args}
+    except Exception:
+        expected = None
+    try:
+        got = srv.validated_args(fn, args)
+    except ValueError:
+        got = None
+    assert got == expected

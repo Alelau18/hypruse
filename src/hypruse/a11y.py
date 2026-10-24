@@ -277,8 +277,9 @@ class Owner:
     so. A reference is therefore followed only when it is served on the
     root's own connection, or on one whose process is the window's app
     (same_app): WebKitGTK serves a page from its web process, on a
-    connection of its own. Checked once per bus name; a unique name is
-    never reused while the bus runs."""
+    connection of its own. Checked once per unique name (":1.42"), which is
+    never reused while the bus runs; a well-known name can change owner, so
+    it is checked every time."""
 
     def __init__(self, bus: Bus, root_svc: str, pid: int | None):
         self._bus, self.root_svc, self.pid = bus, root_svc, pid
@@ -287,9 +288,12 @@ class Owner:
     def owns(self, svc: Any) -> bool:
         if not isinstance(svc, str):
             return False
-        if svc not in self._known:
-            self._known[svc] = same_app(self._bus.conn_pid(svc), self.pid)
-        return self._known[svc]
+        if svc in self._known:
+            return self._known[svc]
+        owned = same_app(self._bus.conn_pid(svc), self.pid)
+        if svc.startswith(":"):
+            self._known[svc] = owned
+        return owned
 
     def keep(self, refs: list[tuple[str, str]]) -> list[tuple[str, str]]:
         return [r for r in refs if self.owns(r[0])]

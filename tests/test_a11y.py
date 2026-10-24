@@ -970,3 +970,14 @@ def test_ui_does_not_read_another_apps_text(no_proc, monkeypatch):
     assert "SECRET-MARKER" not in str(out) and "Message" not in str(out)
     assert [e.get("name") for e in out if "name" in e] == ["Hostile", "OK"]
     assert "victim" not in bus.touched
+
+
+def test_a_well_known_name_is_checked_every_time(no_proc):
+    # its owner can change while the bus runs; a unique name's cannot
+    bus = _hostile([])
+    bus.pids["org.example.Named"] = HOSTILE_PID
+    owner = a11y.Owner(bus, "app", HOSTILE_PID)
+    assert owner.owns("org.example.Named")
+    bus.pids["org.example.Named"] = VICTIM_PID
+    assert not owner.owns("org.example.Named")
+    assert owner.owns("app")

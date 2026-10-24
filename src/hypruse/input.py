@@ -88,7 +88,7 @@ def parse_combo(combo: str) -> tuple[list[str], str | None]:
             key = KEY_ALIASES[lower]
         elif len(part) == 1:
             key = part
-        elif lower.startswith("f") and lower[1:].isdigit():
+        elif lower.startswith("f") and lower[1:].isascii() and lower[1:].isdigit():
             key = part.upper()
         elif hyprctl.KEYSYM_NAME.fullmatch(part):
             key = part  # assume a literal XKB keysym name (case-sensitive)
