@@ -1590,3 +1590,55 @@ def test_a_foreground_click_ui_checks_the_point_again_at_the_press(wired_bg, mon
                        match="the click-point check refused the click right before it"):
         srv.click_ui(name="Save", window="0xa", background=False)
     assert len(calls) == 3 and wired_bg["clicks"] == []
+
+
+# F53/F5 (narrow): a frame unproven because its ROOT is another process's
+# (the title fallback found a frame named like this window there) is never
+# clicked; one unproven because the app's own windows look alike still is,
+# in the foreground
+
+
+@pytest.fixture
+def real_ui(wired_bg, monkeypatch):
+    monkeypatch.setattr(srv, "_ui_read", REAL_UI_READ)
+    monkeypatch.setattr(srv.a11y, "find_elements",
+                        lambda bus, s_, p, name="", actionable=True, owner=None: (
+                            [{"role": "push button", "name": "Save", "extent": (10, 10, 20, 20),
+                              "clickable": True, "svc": s_, "path": p + "/save"}], False))
+    wired_bg["frame_sure"] = False
+    return wired_bg
+
+
+def test_a_foreign_roots_controls_are_marked_and_same_app_ones_are_not(real_ui):
+    assert "_foreign" not in REAL_UI_READ("0xa", handles=True)[0]  # the app's own root
+    real_ui["pids"]["app"] = 999  # the root is another process's
+    item = REAL_UI_READ("0xa", handles=True)[0]
+    assert item["_unsure"] and item["_foreign"]
+    assert "another process's accessibility tree" in REAL_UI_READ("0xa")[-1]["note"]
+
+
+def test_a_foreign_roots_control_is_never_clicked_by_name(real_ui):
+    real_ui["pids"]["app"] = 999
+    for background in (False, None):
+        with pytest.raises(srv.trust.TrustError, match="another process's accessibility tree"):
+            srv.click_ui(name="Save", window="0xa", background=background)
+    assert real_ui["clicks"] == [] and real_ui["actions"] == [] and real_ui["dispatch"] == []
+
+
+def test_a_foreign_roots_control_is_never_clicked_by_mark(real_ui, monkeypatch):
+    real_ui["pids"]["app"] = 999
+    monkeypatch.setattr(srv, "_grab_env", lambda **kw: (b"IMG", {
+        "geometry": [100, 50, 800, 600], "scale": 1.0, "image": [800, 600],
+        "format": "jpeg"}))
+    monkeypatch.setattr(srv, "_draw_marks", lambda *a: None)
+    srv._last_marks.clear()
+    srv.marks(window="0xa")
+    assert srv._last_marks["items"][1]["foreign"] is True
+    with pytest.raises(srv.trust.TrustError, match="another process's accessibility tree"):
+        srv.click_ui(mark=1, background=False)
+    assert real_ui["clicks"] == [] and real_ui["dispatch"] == []
+
+
+def test_same_app_ambiguity_still_clicks_in_the_foreground(real_ui):
+    srv.click_ui(name="Save", window="0xa", background=False)
+    assert real_ui["clicks"] == [(120, 70)]  # window at (100, 50), control centred 20 in

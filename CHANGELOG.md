@@ -252,6 +252,13 @@ All notable changes to this project are documented here. The format follows
   is to the workspace the step's window (or a `hypr workspace` step's
   absolute target) is on. An app that opens a second window during a
   wait step (a splash, a helper) now stops the sequence after it.
+- **`click_ui` never clicks a control another process placed.** When a
+  window's accessibility tree comes from another process (the title
+  fallback found a frame named like it there), its controls were still
+  clicked in the foreground, at points that process chose; only the
+  background refused them. They are refused by name and by mark on both
+  paths now, and `ui` says where they come from. Controls of an app
+  whose windows only look alike are clicked in the foreground as before.
 - **A root registered by a process inside the window proves nothing.**
   A terminal has no accessibility tree, so the title fallback could find
   a root that a process started in it registered, with a frame named

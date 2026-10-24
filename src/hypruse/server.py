@@ -601,20 +601,7 @@ def _proven_frame(
     None. The root must belong to the window's own app instance (a
     multi-process app is matched by title across every process), and the
     frame must be told apart from the app's other windows."""
-    conn, pid = (bus.conn_pid(app[0]), client.get("pid")) if app is not None else (None, None)
-    if app is None or not a11y.same_app(conn, pid):
-        return None
-    if conn != pid and not (a11y.descends_from(pid, conn) or a11y.same_flatpak(conn, pid)):
-        # a root on another process is only found by the title fallback,
-        # and any process run in a terminal (which has no tree of its own)
-        # can register one with a frame named after the window. same_app
-        # accepts it whether it is still the terminal's descendant or has
-        # detached (setsid, a double fork, a tmux server) but kept the
-        # terminal's app scope, and typing then went into its field. The
-        # root proves the window only when its process started the
-        # window's, or both run in one Flatpak instance (where the bus sees
-        # the sandbox's proxy). Children of a proven root still follow
-        # same_app (a11y.Owner): WebKitGTK's web process is a child.
+    if app is None or not _root_owned(bus, client, app):
         return None
     peers = _peers(client)
     if peers is None:
@@ -622,6 +609,28 @@ def _proven_frame(
     return a11y.window_frame_for(
         bus, app[0], app[1], client.get("title", ""), tuple(client["size"]), peers,
         owner=_owner(bus, client, app))
+
+
+def _root_owned(bus: a11y.Bus, client: dict[str, Any], app: tuple[str, str]) -> bool:
+    """Whether an accessibility root belongs to the window's own app
+    instance: the first of _proven_frame's two tests. A root that fails it
+    is another process's (the title fallback found a frame named like the
+    window there); one that passes may still not tell this window from
+    the app's others, which is the second test."""
+    conn, pid = bus.conn_pid(app[0]), client.get("pid")
+    if not a11y.same_app(conn, pid):
+        return False
+    # a root on another process is only found by the title fallback,
+    # and any process run in a terminal (which has no tree of its own)
+    # can register one with a frame named after the window. same_app
+    # accepts it whether it is still the terminal's descendant or has
+    # detached (setsid, a double fork, a tmux server) but kept the
+    # terminal's app scope, and typing then went into its field. The root
+    # proves the window only when its process started the window's, or
+    # both run in one Flatpak instance (where the bus sees the sandbox's
+    # proxy). Children of a proven root still follow same_app (a11y.Owner):
+    # WebKitGTK's web process is a child.
+    return conn == pid or a11y.descends_from(pid, conn) or a11y.same_flatpak(conn, pid)
 
 
 def _owner(bus: a11y.Bus, client: dict[str, Any], app: tuple[str, str]) -> a11y.Owner:
@@ -664,6 +673,9 @@ def _no_tree_hint(cls: str) -> str:
 
 _UNSURE = ("its accessibility tree cannot tell which window is {addr} (another window of "
            "{cls} could match it, or its accessibility connection is another process's)")
+_FOREIGN = ("these controls come from another process's accessibility tree, not {cls}'s own: "
+            "a frame there carries this window's title, and that process chose where each "
+            "control is")
 
 
 def _ui_read(
@@ -688,6 +700,9 @@ def _ui_read(
         # a background press acts on the control itself, and a reading after
         # one must be of this window, not a same-titled one: prove the frame
         exact = _proven_frame(bus, client, app)
+        # unproven for one of two reasons: the root is another process's
+        # (foreign), or the app's own but its windows look alike
+        foreign = exact is None and not _root_owned(bus, client, app)
         frame = exact or frame
         elements, truncated = a11y.find_elements(
             bus, frame[0], frame[1], name=name, actionable=actionable, owner=owner
@@ -720,6 +735,8 @@ def _ui_read(
             item["_field"] = bool(e.get("field"))
         elif handles:  # another window of the app could own this control
             item["_unsure"] = True
+            if foreign:  # or another process chose it: never clicked (F53, F5)
+                item["_foreign"] = True
         out.append(item)
     # a name filter reads the same elements, so it is no way past the cut
     cut = (f"it stopped after reading {a11y.WALK_BUDGET} elements of a large tree, so "
@@ -728,7 +745,9 @@ def _ui_read(
         what = f"matching {name!r}" if name else "actionable"
         tail = f" ({cut})" if truncated else ""
         return f"no {what} elements in {cls}{tail}{_no_tree_hint(cls)}"
-    if exact is None and not handles:
+    if exact is None and not handles and foreign:
+        out.append({"note": _FOREIGN.format(cls=cls) + "; click_ui refuses them"})
+    elif exact is None and not handles:
         out.append({"note": "these controls may be another window's: "
                             + _UNSURE.format(addr=client["address"], cls=cls)})
     if truncated and not handles:
@@ -908,6 +927,8 @@ def marks(window: str = "", name: str = "") -> list[Any] | str:
             stored[i]["field"] = e.get("_field", False)
         elif e.get("_unsure"):
             stored[i]["unsure"] = True
+            if e.get("_foreign"):
+                stored[i]["foreign"] = True
     global _last_marks
     # class and time travel with the numbering: a later click_ui(mark=N)
     # checks both, since the CLI carries this record across processes and an
@@ -1443,7 +1464,10 @@ def click_ui(
     preferred, substring otherwise) or `mark`. An ambiguous name returns
     the candidates instead of guessing: disambiguate with `index` (0-based
     into that list) or a more specific name. Falls back with a note when
-    the app exposes no tree (use screenshot + zoom + pointer then).
+    the app exposes no tree (use screenshot + zoom + pointer then). A
+    control from another process's accessibility tree (one whose frame
+    only carries this window's title) is refused: that process chose
+    where it is.
     `then` ('desktop'|'screenshot'|'ui'|'none') appends the result;
     'ui' shows the click's effect on the controls in the same call.
     `allow_auth=true` overrides the refusal to click a system
@@ -1488,7 +1512,8 @@ def click_ui(
         x, y = client["at"][0] + item["dx"], client["at"][1] + item["dy"]
         desc = f"mark {mark} ({item['label']})"
         control = {"_svc": item.get("svc"), "_path": item.get("path"),
-                   "role": item.get("role", ""), "_unsure": item.get("unsure", False)}
+                   "role": item.get("role", ""), "_unsure": item.get("unsure", False),
+                   "_foreign": item.get("foreign", False)}
         if "field" in item:
             control["_field"] = item["field"]
     else:
@@ -1514,6 +1539,12 @@ def click_ui(
         x, y = e["x"], e["y"]
         desc = f"{e['role']} {e['name']!r}"
         control = e
+    if control.get("_foreign"):
+        # by name or by mark, foreground or background: the point (or the
+        # object) is one another process put in this window's name
+        raise trust.TrustError(
+            f"{desc}: " + _FOREIGN.format(cls=client.get("class", "the window"))
+            + "; refusing to click it. Use screenshot and pointer to click what you can see.")
     if bg.decide(client["address"] == _active_address(), background):
         if button != "left" or double:
             # the accessibility action is the control's primary one
