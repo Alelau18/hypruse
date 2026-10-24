@@ -307,6 +307,12 @@ All notable changes to this project are documented here. The format follows
   on stdin (`keyboard type - --allow-auth`).
 
 ### Not changed
+- **`launch` stays outside the trust layers** (audit F3, F48), as the
+  security model already said: a launched command can send input or run
+  anything itself, and its boundary is the MCP client (ask-first, a deny
+  rule, or Claude Code's auto-mode classifier with no allow rule for
+  `launch`). The README now spells out each option, and that what
+  `launch` starts outlives `hypruse stop`.
 - `launch` still only reports where the human's focus went when an
   already-running app's window opens on their screen and is moved away
   ("the focused window is now X"). Giving focus back was tried and
