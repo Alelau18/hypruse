@@ -139,6 +139,17 @@ All notable changes to this project are documented here. The format follows
   is parsed, and `hyprctl.send_shortcut` refuses any modifier, key or
   address outside that grammar before Hyprland is asked; the Lua builder
   wants exactly three fields.
+- **`sequence` steps and `replay` get the tools' own argument types.**
+  Both rebuilt a tool call from JSON and called the function on it raw,
+  so a step's `"allow_auth": "false"` was a non-empty string that every
+  guard read as an override, while the journal and the replay plan
+  printed `allow_auth=false`. A step is now validated against its tool's
+  signature (the coercion a direct MCP call gets: `"false"` is `False`),
+  every step before the first one runs; replay validates each entry
+  strictly and refuses one whose flag is not a boolean, and prints and
+  runs the checked arguments. The guards take only `True` as an
+  override, and `hypruse journal` marks a non-boolean flag
+  `<not a boolean: ...>`.
 
 ### Not changed
 - `launch` still only reports where the human's focus went when an

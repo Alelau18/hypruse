@@ -55,7 +55,7 @@ def wired(monkeypatch):
 
     def fake_dispatch(step):
         ran.append(step)
-        if step.get("op") == "boom":
+        if step.get("keys") == "boom":
             raise RuntimeError("kaboom")
         return f"{step.get('op')} ok"
 
@@ -344,9 +344,11 @@ def test_final_drain_reports_last_step_change(wired, monkeypatch):
 
 def test_stops_on_step_error(wired, monkeypatch):
     _stream(monkeypatch, [])
-    steps = [{"op": "pointer", "action": "move", "x": 1, "y": 1}, {"op": "boom"}, {"op": "hypr"}]
+    steps = [{"op": "pointer", "action": "move", "x": 1, "y": 1},
+             {"op": "keyboard", "action": "key", "keys": "boom"},
+             {"op": "hypr", "action": "workspace", "workspace": "2"}]
     out = srv.sequence(steps, then="none")
-    assert [s["op"] for s in wired] == ["pointer", "boom"]
+    assert [s["op"] for s in wired] == ["pointer", "keyboard"]
     assert "ERROR kaboom" in _head(out) and "step 1 raised" in _head(out)
 
 

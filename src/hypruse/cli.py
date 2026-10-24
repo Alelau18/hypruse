@@ -427,6 +427,13 @@ def _skip(value: Any) -> bool:
     return value is None or value is False or value == ""
 
 
+# The tools' boolean arguments (a test holds this to their signatures).
+# One holding anything but a boolean was recorded unvalidated and must not
+# print as the flag it looks like: "false" passed every guard as true.
+_FLAGS = frozenset({"allow_auth", "background", "double", "stop_on_change", "stable",
+                    "lossless", "actionable"})
+
+
 def _fmt_args(args: Any) -> str:
     """Recorded arguments on one line, defaults and redacted text folded
     down so the interesting part of a call is what shows."""
@@ -434,8 +441,13 @@ def _fmt_args(args: Any) -> str:
         return _safe(args)
     parts = []
     for key, value in args.items():
+        if key in _FLAGS and value is not None and not isinstance(value, bool):
+            parts.append(f"{_safe(key)}=<not a boolean: {_safe(repr(value))}>")
+            continue
         if _skip(value):
             continue
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)  # a validated x=800 is 800.0, the same point
         if isinstance(value, dict) and value.get("redacted"):
             parts.append(f"{_safe(key)}=<{_safe(value.get('chars', '?'))} chars>")
         elif isinstance(value, list):
@@ -566,6 +578,30 @@ def _replay_args(entry: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in _args_of(entry).items() if k != "then"}
 
 
+def _validated(entry: dict[str, Any]) -> dict[str, Any]:
+    """The recorded call checked against the tool's own parameter types,
+    strictly: a call that went through validation records a real boolean,
+    so `"allow_auth": "false"` is a journal written by an unvalidated path
+    (a sequence step, before steps were validated) or by hand, and is
+    refused rather than guessed at. It used to reach the guards as a non-empty string, which
+    they read as true. Redacted text is left to _redacted_steps. Raises
+    ValueError; the plan and the run both use what this returns."""
+    from hypruse import journal, server
+
+    args = {k: v for k, v in _replay_args(entry).items() if not journal.redacted_text(v)}
+    checked = server.validated_args(server.TOOLS[str(entry.get("tool"))], args, strict=True)
+    return {**_replay_args(entry), **checked}
+
+
+def _call_args(entry: dict[str, Any]) -> dict[str, Any]:
+    """What the plan prints for an entry: the validated call, or, for one
+    the pre-flight refuses, the recorded one (with bad flags marked)."""
+    try:
+        return _validated(entry)
+    except (ValueError, KeyError):
+        return _replay_args(entry)
+
+
 def _redacted_steps(entries: list[dict[str, Any]]) -> list[int]:
     from hypruse import journal
 
@@ -594,6 +630,12 @@ def _unreplayable(entries: list[dict[str, Any]]) -> list[str]:
             # the clipboard tool is opt-in on the SERVER; replay must not
             # be the way around that gate
             reasons.append(f"seq {seq}: clipboard is opt-in, set HYPRUSE_CLIPBOARD=1 to replay it")
+        else:
+            try:
+                _validated(entry)
+            except ValueError as exc:
+                reasons.append(f"seq {seq}: {_safe(tool)} arguments are not the tool's: "
+                               f"{_safe(exc)}")
     return reasons
 
 
@@ -695,7 +737,7 @@ def replay(argv: list[str]) -> int:
     print(f"{source}: {len(plan)} action(s) to replay\n")
     for entry in plan:
         seq = _safe(entry.get("seq"))
-        print(f"  {seq:>5}  {_safe(entry.get('tool'))} {_fmt_args(_replay_args(entry))}")
+        print(f"  {seq:>5}  {_safe(entry.get('tool'))} {_fmt_args(_call_args(entry))}")
 
     blocked = _unreplayable(plan)
     if blocked:
@@ -769,7 +811,7 @@ def replay(argv: list[str]) -> int:
         seq = _safe(entry.get("seq"))
         tool = getattr(server, str(entry.get("tool")))  # the pre-flight above vetted the name
         try:
-            result = tool(**_replay_args(entry))
+            result = tool(**_validated(entry))  # the pre-flight vetted these too
         except KeyboardInterrupt:
             print(f"\naborted after {done}/{len(plan)} action(s); the desktop is part-way "
                   "through the journal")

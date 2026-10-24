@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import functools
+import inspect
 import json
 import os
 import re
@@ -20,7 +22,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, get_type_hints
 
 from hypruse import __version__, a11y, events, hyprctl, journal, keymap, safety, session, trust
 from hypruse import background as bg
@@ -1427,7 +1429,7 @@ def _keyboard_in_background(
             field, fields = None, []  # no accessibility: keys are the way in
         password = (field is not None and field[2] == a11y.PASSWORD_ROLE) or (
             field is None and any(f[2] == a11y.PASSWORD_ROLE for f in fields))
-        if password and not allow_auth:
+        if password and allow_auth is not True:
             where = ("the focused field" if field is not None
                      else "a text field it cannot place" if unsure
                      else f"one of its {len(fields)} text fields, and it does not say which "
@@ -2521,17 +2523,81 @@ def _sleep_ms(step: dict[str, Any]) -> float:
     return float(ms)
 
 
-def _dispatch_step(step: dict[str, Any]) -> Any:
+@functools.cache
+def _arg_model(tool: Callable[..., Any]) -> Any:
+    """The pydantic model of a tool's arguments, built from its signature
+    the way FastMCP builds the one it checks a direct call against, without
+    importing FastMCP: a shell verb must not pay for it."""
+    import pydantic
+
+    fn = inspect.unwrap(tool)
+    hints = get_type_hints(fn)
+    params = inspect.signature(fn).parameters.values()
+    fields = {
+        p.name: (hints.get(p.name, Any), ... if p.default is p.empty else p.default)
+        for p in params
+        if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+    }
+    extra = "allow" if any(p.kind is p.VAR_KEYWORD for p in params) else "forbid"
+    return pydantic.create_model(
+        f"{fn.__name__}_arguments",
+        __config__=pydantic.ConfigDict(extra=extra, coerce_numbers_to_str=True),
+        **fields,
+    )
+
+
+def validated_args(
+    tool: Callable[..., Any], args: dict[str, Any], *, strict: bool = False
+) -> dict[str, Any]:
+    """`args` checked against `tool`'s declared parameter types and coerced
+    as the MCP layer coerces a direct call ("false" is False, "3" is 3.0),
+    for the places that rebuild a call from JSON: a sequence step and a
+    replayed journal entry. Without it a step's "allow_auth": "false"
+    reached the guards as a non-empty string, which they read as true,
+    while the journal and the replay plan printed allow_auth=false.
+
+    `strict` takes only what a validated call records (a real boolean, a
+    number for a number), for a journal, which is a file anyone can write.
+    Returns the given arguments, coerced; raises ValueError naming the ones
+    that do not fit, never their values (one can be typed text)."""
+    import pydantic
+
+    try:
+        model = _arg_model(tool).model_validate(args, strict=strict)
+    except pydantic.ValidationError as exc:
+        raise ValueError("; ".join(
+            f"{'.'.join(map(str, e['loc'])) or 'arguments'}: {e['msg']}" for e in exc.errors()
+        )) from None
+    values = model.model_dump()
+    return {k: values[k] for k in args}
+
+
+def _checked_step(step: Any) -> dict[str, Any]:
+    """A sequence step with its arguments validated against its tool, as the
+    MCP layer validates a direct call of that tool. Every step is checked
+    before the first one runs, so a bad step 3 does not leave steps 0-2
+    done."""
+    if not isinstance(step, dict):
+        raise ValueError("a step is an object with an op")
     op = step.get("op")
+    if op == "sleep":
+        _sleep_ms(step)
+        return dict(step)
     handler = _SEQ_HANDLERS.get(op)
     if handler is None:
         raise ValueError(f"unknown step op {op!r}: {'|'.join([*_SEQ_HANDLERS, 'sleep'])}")
     # `then` is handled once for the whole sequence, never per step
     params = {k: v for k, v in step.items() if k not in ("op", "then")}
     try:
-        return handler(**params)
-    except TypeError as exc:
-        raise ValueError(f"bad args for {op!r} step: {exc}") from exc
+        return {"op": op, **validated_args(handler, params)}
+    except ValueError as exc:
+        raise ValueError(f"bad args for {op!r} step: {exc}") from None
+
+
+def _dispatch_step(step: dict[str, Any]) -> Any:
+    checked = _checked_step(step)  # again: the sequence loop adds arguments of its own
+    params = {k: v for k, v in checked.items() if k != "op"}
+    return _SEQ_HANDLERS[checked["op"]](**params)
 
 
 def _unexpected(drained, expected_sigs, wait_names):
@@ -2599,7 +2665,8 @@ def sequence(
     """Run an ordered list of actions in ONE call, so a click/type/enter
     micro-sequence costs one round-trip instead of several. Each step is
     {"op": "pointer"|"keyboard"|"click_ui"|"hypr"|"wait_for", ...that tool's
-    args}, or {"op": "sleep", "ms": N} (1-60000) for a fixed pause when
+    args, checked against that tool's types before the first step runs},
+    or {"op": "sleep", "ms": N} (1-60000) for a fixed pause when
     there is no event to wait_for, e.g.
     [{"op":"pointer","action":"click","x":800,"y":60},
     {"op":"keyboard","action":"type","text":"hello","window":"0x.."},
@@ -2624,12 +2691,13 @@ def sequence(
         raise ValueError("sequence needs at least one step")
     if len(steps) > _SEQ_MAX_STEPS:
         raise ValueError(f"sequence too long ({len(steps)} steps, max {_SEQ_MAX_STEPS})")
+    checked = []
     for i, step in enumerate(steps):
-        if isinstance(step, dict) and step.get("op") == "sleep":
-            try:
-                _sleep_ms(step)
-            except ValueError as exc:
-                raise ValueError(f"step {i}: {exc}") from None
+        try:
+            checked.append(_checked_step(step))
+        except ValueError as exc:
+            raise ValueError(f"step {i}: {exc}") from None
+    steps = checked
 
     stream = None
     if stop_on_change:
@@ -2847,6 +2915,13 @@ if READONLY:
         _observe_tool.__doc__ = _READONLY_DOCS.get(
             _observe_tool.__name__, _observe_tool.__doc__
         )
+
+
+# Every tool by name, as defined here: what a rebuilt call (a replayed
+# journal entry) is validated against, whatever a test or a wrapper later
+# puts in the module attribute.
+TOOLS = {f.__name__: f for f in (*_OBSERVE_TOOLS, pointer, keyboard, click_ui, hypr, launch,
+                                  use_bind, sequence, clipboard)}
 
 
 # Display names for the MCP tool annotations; clients show these in tool

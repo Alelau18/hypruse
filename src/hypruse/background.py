@@ -47,7 +47,7 @@ def decide(target_is_active: bool, explicit: bool | None) -> bool:
             )
         return True
     if explicit is not None:
-        return explicit
+        return explicit is True  # a string "false" is not a request for the background
     if m == OFF:
         return False
     return not target_is_active

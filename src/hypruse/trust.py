@@ -271,7 +271,7 @@ def guard_pointer(x: float | None, y: float | None, allow_auth: bool = False) ->
     refuses. Auth refuses a click over a known authentication dialog unless
     allow_auth."""
     scope = _confine_scope()
-    auth = _auth_guard_on() and not allow_auth
+    auth = _auth_guard_on() and allow_auth is not True
     if scope is None and not auth:
         return  # nothing active: no query
     px, py = x, y
@@ -388,7 +388,7 @@ def check_click_point(
     under confinement; fails closed while a guard is on and the desktop
     cannot be read."""
     scope = _confine_scope()
-    auth = _auth_guard_on() and not allow_auth
+    auth = _auth_guard_on() and allow_auth is not True
     try:
         monitors, clients = _click_scene()
     except Exception as exc:
@@ -749,7 +749,7 @@ def guard_session_lock(window_given: bool, allow_auth: bool) -> str:
             f"confinable window ({_describe(scope)}), so input is refused while "
             "HYPRUSE_CONFINE is set. Unlock the session first."
         )
-    if not allow_auth:
+    if allow_auth is not True:
         raise TrustError(
             f"the session is locked ({locker}): all input goes to its "
             "credential prompt, not to any window. Unlock the session "
@@ -788,7 +788,7 @@ def guard_keyboard_layer(window_given: bool, allow_auth: bool) -> str:
     authentication prompt holding the keyboard cannot be ruled out."""
     surfaces = _read_layers()
     if surfaces is None:
-        if _auth_guard_on() and not allow_auth:
+        if _auth_guard_on() and allow_auth is not True:
             raise TrustError(
                 "cannot read the layer list to rule out an authentication prompt "
                 "holding the keyboard; refusing to type. Retry, or pass "
@@ -817,13 +817,13 @@ def guard_keyboard_layer(window_given: bool, allow_auth: bool) -> str:
             f"({_describe(scope)}); typing is refused while HYPRUSE_CONFINE "
             f"is set. {_dismiss_advice(kind)}"
         )
-    if kind == "lock" and not allow_auth:
+    if kind == "lock" and allow_auth is not True:
         raise TrustError(
             f"the lock screen layer {ns!r} holds the keyboard: typing now "
             "would feed a credential prompt. Pass allow_auth=true only if a "
             "human intends that credential entry."
         )
-    if kind == "auth" and not allow_auth and _auth_guard_on():
+    if kind == "auth" and allow_auth is not True and _auth_guard_on():
         raise TrustError(
             f"the authentication prompt {ns!r} holds the keyboard: typing now "
             f"would feed a credential prompt. {_dismiss_advice(kind)} Pass "
@@ -865,7 +865,7 @@ def guard_covering_layer(x: float, y: float, allow_auth: bool = False) -> None:
     cannot be ruled out."""
     surfaces = _read_layers()
     if surfaces is None:
-        if _auth_guard_on() and not allow_auth:
+        if _auth_guard_on() and allow_auth is not True:
             raise TrustError(
                 "cannot read the layer list to rule out an authentication prompt "
                 f"over ({x:.0f}, {y:.0f}); refusing the click. Retry, or pass "
@@ -929,7 +929,7 @@ def guard_auth_client(client: dict[str, Any], allow_auth: bool) -> None:
     """Refuse to act on a system authentication dialog. Positive-detection
     only (a known agent class), so it never blocks ordinary windows even
     when the class is unreadable. Takes an already resolved client."""
-    if allow_auth or not _auth_guard_on():
+    if allow_auth is True or not _auth_guard_on():
         return
     cls = (client.get("class") or "").lower()
     if cls in _AUTH_CLASSES:
@@ -967,7 +967,7 @@ def guard_password_field(client: dict[str, Any], allow_auth: bool) -> None:
     (HYPRUSE_AUTH_GUARD=strict) because it walks the a11y tree. Best-effort
     and fail-open: an unreadable tree does not block typing, but a positive
     password-field detection does."""
-    if allow_auth or not _auth_strict():
+    if allow_auth is True or not _auth_strict():
         return
     try:
         bus = a11y.connect()
