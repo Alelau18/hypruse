@@ -232,3 +232,26 @@ def test_a_step_is_coerced_exactly_as_a_direct_mcp_call(tool, args):
     except ValueError:
         got = None
     assert got == expected
+
+
+@pytest.mark.parametrize("call", [
+    lambda: srv.launch("foot", wait_s=float("nan")),
+    lambda: srv.wait_for("window_open", timeout_s=float("inf")),
+    lambda: srv.pointer("move", x=float("nan"), y=1),
+])
+def test_a_number_that_is_not_finite_is_refused_before_acting(monkeypatch, call):
+    # V73: pydantic let "nan" through and the clamps kept it, so launch had
+    # exec'd the app when the wait raised
+    acted = []
+    monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
+    monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: acted.append(a))
+    monkeypatch.setattr(srv.hinput, "move", lambda *a: acted.append(a))
+    with pytest.raises(ValueError, match="finite"):
+        call()
+    assert acted == []
+
+
+def test_a_wait_step_that_is_not_finite_stops_the_sequence(monkeypatch, quiet_sequence):
+    out = str(srv.sequence([{"op": "wait_for", "event": "window_open", "timeout_s": "nan"}],
+                           then="none"))
+    assert "finite" in out

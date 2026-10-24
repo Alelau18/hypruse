@@ -246,6 +246,25 @@ All notable changes to this project are documented here. The format follows
   window's process, so background typing went into that process's field
   instead of the terminal. A root on another process whose connection
   descends from the window's process is no longer the window's.
+- **Safety switches fail toward safety.** `HYPRUSE_READONLY`,
+  `HYPRUSE_DRYRUN` and `HYPRUSE_STRICT` read a near-miss value (`ture`,
+  `y`, `= 1`) as off, so read-only registered every acting tool and a
+  rehearsal delivered real input. A value that is neither on nor off is
+  now on, with a warning (`hypruse.flags`). Opt-in danger switches
+  (`HYPRUSE_CLIPBOARD`, `HYPRUSE_JOURNAL_TEXT`) keep the strict reading.
+- **Non-finite numbers are refused before acting.** `launch(wait_s=nan)`
+  ran the app and then failed, and the clamps kept NaN; `pointer`,
+  `wait_for`, `launch` and sequence wait steps refuse NaN and infinities.
+- **`hypruse stop` signals only the hypruse that wrote the beacon.** The
+  beacon records its writer's start time, and a stale beacon whose pid
+  the kernel handed to another process (or one pointed at another
+  process) is cleared without signalling it; the pid in the verb lock
+  must be a hypruse. A beacon from an older hypruse needs a hypruse at
+  its pid.
+- An empty `XDG_RUNTIME_DIR` no longer makes hypruse's state paths
+  relative to the working directory, and a capture-notice time restored
+  from the CLI state that cannot be one (in the future) means "notify
+  now" rather than silencing every notice.
 - **`keyboard type --allow-auth TEXT` warns** that the text is on the
   verb's own command line, readable from /proc; the skill says to pass it
   on stdin (`keyboard type - --allow-auth`).

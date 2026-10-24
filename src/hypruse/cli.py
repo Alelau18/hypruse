@@ -143,7 +143,9 @@ def _window_capture_note() -> tuple[bool, str]:
 
 def _mode_note() -> tuple[bool, str]:
     parts = []
-    if os.environ.get("HYPRUSE_READONLY", "").lower() in ("1", "true", "yes", "on"):
+    from hypruse import flags
+
+    if flags.safety_flag("HYPRUSE_READONLY"):
         parts.append("READ-ONLY mode")
     parts.append(f"screenshots: {os.environ.get('HYPRUSE_SCREENSHOT_MODE', 'file')} mode")
     return True, ", ".join(parts)
@@ -317,10 +319,18 @@ def stop() -> int:
             print("no active hypruse session (no beacon found)")
         return 0
     try:
-        pid = int(json.loads(path.read_text())["pid"])
+        record = json.loads(path.read_text())
+        pid = int(record["pid"])
     except (json.JSONDecodeError, TypeError, ValueError, KeyError, AttributeError):
         print(f"beacon at {path} is unreadable; run: pkill -f hypruse")
         return 1
+    if safety.beacon_owner(record) is None:
+        # its writer is gone and the pid may belong to anything now
+        with contextlib.suppress(OSError):
+            path.unlink()
+        print(f"the beacon's hypruse (pid {pid}) is gone, and that pid is not a hypruse it "
+              "started; cleared the stale beacon without signalling it")
+        return 0
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -368,7 +378,7 @@ def _running_verb_pid() -> int | None:
     holds (see verbs._lock), or None when the lock is free or absent."""
     import fcntl
 
-    from hypruse import verbs
+    from hypruse import safety, verbs
 
     lock = verbs.lock_path()
     try:
@@ -377,7 +387,9 @@ def _running_verb_pid() -> int | None:
                 fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:  # held: a verb is acting right now
                 raw = fh.read().strip()
-                return int(raw) if raw.isdigit() else None
+                # the holder wrote it, and any process of the user can hold
+                # the lock: signal only a hypruse
+                return int(raw) if raw.isdigit() and safety.is_hypruse(int(raw)) else None
             fcntl.flock(fh, fcntl.LOCK_UN)
     except OSError:
         return None
@@ -714,8 +726,8 @@ def _take_beacon() -> bool:
     path = safety.state_path()
     if path.exists():
         with contextlib.suppress(Exception):
-            os.kill(int(json.loads(path.read_text())["pid"]), 0)  # liveness only
-            return False
+            if safety.beacon_owner(json.loads(path.read_text())) is not None:
+                return False
     safety.init()
     return True
 
@@ -844,7 +856,9 @@ def replay(argv: list[str]) -> int:
             f"the journal no longer holds the plan you reviewed ({_safe(args.plan)}): it is "
             f"now {digest}. Review it again."))
         return 1
-    if _flag_on("HYPRUSE_READONLY"):
+    from hypruse import flags
+
+    if flags.safety_flag("HYPRUSE_READONLY"):
         print("HYPRUSE_READONLY is set: refusing to replay actions in read-only mode")
         return 1
     if journal.dry_run():

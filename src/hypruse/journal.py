@@ -64,7 +64,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from hypruse import keymap
+from hypruse import flags, keymap
 
 RECORD_VERSION = 1
 
@@ -92,7 +92,7 @@ def _flag(name: str, default: str = "") -> bool:
 
 
 def dry_run() -> bool:
-    return _flag("HYPRUSE_DRYRUN")
+    return flags.safety_flag("HYPRUSE_DRYRUN")
 
 
 def refuse_if_dry(what: str) -> None:
@@ -505,10 +505,10 @@ def _mode() -> dict[str, Any]:
     refusal three hours in only means something next to the flags that
     were set when it happened."""
     return {
-        "readonly": _flag("HYPRUSE_READONLY"),
+        "readonly": flags.safety_flag("HYPRUSE_READONLY"),
         "confine": os.environ.get("HYPRUSE_CONFINE", "") or None,
         "auth_guard": os.environ.get("HYPRUSE_AUTH_GUARD", "1"),
-        "strict": _flag("HYPRUSE_STRICT"),
+        "strict": flags.safety_flag("HYPRUSE_STRICT"),
         "mark": _flag("HYPRUSE_MARK"),
         "clipboard": _flag("HYPRUSE_CLIPBOARD"),
         "dry_run": dry_run(),

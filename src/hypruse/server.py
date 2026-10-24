@@ -14,6 +14,7 @@ import contextlib
 import functools
 import inspect
 import json
+import math
 import os
 import re
 import secrets
@@ -25,7 +26,18 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple, get_type_hints
 
-from hypruse import __version__, a11y, events, hyprctl, journal, keymap, safety, session, trust
+from hypruse import (
+    __version__,
+    a11y,
+    events,
+    flags,
+    hyprctl,
+    journal,
+    keymap,
+    safety,
+    session,
+    trust,
+)
 from hypruse import background as bg
 from hypruse import clipboard as clip
 from hypruse import input as hinput
@@ -190,7 +202,7 @@ op reaches the desktop. Results say so, and the screen will not change,
 so do NOT retry an action because "it did not work". Plan the work and
 report the plan; the human replays it when they are satisfied with it."""
 
-READONLY = os.environ.get("HYPRUSE_READONLY", "").lower() in ("1", "true", "yes", "on")
+READONLY = flags.safety_flag("HYPRUSE_READONLY")
 CLIPBOARD = os.environ.get("HYPRUSE_CLIPBOARD", "").lower() in ("1", "true", "yes", "on")
 
 _instructions = READONLY_INSTRUCTIONS if READONLY else INSTRUCTIONS + _background_instructions()
@@ -242,7 +254,7 @@ def _image(*, data: str, mimeType: str) -> Any:
 
 
 def _runtime_dir() -> Path:
-    base = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+    base = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
     d = Path(base) / "hypruse"
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -931,6 +943,16 @@ def _observe_failed(msg: str, then: str, exc: Exception) -> str:
     return f"{msg}\n(then={then!r} failed: {exc}; the action itself went through)"
 
 
+def _require_finite(**values: Any) -> None:
+    """Refuse NaN and infinities before anything happens. MCP's pydantic
+    lets them through, and a clamp with min/max returns NaN unchanged, so
+    launch's exec ran and the wait then raised: an error for an app that
+    did open, which a retry opened again."""
+    bad = [k for k, v in values.items() if isinstance(v, float) and not math.isfinite(v)]
+    if bad:
+        raise ValueError(f"{', '.join(bad)} must be a finite number")
+
+
 def _check_then(then: str) -> None:
     """Refuse an unknown `then` before acting: found only when observing,
     it raised after the click had already landed, and read as a failure."""
@@ -1074,6 +1096,8 @@ def pointer(
     human is in (press controls there with click_ui), unless
     `background=false`."""
     safety.touch(f"pointer:{action}")
+    _require_finite(x=x, y=y, to_x=to_x, to_y=to_y, scroll_dy=scroll_dy, scroll_dx=scroll_dx,
+                    duration_ms=duration_ms, hold_ms=hold_ms)
     _check_then(then)
     _note_clients()  # what wait_for(window_open) counts as already there
     # releasing the button hypruse holds, where the cursor is, only ends a
@@ -2164,6 +2188,7 @@ def launch(
     Returns the new window's address/class/title/workspace, or a timeout
     note."""
     safety.touch("launch")
+    _require_finite(wait_s=wait_s)
     _note_clients()  # what wait_for(window_open) counts as already there
     wait_s = min(max(wait_s, 1.0), 30.0)
     # Background mode: with no workspace, automatic mode and the guarantee
@@ -2594,6 +2619,7 @@ def wait_for(event: str, match: str = "", timeout_s: float = 10) -> dict[str, An
     if names is None:
         raise ValueError(f"unknown event {event!r}: {'|'.join(_WAIT_EVENTS)}")
     safety.touch(f"wait_for:{event}")
+    _require_finite(timeout_s=timeout_s)
     timeout_s = min(max(timeout_s, 1.0), 60.0)
     needle = match.lower()
 
@@ -2888,6 +2914,7 @@ def _seq_wait_for(
         raise ValueError(f"unknown event {event!r}: {'|'.join(_WAIT_EVENTS)}")
     safety.touch(f"wait_for:{event}")
     needle = str(step.get("match", "")).lower()
+    _require_finite(timeout_s=float(step.get("timeout_s", 10)))
     timeout_s = min(max(float(step.get("timeout_s", 10)), 1.0), 60.0, max(budget_left, 1.0))
 
     # the same pre-checks and matching as the tool; no re-check after

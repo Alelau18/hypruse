@@ -43,9 +43,10 @@ from __future__ import annotations
 import contextlib
 import os
 import sys
+import time
 from typing import Any
 
-from hypruse import hyprctl
+from hypruse import flags, hyprctl
 
 
 class TrustError(RuntimeError):
@@ -123,7 +124,17 @@ def restore_state(state: Any) -> None:
     active = seat.get("active")
     _seat["active"] = active if hyprctl.is_window_key(active) else None
     ts = state.get("notify_ts")
-    _last_notify["ts"] = float(ts) if isinstance(ts, int | float) else 0.0
+    _last_notify["ts"] = clamp_notify_ts(ts)
+
+
+def clamp_notify_ts(ts: Any) -> float:
+    """A remembered notice time, or 0 (notify now) when it cannot be one: a
+    monotonic reading from the future would silence every capture notice,
+    and the CLI state that carries it is a file anyone of the user's can
+    write. A missed rate limit costs one extra notice."""
+    if isinstance(ts, bool) or not isinstance(ts, int | float):
+        return 0.0
+    return float(ts) if 0.0 <= ts <= time.monotonic() else 0.0
 
 
 def _confine_scope() -> tuple[str, Any] | None:
@@ -972,7 +983,7 @@ _seat: dict[str, Any] = {"cursor": None, "active": None}
 
 
 def _strict_on() -> bool:
-    return _flag("HYPRUSE_STRICT")
+    return flags.safety_flag("HYPRUSE_STRICT")
 
 
 def remember_seat() -> None:

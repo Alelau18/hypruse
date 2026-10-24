@@ -11,7 +11,6 @@ image pixel maps back to a clickable point:
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
@@ -299,7 +298,9 @@ def _shown(
 
 
 def _readonly() -> bool:
-    return os.environ.get("HYPRUSE_READONLY", "").lower() in ("1", "true", "yes", "on")
+    from hypruse import flags
+
+    return flags.safety_flag("HYPRUSE_READONLY")
 
 
 def _bring_forward(c: dict[str, Any], reason: str = "") -> str:

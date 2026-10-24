@@ -147,6 +147,9 @@ def test_stop_signals_beacon_pid(tmp_path, monkeypatch, capsys):
     (d / "state.json").write_text(json.dumps({"pid": 4242, "started": 1}))
     killed = []
     monkeypatch.setattr(cli.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    from hypruse import safety
+
+    monkeypatch.setattr(safety, "is_hypruse", lambda pid: pid == 4242)  # a live hypruse
     assert cli.stop() == 0
     assert killed == [(4242, cli.signal.SIGTERM)]
     assert "stopped hypruse (pid 4242)" in capsys.readouterr().out
@@ -187,6 +190,9 @@ def test_stop_reaches_a_verb_acting_beside_a_server(tmp_path, monkeypatch, capsy
     held.truncate()
     held.write("7777")  # a pid that is not ours, so stop() may signal it
     held.flush()
+    from hypruse import safety
+
+    monkeypatch.setattr(safety, "is_hypruse", lambda pid: pid in (4242, 7777))
     killed = []
     monkeypatch.setattr(cli.os, "kill", lambda pid, sig: killed.append((pid, sig)))
     try:
@@ -241,8 +247,60 @@ def test_stop_clears_stale_beacon(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(cli.os, "kill", gone)
     assert cli.stop() == 0
-    assert "already gone" in capsys.readouterr().out
+    assert "is gone" in capsys.readouterr().out
     assert not beacon.exists()
+
+
+def test_stop_never_signals_a_recycled_pid(tmp_path, monkeypatch, capsys):
+    # V49/F51: the beacon's pid alone proved nothing once its writer died,
+    # and a launched child could point it at Hyprland
+    from hypruse import safety
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    d = tmp_path / "hypruse"
+    d.mkdir()
+    beacon = d / "state.json"
+    killed = []
+    monkeypatch.setattr(cli.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    monkeypatch.setattr(safety, "start_ticks", lambda pid: 500)
+    beacon.write_text(json.dumps({"pid": 4242, "start": 499}))  # an earlier process's
+    assert cli.stop() == 0
+    assert killed == [] and not beacon.exists()
+    beacon.write_text(json.dumps({"pid": 4242, "start": 500}))  # the writer, alive
+    assert cli.stop() == 0
+    assert killed == [(4242, cli.signal.SIGTERM)]
+    # an older beacon without a start time: only a hypruse at that pid
+    monkeypatch.setattr(safety, "is_hypruse", lambda pid: False)
+    beacon.write_text(json.dumps({"pid": 1234}))
+    killed.clear()
+    assert cli.stop() == 0 and killed == []
+
+
+def test_stop_does_not_signal_a_lock_holder_that_is_not_hypruse(tmp_path, monkeypatch):
+    from hypruse import safety, verbs
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    (tmp_path / "hypruse").mkdir()
+    held = verbs._lock()
+    held.seek(0)
+    held.truncate()
+    held.write("1")  # any process of the user can hold the lock and write a pid
+    held.flush()
+    monkeypatch.setattr(safety, "is_hypruse", lambda pid: False)
+    try:
+        assert cli._running_verb_pid() is None
+    finally:
+        held.close()
+
+
+def test_a_beacon_records_its_writers_start_time():
+    import os
+
+    from hypruse import safety
+
+    assert safety.start_ticks(os.getpid()) is not None
+    assert safety.beacon_owner({"pid": os.getpid(), "start": safety.start_ticks(os.getpid())})
+    assert safety.beacon_owner({"pid": os.getpid(), "start": 1}) is None
 
 
 @pytest.mark.parametrize(

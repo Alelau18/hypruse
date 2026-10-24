@@ -29,6 +29,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 _state_path: Path | None = None
 _started: float = 0.0
@@ -43,7 +44,7 @@ _ACTION_JUNK = re.compile(r"[^A-Za-z0-9:_.-]+")
 
 
 def state_path() -> Path:
-    base = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+    base = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
     d = Path(base) / "hypruse"
     d.mkdir(parents=True, exist_ok=True)
     return d / "state.json"
@@ -84,12 +85,53 @@ def arm() -> None:
         signal.signal(signal.SIGTERM, _on_sigterm)
 
 
+def start_ticks(pid: Any) -> int | None:
+    """When a process started, in clock ticks since boot (/proc/PID/stat
+    field 22). A pid the kernel hands to a later process has a later one."""
+    try:
+        with open(f"/proc/{int(pid)}/stat", "rb") as f:
+            return int(f.read().rsplit(b")", 1)[1].split()[19])
+    except (OSError, ValueError, IndexError, TypeError):
+        return None
+
+
+def is_hypruse(pid: Any) -> bool:
+    """Whether the process at `pid` runs hypruse, by its command line."""
+    try:
+        with open(f"/proc/{int(pid)}/cmdline", "rb") as f:
+            return b"hypruse" in f.read()
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def beacon_owner(record: Any) -> int | None:
+    """The pid of the live process that wrote this beacon, or None. A pid
+    alone proved nothing: once the writer died without clearing the file,
+    the kernel could hand the pid to any process, and `hypruse stop` then
+    signalled it (a launched child could also rewrite the file to point at
+    Hyprland). The beacon records the writer's start time; one from an
+    older hypruse, without it, needs at least a hypruse at that pid."""
+    if not isinstance(record, dict):
+        return None
+    try:
+        pid = int(record["pid"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if pid <= 1:
+        return None
+    start = record.get("start")
+    if isinstance(start, int) and not isinstance(start, bool):
+        return pid if start_ticks(pid) == start else None
+    return pid if is_hypruse(pid) else None
+
+
 def init() -> None:
     """Start the beacon; safe to call once at server startup."""
     global _state_path, _started
     _state_path = state_path()
     _started = time.time()
-    _write({"pid": os.getpid(), "started": _started, "last_action": "", "last_ts": 0})
+    _write({"pid": os.getpid(), "start": start_ticks(os.getpid()), "started": _started,
+            "last_action": "", "last_ts": 0})
     arm()
 
 
@@ -100,6 +142,7 @@ def touch(action: str) -> None:
     _write(
         {
             "pid": os.getpid(),
+            "start": start_ticks(os.getpid()),
             "started": _started,
             "last_action": _ACTION_JUNK.sub("", action)[:64],
             "last_ts": time.time(),

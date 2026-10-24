@@ -68,7 +68,7 @@ def parse_event(line: str) -> tuple[str, dict[str, Any]] | None:
 
 
 def _socket_path() -> Path:
-    runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
     sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
     if not sig:
         raise EventError("HYPRLAND_INSTANCE_SIGNATURE not set")

@@ -40,7 +40,7 @@ _restored: dict[str, Any] = {}  # what restore() loaded, to tell our changes fro
 
 
 def _dir() -> Path:
-    base = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+    base = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
     d = Path(base) / "hypruse"
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -137,7 +137,7 @@ def _merge(current: dict[str, Any], mine: dict[str, Any]) -> dict[str, Any]:
     seat = my_trust["seat"] if my_trust["seat"] != old_trust.get("seat") else (
         cur_trust.get("seat") or my_trust["seat"]
     )
-    notify_ts = max(float(cur_trust.get("notify_ts") or 0.0), float(my_trust["notify_ts"]))
+    notify_ts = max(trust.clamp_notify_ts(cur_trust.get("notify_ts")), float(my_trust["notify_ts"]))
     marks = mine["marks"] if mine["marks"] != _restored.get("marks") else (
         current.get("marks") or mine["marks"]
     )

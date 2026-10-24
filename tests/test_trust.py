@@ -1128,3 +1128,10 @@ def test_a_new_window_at_the_focused_windows_old_address_moves_the_seat(monkeypa
     active = {"address": "0xa", "stableId": "2"}
     with pytest.raises(trust.TrustError, match="seat moved"):
         trust.guard_seat()
+
+
+@pytest.mark.parametrize("ts", [1e12, -5, float("nan"), "3", True])
+def test_a_notice_time_that_cannot_be_one_means_notify_now(ts):
+    # V35: a planted future value silenced every capture notice for good
+    trust.restore_state({"notify_ts": ts})
+    assert trust._last_notify["ts"] == 0.0

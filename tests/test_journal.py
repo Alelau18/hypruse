@@ -388,9 +388,11 @@ def test_opting_in_to_text_needs_an_affirmative_value(journal_file, monkeypatch)
 def test_the_session_header_reports_the_flags_the_guards_actually_read(journal_file, monkeypatch):
     # trust._flag and this module's must agree, or the header claims a
     # protection that was never in force
-    monkeypatch.setenv("HYPRUSE_STRICT", "sortof")
+    from hypruse import trust
+
+    monkeypatch.setenv("HYPRUSE_STRICT", "sortof")  # a safety flag: unreadable means on (V72)
     journal.start("9.9.9")
-    assert entries(journal_file)[0]["mode"]["strict"] is False
+    assert entries(journal_file)[0]["mode"]["strict"] is trust._strict_on() is True
 
 
 def test_the_journal_is_not_world_readable(journal_file):

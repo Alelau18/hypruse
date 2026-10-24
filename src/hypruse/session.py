@@ -108,7 +108,8 @@ def ensure_session_env() -> None:
     A missing pair is taken from one instance's record, and a lone missing
     WAYLAND_DISPLAY from the record of the instance the signature names."""
     runtime = _runtime_dir()
-    os.environ.setdefault("XDG_RUNTIME_DIR", str(runtime))
+    if not os.environ.get("XDG_RUNTIME_DIR"):  # set but empty is a relative path: the cwd
+        os.environ["XDG_RUNTIME_DIR"] = str(runtime)
     sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
     if sig and os.environ.get("WAYLAND_DISPLAY"):
         return

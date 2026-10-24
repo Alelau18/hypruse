@@ -31,7 +31,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from hypruse import __version__
+from hypruse import __version__, flags
 
 OBSERVE = ("desktop", "screenshot", "zoom", "ui", "marks", "binds", "wait_for")
 ACT = ("pointer", "keyboard", "click_ui", "hypr", "launch", "use_bind", "sequence")
@@ -368,7 +368,7 @@ def _fail(kind: str, message: str, code: int) -> int:
 
 
 def lock_path() -> Path:
-    base = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "hypruse"
+    base = Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp") / "hypruse"
     base.mkdir(parents=True, exist_ok=True)
     return base / "cli.lock"
 
@@ -392,7 +392,7 @@ def _lock() -> Any:
 def run(tool: str, kwargs: dict[str, Any], *, json_out: bool = False,
         out_path: str | None = None, dry_run: bool = False) -> int:
     """Call one tool the way the MCP server would, then speak the shell contract."""
-    if _flag("HYPRUSE_READONLY") and (tool in ACT or tool == "clipboard"):
+    if flags.safety_flag("HYPRUSE_READONLY") and (tool in ACT or tool == "clipboard"):
         return _fail(
             "refused",
             f"HYPRUSE_READONLY is set: {tool} is not available in read-only mode "
