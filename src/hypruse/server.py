@@ -1154,8 +1154,12 @@ def pointer(
         # below are the ones the confinement and auth guards gate
         if x is None or y is None:
             raise ValueError("move needs x and y")
-        if holding:
+        if holding or trust.confined():
+            # a held button drags; and under confinement a bare move counts
+            # too: it hovers, and with follow_mouse it focuses, the window
+            # under the cursor (V69)
             trust.guard_pointer(x, y, allow_auth)
+        if holding:
             note = note or _layer_note(x, y)
         plan = f"move the cursor to ({x:.0f}, {y:.0f})"
         if holding:
@@ -2024,13 +2028,18 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
     # fullscreen/toggle_floating with no target hit the ACTIVE window, so
     # resolve and guard that too, and check the seat has not moved under us
     # (in strict mode, so we do not fullscreen a window the human just
-    # refocused). Address-targeted actions name their window, so they skip
-    # the seat guard to avoid false refusals.
+    # refocused). The seat guard also runs for what takes the human's view
+    # or focus whatever it names: a workspace switch (relative ones depend
+    # on the seat) and focus_window. Other address-targeted actions name
+    # their window and skip it, to avoid false refusals.
+    if action in ("workspace", "focus_window"):
+        trust.guard_seat()
     if target and action != "workspace":
         trust.guard_window(target)
     elif not target and action in ("fullscreen", "toggle_floating"):
         trust.guard_seat()
-        active = _active_client()
+        # fails closed: an unreadable compositor is not "nothing focused"
+        active = _guarded_active_client()
         if active is not None:
             trust.guard_client(active)
     if journal.dry_run():
@@ -2235,6 +2244,10 @@ def launch(
     # takes no other workspace, and none the human can see
     workspace = workspace.strip()
     to_agent = bg.decide(False, background)
+    if not to_agent and not workspace:
+        # it opens on the human's workspace and takes their focus: under
+        # HYPRUSE_STRICT, not when the seat moved without the agent (V66)
+        trust.guard_seat()
     mode = bg.mode()
     note = ""
     if workspace:

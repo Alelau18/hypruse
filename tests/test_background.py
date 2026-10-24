@@ -214,3 +214,11 @@ def test_a_human_window_at_an_agent_windows_old_address_is_not_the_agents(monkey
     human = dict(_c("0xa", 99), stableId="later")
     with pytest.raises(trust.TrustError, match="not open"):
         bg.next_workspace([human], _k("0xa"))
+
+
+def test_a_workspace_named_like_a_number_is_not_that_number():
+    # V31: Hyprland resolves "99" to workspace id 99 only
+    assert bg.matches("99", {"id": 99, "name": "99"})
+    assert not bg.matches("99", {"id": -1337, "name": "99"})  # 0.56: a named one
+    assert not bg.matches("99", {"name": "99"})  # 0.57: named ones carry no id
+    assert bg.matches("name:99", {"id": -1337, "name": "99"})

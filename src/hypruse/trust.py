@@ -171,6 +171,12 @@ def _explicit_scope() -> tuple[str, tuple[str, ...]] | None:
     )
 
 
+def confined() -> bool:
+    """Whether a confinement scope is in force (HYPRUSE_CONFINE, or the
+    background guarantee's agent workspaces)."""
+    return _confine_scope() is not None
+
+
 def _client_in_scope(client: dict[str, Any], scope: tuple[str, Any]) -> bool:
     kind, vals = scope
     if kind == "agent":
@@ -184,7 +190,16 @@ def _client_in_scope(client: dict[str, Any], scope: tuple[str, Any]) -> bool:
     if kind == "class":
         return client.get("class") in vals
     ws = client.get("workspace", {}) or {}
-    return str(ws.get("id")) in vals or str(ws.get("name", "")) in vals
+    return any(_workspace_is(ws, v) for v in vals)
+
+
+def _workspace_is(ws: dict[str, Any], value: str) -> bool:
+    """A HYPRUSE_CONFINE=workspace: value against a workspace record: a
+    number by id (as Hyprland resolves it), `name:x` by name, anything else
+    (special:notes) by name. A workspace named "3" is not workspace 3."""
+    if value.lstrip("-").isdigit():
+        return "id" in ws and ws["id"] == int(value)
+    return ws.get("name") == value.removeprefix("name:")
 
 
 def _describe(scope: tuple[str, Any]) -> str:

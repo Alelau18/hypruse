@@ -246,6 +246,15 @@ All notable changes to this project are documented here. The format follows
   window's process, so background typing went into that process's field
   instead of the terminal. A root on another process whose connection
   descends from the window's process is no longer the window's.
+- **`HYPRUSE_STRICT` guards every action that takes the human's view:**
+  `hypr workspace` (relative switches depend on the seat), `hypr
+  focus_window`, and a `launch` that opens on the human's workspace. A
+  target-less `hypr fullscreen`/`toggle_floating` fails closed when the
+  focused window cannot be read. Under confinement a bare `pointer move`
+  is guarded like a click: it hovers, and with follow_mouse focuses, the
+  window under it. A digit workspace selector (`HYPRUSE_AGENT_WORKSPACES`,
+  `HYPRUSE_CONFINE=workspace:3`) matches the workspace with that number
+  only, as Hyprland resolves it, never one named "3"; `name:3` names it.
 - **What the guards checked is what gets the input.** Foreground
   `keyboard(window=...)` and `hypr fullscreen` with a target now confirm
   the target holds the focus after the focus dispatch and send nothing

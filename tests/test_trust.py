@@ -1135,3 +1135,48 @@ def test_a_notice_time_that_cannot_be_one_means_notify_now(ts):
     # V35: a planted future value silenced every capture notice for good
     trust.restore_state({"notify_ts": ts})
     assert trust._last_notify["ts"] == 0.0
+
+
+def test_a_confined_workspace_number_is_not_a_workspace_name(monkeypatch):
+    # V31, for HYPRUSE_CONFINE=workspace:
+    monkeypatch.setenv("HYPRUSE_CONFINE", "workspace:3,special:notes,name:research")
+    trust.guard_client(client(ws=3))
+    trust.guard_client(dict(client(), workspace={"id": -98, "name": "special:notes"}))
+    trust.guard_client(dict(client(), workspace={"id": -5, "name": "research"}))
+    with pytest.raises(trust.TrustError, match="confinement scope"):
+        trust.guard_client(dict(client(), workspace={"id": -7, "name": "3"}))
+
+
+def test_strict_guards_what_takes_the_humans_view(monkeypatch):
+    # V28/V66: workspace switches and focus_window took the human's view
+    # with no seat check under HYPRUSE_STRICT
+    from hypruse import server as srv
+
+    monkeypatch.setenv("HYPRUSE_STRICT", "1")
+    monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
+    sent = []
+    monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: sent.append(a))
+    monkeypatch.setattr(srv.hyprctl, "cursor_pos", lambda: (9, 9))  # the human moved
+    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: {"address": "0xb", "stableId": 2})
+    trust._seat.update(cursor=(1, 1), active="0xb#2")
+    for call in (lambda: srv.hypr("workspace", workspace="+1"),
+                 lambda: srv.hypr("focus_window", target="0xb"),
+                 lambda: srv.launch("foot", background=False)):
+        with pytest.raises(trust.TrustError, match="seat moved"):
+            call()
+    assert sent == []
+
+
+def test_a_bare_move_is_guarded_under_confinement(monkeypatch):
+    # V69: a move hovers, and with follow_mouse focuses, what is under it
+    from hypruse import server as srv
+
+    monkeypatch.setenv("HYPRUSE_CONFINE", "class:kitty")
+    monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
+    checked, moved = [], []
+    monkeypatch.setattr(srv.trust, "guard_pointer", lambda x, y, *a: checked.append((x, y)))
+    monkeypatch.setattr(srv.hinput, "move", lambda x, y: moved.append((x, y)))
+    monkeypatch.setattr(srv, "_pointer_policy", lambda *a, **k: None)
+    monkeypatch.setattr(srv.hyprctl, "cursor_pos", lambda: (10, 20))
+    srv.pointer("move", x=10, y=20)
+    assert checked == [(10, 20)] and moved == [(10, 20)]

@@ -123,7 +123,9 @@ def matches(selector: str, ws: dict[str, Any]) -> bool:
         return ws.get("name") == selector[5:]
     if not selector.isdigit():
         return False
-    return hyprctl.workspace_ref(ws) == int(selector) or ws.get("name") == selector
+    # by number only, as Hyprland resolves "99": a workspace NAMED "99" is
+    # another workspace (V31), and on 0.57 a named one carries no id at all
+    return "id" in ws and ws["id"] == int(selector)
 
 
 _matches = matches
