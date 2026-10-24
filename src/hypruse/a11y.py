@@ -16,9 +16,11 @@ the server does the correlation and mapping.
 
 from __future__ import annotations
 
+import functools
 import json
 import shutil
 import subprocess
+from collections.abc import Callable
 from typing import Any
 
 from hypruse import dbuswire, journal
@@ -33,6 +35,32 @@ class CallRefused(A11yError):
     interface. The readers below take it as "not there". Any other
     A11yError (no answer in time, a broken connection) propagates, so a
     failure is never reported as an empty name or a childless element."""
+
+
+# What a reply the app shaped can raise in a reader: the app chooses the
+# reply's signature and values (a string where an int belongs, an empty
+# reply, an infinite double), and an exception of one of these types
+# escaped every caller's `except A11yError`, so one hostile app broke ui,
+# click_ui and background typing for every window whose tree reached it.
+_BAD_REPLY = (CallRefused, IndexError, KeyError, ValueError, TypeError, OverflowError,
+              AttributeError)
+
+
+def _tolerant(default: Callable[[], Any]) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """A reader of an app's reply: a reply of the wrong shape reads as
+    `default()`, "not there", as a refused call does."""
+
+    def wrap(fn: Callable[..., Any]) -> Callable[..., Any]:
+        @functools.wraps(fn)
+        def read(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return fn(*args, **kwargs)
+            except _BAD_REPLY:
+                return default()
+
+        return read
+
+    return wrap
 
 
 _ACCESSIBLE = "org.a11y.atspi.Accessible"
@@ -190,7 +218,7 @@ class Bus:
     def conn_pid(self, svc: str) -> int | None:
         try:
             return int(self.call(*_DBUS, "GetConnectionUnixProcessID", "s", svc)[0])
-        except (CallRefused, ValueError, IndexError):
+        except _BAD_REPLY:
             return None
 
 
@@ -446,6 +474,7 @@ def window_frame_for(
     return None
 
 
+@_tolerant(str)
 def _name(bus: Bus, svc: str, path: str) -> str:
     try:
         return str(bus.prop(svc, path, _ACCESSIBLE, "Name") or "")
@@ -453,6 +482,7 @@ def _name(bus: Bus, svc: str, path: str) -> str:
         return ""
 
 
+@_tolerant(lambda: -1)
 def _role_num(bus: Bus, svc: str, path: str) -> int:
     try:
         return int(bus.call(svc, path, _ACCESSIBLE, "GetRole")[0])
@@ -460,6 +490,7 @@ def _role_num(bus: Bus, svc: str, path: str) -> int:
         return -1
 
 
+@_tolerant(str)
 def _role_name(bus: Bus, svc: str, path: str) -> str:
     try:
         return str(bus.call(svc, path, _ACCESSIBLE, "GetRoleName")[0])
@@ -467,6 +498,7 @@ def _role_name(bus: Bus, svc: str, path: str) -> str:
         return ""
 
 
+@_tolerant(list)
 def _children(bus: Bus, svc: str, path: str) -> list[tuple[str, str]]:
     try:
         return [(cs, cp) for cs, cp in bus.call(svc, path, _ACCESSIBLE, "GetChildren")[0]]
@@ -474,6 +506,7 @@ def _children(bus: Bus, svc: str, path: str) -> list[tuple[str, str]]:
         return []
 
 
+@_tolerant(lambda: None)
 def _window_extents(bus: Bus, svc: str, path: str) -> tuple[int, int, int, int] | None:
     """Window-relative extents, or None when the widget has no usable
     geometry. Toolkits report degenerate or wild extents for things that are
@@ -492,6 +525,7 @@ def _window_extents(bus: Bus, svc: str, path: str) -> tuple[int, int, int, int] 
     return x, y, w, h
 
 
+@_tolerant(set)
 def _states(bus: Bus, svc: str, path: str) -> set[int]:
     try:
         words = bus.call(svc, path, _ACCESSIBLE, "GetState")[0]
@@ -505,6 +539,7 @@ def _states(bus: Bus, svc: str, path: str) -> set[int]:
     return out
 
 
+@_tolerant(set)
 def _interfaces(bus: Bus, svc: str, path: str) -> set[str]:
     """Short interface names the object supports, so Text/Value are only
     called where they exist (calling them blind raises UnknownMethod)."""
@@ -514,6 +549,7 @@ def _interfaces(bus: Bus, svc: str, path: str) -> set[str]:
         return set()
 
 
+@_tolerant(dict)
 def element_value(bus: Bus, svc: str, path: str, role: int, states: set[int]) -> dict[str, Any]:
     """The element's CURRENT VALUE, as opposed to its label: what is typed
     into it, where a slider sits, whether a box is ticked. Returns the keys
@@ -672,6 +708,7 @@ def find_elements(
     return results, walk.truncated and len(results) < max_results
 
 
+@_tolerant(list)
 def _related(
     bus: Bus, svc: str, path: str, rel_type: int, owner: Owner
 ) -> list[tuple[str, str]]:
@@ -739,6 +776,7 @@ def focused_role(
 _EDITABLE = "org.a11y.atspi.EditableText"
 
 
+@_tolerant(dict)
 def current_value(bus: Bus, svc: str, path: str) -> dict[str, Any]:
     """The element's reading as `ui` reports it (checked, value, percent),
     for reading a background action back; {} when it carries none."""
@@ -748,11 +786,13 @@ def current_value(bus: Bus, svc: str, path: str) -> dict[str, Any]:
         return {}
 
 
+@_tolerant(bool)
 def _has_actions(bus: Bus, svc: str, path: str) -> bool:
     # the interface first: NActions on an object without one is an error
     return "Action" in _interfaces(bus, svc, path) and has_action(bus, svc, path)
 
 
+@_tolerant(str)
 def action_name(bus: Bus, svc: str, path: str, index: int = 0) -> str:
     """The name of an element's action, as the toolkit gives it ("click",
     "Press", "SetFocus"), or "" when it cannot be read."""
@@ -762,11 +802,13 @@ def action_name(bus: Bus, svc: str, path: str, index: int = 0) -> str:
         return ""
 
 
+@_tolerant(bool)
 def is_focused(bus: Bus, svc: str, path: str) -> bool:
     """Whether the element reports the app's own keyboard focus."""
     return _STATE_FOCUSED in _states(bus, svc, path)
 
 
+@_tolerant(bool)
 def has_action(bus: Bus, svc: str, path: str) -> bool:
     """Whether the element has an action to invoke (a button, a check box),
     which is what a background press needs. NActions is a property in
@@ -777,6 +819,7 @@ def has_action(bus: Bus, svc: str, path: str) -> bool:
         return False
 
 
+@_tolerant(bool)
 def grab_focus(bus: Bus, svc: str, path: str) -> bool:
     """Move the app's OWN keyboard focus to this element. Not the
     compositor's: the human's focus is untouched."""
@@ -787,6 +830,7 @@ def grab_focus(bus: Bus, svc: str, path: str) -> bool:
         return False
 
 
+@_tolerant(str)
 def text_of(bus: Bus, svc: str, path: str) -> str:
     """A text element's full contents, or "" when it cannot be read."""
     try:
@@ -796,6 +840,7 @@ def text_of(bus: Bus, svc: str, path: str) -> str:
         return ""
 
 
+@_tolerant(lambda: ("", ""))
 def toolkit(bus: Bus, svc: str) -> tuple[str, str]:
     """(ToolkitName, Version) of the app on `svc`, ("", "") when unknown.
     GTK 3 says ("gtk", "3.24.52"), GTK 4 ("GTK", "4.22.4"), Qt ("Qt", "6.11.1")."""
@@ -807,6 +852,7 @@ def toolkit(bus: Bus, svc: str) -> tuple[str, str]:
         return "", ""
 
 
+@_tolerant(bool)
 def insert_text(bus: Bus, svc: str, path: str, text: str) -> bool:
     """Insert `text` at the caret, as typing would, with no keyboard."""
     journal.refuse_if_dry("insert_text")
@@ -858,6 +904,7 @@ def editable_fields(
     return out, not walk.truncated
 
 
+@_tolerant(bool)
 def do_action(bus: Bus, svc: str, path: str, index: int = 0) -> bool:
     """Invoke an accessible's action (default index 0, usually the click),
     with no pointer, so it works even when the window is not visible."""

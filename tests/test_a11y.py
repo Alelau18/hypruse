@@ -981,3 +981,61 @@ def test_a_well_known_name_is_checked_every_time(no_proc):
     bus.pids["org.example.Named"] = VICTIM_PID
     assert not owner.owns("org.example.Named")
     assert owner.owns("app")
+
+
+# C14 (F12, V23, V24, V75, V76, V77): a reply's signature and values are the
+# app's to choose; a reader must take a malformed one as "not there"
+
+
+class OddBus(FakeBus):
+    """Answers every call with the same reply, whatever the method."""
+
+    def __init__(self, reply):
+        super().__init__({})
+        self.reply = reply
+
+    def call(self, svc, path, iface, method, *sig):
+        return self.reply
+
+    def prop(self, svc, path, iface, name):
+        return self.reply[0] if self.reply else self.reply
+
+
+@pytest.mark.parametrize("reply", [[], ["text"], [[1, 2]], [float("inf")], [float("nan")],
+                                   [[["x"]]], [None], [{"a": 1}], [[object()]]])
+def test_a_malformed_reply_reads_as_not_there(reply):
+    bus = OddBus(reply)
+    assert isinstance(a11y._name(bus, "s", "/p"), str)
+    assert isinstance(a11y._role_num(bus, "s", "/p"), int)
+    assert isinstance(a11y._children(bus, "s", "/p"), list)
+    ext = a11y._window_extents(bus, "s", "/p")
+    assert ext is None or len(ext) == 4
+    assert isinstance(a11y._states(bus, "s", "/p"), set)
+    assert isinstance(a11y._interfaces(bus, "s", "/p"), set)
+    assert isinstance(a11y.element_value(bus, "s", "/p", 61, {7}), dict)
+    assert isinstance(a11y.element_value(bus, "s", "/p", 51, set()), dict)  # a slider
+    assert isinstance(a11y.toolkit(bus, "s"), tuple)
+    assert isinstance(a11y.text_of(bus, "s", "/p"), str)
+    assert a11y.has_action(bus, "s", "/p") in (True, False)
+    assert isinstance(a11y._related(bus, "s", "/p", 1, a11y.Owner(bus, "s", 1)), list)
+    assert bus.conn_pid("s") is None or isinstance(bus.conn_pid("s"), int)
+
+
+def test_a_walk_survives_a_hostile_node():
+    # one node answers GetState with text and GetRole with a list: the walk
+    # goes on and the rest of the tree is still read
+    class Hostile(FakeBus):
+        def call(self, svc, path, iface, method, *sig):
+            if path == "/bad" and method in ("GetState", "GetRole", "GetExtents"):
+                return [["not", "ints"]]
+            return super().call(svc, path, iface, method, *sig)
+
+    nodes = {
+        ("app", "/root"): {"role": 75, "name": "app",
+                           "children": [("app", "/bad"), ("app", "/ok")]},
+        ("app", "/bad"): {"role": 43, "name": "Bad", "children": []},
+        ("app", "/ok"): {"role": 43, "role_name": "button", "name": "OK", "extent": (1, 1, 9, 9),
+                         "states": ALL_STATES, "children": []},
+    }
+    found, _ = a11y.find_elements(Hostile(nodes), "app", "/root")
+    assert [e["name"] for e in found] == ["OK"]

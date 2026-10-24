@@ -246,6 +246,14 @@ All notable changes to this project are documented here. The format follows
   window's process, so background typing went into that process's field
   instead of the terminal. A root on another process whose connection
   descends from the window's process is no longer the window's.
+- **A malformed accessibility reply reads as "not there".** An app
+  chooses its replies' types and values, and a string where an integer
+  belongs, an empty reply or an infinite double raised an exception that
+  escaped every `except A11yError`, so one hostile app broke `ui`,
+  `click_ui` and background typing for every window whose tree reached
+  it. Every reader now takes such a reply as "not there", as it does a
+  refused call, and a background press that landed reports a failed
+  read-back in its result instead of failing.
 - **Safety switches fail toward safety.** `HYPRUSE_READONLY`,
   `HYPRUSE_DRYRUN` and `HYPRUSE_STRICT` read a near-miss value (`ture`,
   `y`, `= 1`) as off, so read-only registered every acting tool and a

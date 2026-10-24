@@ -1479,3 +1479,15 @@ def test_a_root_a_process_inside_the_window_registered_proves_nothing(monkeypatc
     # the window's own process, or one that started it, still proves the root
     parents.clear()
     assert REAL_PROVEN_FRAME(Bus(), dict(CLIENT), ("evil", "/root")) == ("evil", "/frame")
+
+
+def test_a_press_that_landed_is_not_reported_as_an_error_when_its_read_back_fails(
+        wired_bg, monkeypatch):
+    # V22: a reader raising after DoAction turned a delivered press into an error
+    def broken(*a, **k):
+        raise srv.hyprctl.HyprctlError("socket gone")
+
+    monkeypatch.setattr(srv.hyprctl, "query", broken)
+    out = str(srv.click_ui(name="Save", window="0xa"))
+    assert wired_bg["actions"] == [("svc", "/save")]
+    assert "pressed" in out and "could not be read back" in out

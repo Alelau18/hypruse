@@ -1775,22 +1775,32 @@ def _click_in_background(
     untouched, warning = _seat_report(seat)
     paren = "no pointer, the human's focus untouched" if untouched else "no pointer"
     msg = f"{verb} {desc} through {how} ({paren}) in {cls}"
+    try:  # the press has landed: a read that fails now must not report it as an error
+        msg += _press_read_back(bus, client, svc, path, focus_only, is_text, before)
+    except Exception as exc:
+        msg += f"; what it did could not be read back ({type(exc).__name__})"
+    return _acted(msg + warning, then, window=client["address"], fallback=False)
+
+
+def _press_read_back(bus: a11y.Bus, client: dict[str, Any], svc: str, path: str,
+                     focus_only: bool, is_text: bool, before: dict[str, Any]) -> str:
+    """What a background press did, as the tail of its result."""
     if not any(c.get("address") == client["address"] for c in hyprctl.query("clients")):
-        msg += "; the window closed"
-    elif focus_only:  # what the app reports, not proof a key reaches it or acts
-        msg += ("; the app now reports it focused (it is not pressed; check what a key "
+        return "; the window closed"
+    if focus_only:  # what the app reports, not proof a key reaches it or acts
+        return ("; the app now reports it focused (it is not pressed; check what a key "
                 "does with ui)" if a11y.is_focused(bus, svc, path) else
                 "; the app does not report it focused")
-    elif not is_text:  # focus is not a value: a field reads the same after it
+    if not is_text:  # focus is not a value: a field reads the same after it
         after = a11y.current_value(bus, svc, path)
         if after != before:
-            msg += "; now: " + ", ".join(
+            return "; now: " + ", ".join(
                 f"{k}={str(v).lower() if isinstance(v, bool) else repr(v)}"
                 for k, v in after.items()
             )
-        elif before:
-            msg += "; no change seen"
-    return _acted(msg + warning, then, window=client["address"], fallback=False)
+        if before:
+            return "; no change seen"
+    return ""
 
 
 def _seat_now() -> tuple[Any, Any] | None:
