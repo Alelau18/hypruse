@@ -353,6 +353,18 @@ All notable changes to this project are documented here. The format follows
 - **`keyboard type --allow-auth TEXT` warns** that the text is on the
   verb's own command line, readable from /proc; the skill says to pass it
   on stdin (`keyboard type - --allow-auth`).
+- **Typing says when an unrecognized layer may have the keys.** Whether a
+  layer holds the keyboard was read off its namespace, which its own
+  client picks, and Hyprland's layer list does not say which layer has
+  the keyboard: a layer named outside hypruse's table (`notes`) with an
+  exclusive grab got the keys while the result said "typed N characters
+  into X" (reproduced). With no recognized grabber, a `keyboard` result
+  now ends with a NOTE naming any unrecognized layer at the top or
+  overlay level. It is a note, not a refusal, since most such layers are a
+  shell's widgets. Noctalia 5's layers are recognized: its panels, overview
+  launcher, window switcher and screenshot region as launchers (they take
+  the keyboard while open), its bar, notifications and OSD, and its
+  screen corners as a new `decoration` kind.
 - **`HYPRUSE_STRICT` takes in only the seat changes an action made.**
   Every acting tool re-baselined the seat guard with whatever the seat was
   once it finished, so a popup that took the focus mid-action, or the

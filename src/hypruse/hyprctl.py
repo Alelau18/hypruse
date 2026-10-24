@@ -750,6 +750,13 @@ LAYER_LEVELS = ("background", "bottom", "top", "overlay")
 # shape. Its lock preview grabs the keyboard too but takes no password,
 # and a click dismisses it, so it is its own kind rather than a lock: the
 # real lock is a session lock, which trust.session_locked() detects.
+#
+# The noctalia-* names are Noctalia 5's (src/shell): its panels (the
+# launcher and control center, and the click shield laid over the screen
+# behind them), overview launcher, window switcher and screenshot region
+# take the keyboard while open (exclusive or on demand); its bar,
+# notifications, OSD and screen corners take none. Its lock is a session
+# lock too.
 _AUTH_MARK = "polkit"
 _LAYER_KINDS = (
     (
@@ -759,10 +766,14 @@ _LAYER_KINDS = (
             "omarchy-menu", "omarchy-clipboard", "omarchy-emojis",
             "omarchy-image-selector", "omarchy-keyboard-panel", "omarchy-reminders",
             "omarchy-network-qr", "omarchy-network-speedtest", "omarchy-disk-speedtest",
+            "noctalia-panel", "noctalia-overview-launcher", "noctalia-window-switcher",
+            "noctalia-screenshot-region",
         ),
     ),
-    ("bar", ("waybar", "hyprpanel", "ags-", "bar", "omarchy-bar")),
-    ("notifications", ("mako", "dunst", "swaync", "notification", "omarchy-notifications")),
+    ("bar", ("waybar", "hyprpanel", "ags-", "bar", "omarchy-bar", "noctalia-bar")),
+    ("notifications", ("mako", "dunst", "swaync", "notification", "omarchy-notifications",
+                       "noctalia-notification", "noctalia-osd")),
+    ("decoration", ("noctalia-screen-corner",)),
     ("lock-preview", ("omarchy-lock-preview",)),
     ("lock", ("hyprlock", "swaylock", "lockscreen")),
     ("osk", ("wvkbd", "squeekboard", "osk")),

@@ -862,6 +862,16 @@ def test_init_marking_warns_instead_of_dying_when_the_rule_will_not_install(
         ("omarchy-bar", "bar"),
         ("omarchy-notifications", "notifications"),
         ("omarchy-osd", "unknown"),
+        # Noctalia 5 (src/shell)
+        ("noctalia-bar-default", "bar"),
+        ("noctalia-panel", "launcher"),
+        ("noctalia-panel-click-shield", "launcher"),  # exclusive on Hyprland
+        ("noctalia-overview-launcher", "launcher"),
+        ("noctalia-window-switcher", "launcher"),
+        ("noctalia-screenshot-region", "launcher"),
+        ("noctalia-notification", "notifications"),
+        ("noctalia-osd", "notifications"),
+        ("noctalia-screen-corner", "decoration"),
     ],
 )
 def test_omarchy_layer_kinds(namespace, kind):
@@ -1304,3 +1314,25 @@ def test_with_no_baseline_or_no_strict_mode_nothing_is_judged(seat, monkeypatch)
     seat["active"] = A
     assert trust.remember_seat_after() == ""
     assert trust._seat["active"] == trust.hyprctl.window_key(B)  # untouched
+
+
+def _layer(namespace, level="3"):
+    return {"DP-1": {"levels": {level: [{"namespace": namespace, "x": 0, "y": 0,
+                                         "w": 1920, "h": 1080}]}}}
+
+
+@pytest.mark.parametrize("window_given, where", [(True, "the window"),
+                                                 (False, "the focused window")])
+def test_an_unrecognized_layer_over_the_windows_is_noted(monkeypatch, window_given, where):
+    # V39: a layer's kind is its own client's namespace; an unknown one with an
+    # exclusive grab took the keys while the result said they reached the window
+    monkeypatch.setattr(trust.hyprctl, "query", lambda cmd: _layer("notes"))
+    note = trust.guard_keyboard_layer(window_given, False)
+    assert "'notes'" in note and f"the keys went to it, not to {where}" in note
+
+
+@pytest.mark.parametrize("raw", [_layer("notes", level="1"),  # below the windows
+                                 _layer("noctalia-bar-default", level="2")])  # a known bar
+def test_known_or_lower_layers_are_not_noted(monkeypatch, raw):
+    monkeypatch.setattr(trust.hyprctl, "query", lambda cmd: raw)
+    assert trust.guard_keyboard_layer(True, False) == ""
