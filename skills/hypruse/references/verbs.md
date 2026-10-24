@@ -378,8 +378,10 @@ sharpened the estimate. `drag` guards both ends against confinement. A
 locked session refuses every action except `move`. `--allow-auth` overrides
 the refusal to click over a system authentication dialog, and only a human's
 explicit intent justifies it; under HYPRUSE_AUTH_GUARD=strict it also lets a
-middle click (or `down`) into a window with a password field through, which
-is refused otherwise because a middle click pastes. The pointer is the human's own cursor: by
+middle click (`click`, `down` or `drag`) into a window with a password field
+through, which is refused otherwise because a middle click pastes. A window
+whose tree cannot be read in full, with no password field found, is not
+refused. The pointer is the human's own cursor: by
 default it is refused (exit 3) where its input would land on a window other
 than the one the human is in, a `move` included since focus follows the
 mouse, and it is refused outright under HYPRUSE_BACKGROUND=1 or with

@@ -723,29 +723,47 @@ def test_a_release_that_cannot_go_back_quotes_the_guard_not_its_plan(vp, monkeyp
 
 # a middle-button press pastes the primary selection into the field under the
 # pointer: under HYPRUSE_AUTH_GUARD=strict, text into a password field needs
-# allow_auth however it gets in
+# allow_auth however it gets in. These stub only what the code before the
+# check had too (trust._seat_at, server._census), so on that code they fail
+# by showing the press go through.
+
+LOGIN = {"address": "0xl", "class": "login"}
 
 
-def _fields(*roles):
-    return srv._Census(None, None, False, [("svc", f"/f{i}", r) for i, r in enumerate(roles)],
-                       True, False)
+def _census(*roles, focused=None):
+    return srv._Census(None, focused, focused is not None,
+                       [("svc", f"/f{i}", r) for i, r in enumerate(roles)], True, False)
 
 
 @pytest.fixture
 def login_form(tool, monkeypatch):
     monkeypatch.setenv("HYPRUSE_AUTH_GUARD", "strict")
-    monkeypatch.setattr(srv.trust, "windows_at", lambda x, y: [{"address": "0xl",
-                                                                "class": "login"}])
-    monkeypatch.setattr(srv, "_census", lambda client, every_field: _fields(
+    monkeypatch.setattr(srv.trust, "_seat_at", lambda x, y: ([], [LOGIN]))
+    monkeypatch.setattr(srv, "_census", lambda client, every_field: _census(
         61, srv.a11y.PASSWORD_ROLE))
+    monkeypatch.setattr(hinput, "drag", lambda *a, **k: tool["input"].append(("drag",)))
     return tool
 
 
-def test_a_middle_press_into_a_window_with_a_password_field_is_refused(login_form):
-    for action in ("click", "down"):
-        with pytest.raises(srv.trust.TrustError, match="middle click pastes .* login has a "
-                           "password field"):
-            srv.pointer(action, x=1, y=2, button="middle")
+@pytest.mark.parametrize("call", [
+    lambda: srv.pointer("click", x=1, y=2, button="middle"),
+    lambda: srv.pointer("down", x=1, y=2, button="middle"),
+    lambda: srv.pointer("drag", x=1, y=2, to_x=5, to_y=6, button="middle"),
+])
+def test_a_middle_press_into_a_window_with_a_password_field_is_refused(login_form, call):
+    with pytest.raises(srv.trust.TrustError, match="middle click pastes .* login has a "
+                       "password field"):
+        call()
+    assert login_form["input"] == []
+
+
+def test_a_focused_password_field_counts_when_the_walk_was_cut_short(login_form, monkeypatch):
+    # review of d554a1a: a large page's walk stops early, but the focused
+    # field is found without it
+    monkeypatch.setattr(srv, "_census", lambda client, every_field: srv._Census(
+        None, ("svc", "/pw", srv.a11y.PASSWORD_ROLE), True, [], False, False))
+    with pytest.raises(srv.trust.TrustError, match="middle click pastes"):
+        srv.pointer("click", x=1, y=2, button="middle")
     assert login_form["input"] == []
 
 
@@ -758,9 +776,10 @@ def test_allow_auth_another_button_or_the_default_guard_lets_it_through(login_fo
     assert [c[0] for c in login_form["input"]] == ["click"] * 3
 
 
-def test_a_window_with_no_password_field_or_no_tree_takes_the_middle_click(monkeypatch):
-    monkeypatch.setenv("HYPRUSE_AUTH_GUARD", "strict")
-    monkeypatch.setattr(srv, "_census", lambda client, every_field: _fields(61))
-    srv._guard_middle_paste([{"class": "editor"}], False)
-    monkeypatch.setattr(srv, "_census", lambda client, every_field: _fields())  # unreadable
-    srv._guard_middle_paste([{"class": "game"}], False)
+@pytest.mark.parametrize("census", [_census(61), _census(), srv._Census(
+    None, None, False, [], False, False)])  # no password field, no tree, a cut-short walk
+def test_a_window_with_no_password_field_found_takes_the_middle_click(login_form, monkeypatch,
+                                                                     census):
+    monkeypatch.setattr(srv, "_census", lambda client, every_field: census)
+    srv.pointer("click", x=1, y=2, button="middle")
+    assert [c[0] for c in login_form["input"]] == ["click"]

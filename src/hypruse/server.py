@@ -1371,6 +1371,9 @@ def pointer(
         hinput.check_drag(duration_ms, steps)
         trust.guard_pointer(x, y, allow_auth)
         trust.guard_pointer(to_x, to_y, allow_auth)  # the drag ends elsewhere; guard that too
+        if button == "middle":  # pressed at the start, released at the end: either can paste
+            _guard_middle_paste(trust.windows_at(x, y) + trust.windows_at(to_x, to_y),
+                                allow_auth)
         note = note or _layer_note(x, y)
         plan = f"drag {button} from {_at(x, y)} to {_at(to_x, to_y)}"
         if (duration_ms, steps) != (hinput.DRAG_DURATION_MS, hinput.DRAG_STEPS):
@@ -1790,14 +1793,16 @@ def _guard_middle_paste(clients: list[dict[str, Any]], allow_auth: bool) -> None
     under the pointer: text going in, like a typed key, so a window whose
     tree shows a password field refuses it without allow_auth, as typing
     into it does. Which field is under the point is not worked out, so a
-    password field anywhere in the window counts; a tree that cannot be
-    read, or not all of it (a large web page), cannot be checked and is not
-    refused, so a middle click on a link still opens it."""
+    password field anywhere in the window counts, the focused field
+    included (it is found without walking the tree, so a large web page's
+    focused password field counts too). A tree that cannot be read, or not
+    all of it, with no password field found, is not refused, so a middle
+    click on a link still opens it."""
     if allow_auth is True or not trust.auth_strict():
         return
     for client in clients:
         census = _census(client, every_field=True)
-        if any(f[2] == a11y.PASSWORD_ROLE for f in census.fields):
+        if any(f[2] == a11y.PASSWORD_ROLE for f in [*census.fields, census.field] if f):
             raise trust.TrustError(
                 f"a middle click pastes the primary selection into the field under the pointer, "
                 f"and {client.get('class', 'the window')} has a password field; refusing it. "

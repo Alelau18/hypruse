@@ -514,3 +514,15 @@ def test_a_tiled_permission_prompt_still_takes_the_click(monkeypatch, target):
     _scene(monkeypatch, [dict(PERMISSION, floating=False)])
     with pytest.raises(srv.trust.TrustError, match="Hyprland's own dialog"):
         _check(dict(make_client(), **target))
+
+
+def test_click_ui_middle_click_into_a_password_form_needs_allow_auth(wired, monkeypatch):
+    # a middle click pastes the primary selection into the field it lands on
+    monkeypatch.setenv("HYPRUSE_AUTH_GUARD", "strict")
+    monkeypatch.setattr(srv, "_census", lambda client, every_field: srv._Census(
+        None, None, False, [("svc", "/pw", srv.a11y.PASSWORD_ROLE)], True, False))
+    with pytest.raises(srv.trust.TrustError, match="middle click pastes"):
+        srv.click_ui(name="Save as", button="middle")
+    assert wired["clicks"] == []
+    srv.click_ui(name="Save as", button="middle", allow_auth=True)
+    assert wired["clicks"] == [(250, 80, "middle")]

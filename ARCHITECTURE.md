@@ -233,7 +233,12 @@ ask the human.
   on the foreground's strict check alike: a focused password field, one
   among several when focus is not reported, a census cut short by the walk
   budget, or a Tab or line break (which moves the focus partway through)
-  into a window with a password field refuses without `allow_auth`. Text with a newline, tab or
+  into a window with a password field refuses without `allow_auth`. A
+  middle-button press (which pastes) has its own, coarser check under
+  `HYPRUSE_AUTH_GUARD=strict`, `_guard_middle_paste`: any password field
+  the census finds in the window, focused or not, refuses; a census cut
+  short with no password field found does not, so a middle click on a
+  link in a large web page still works. Text with a newline, tab or
   backspace goes key by key, as wtype would press them, and the result
   describes the field without repeating it, since the journal stores
   every result line. InsertText's
