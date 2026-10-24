@@ -466,7 +466,7 @@ def test_a_background_screenshot_shows_the_acted_on_window(monkeypatch):
     monkeypatch.setattr(srv, "_deliver_capture",
                         lambda **kw: seen.append(kw) or [TextContent(type="text", text="IMG")])
     srv._acted("pressed", "screenshot", window="0xa", fallback=False)
-    assert seen == [{"window": "0xa", "stable": True}]
+    assert seen == [{"window": "0xa", "stable": True, "rearm": False}]
 
 
 def test_a_foreground_screenshot_says_it_is_the_humans_monitor(monkeypatch):
@@ -582,3 +582,77 @@ def test_a_focus_stolen_while_typing_refuses_the_next_windowless_key(monkeypatch
     with pytest.raises(srv.trust.TrustError, match="seat moved"):
         srv.keyboard("key", keys="enter")
     assert pressed == []
+
+
+# review of bff18a7: what each acting tool claims under HYPRUSE_STRICT, at
+# tool level
+
+MINE = {"address": "0xa", "stableId": "1", "pid": 10, "class": "kitty", "at": [0, 0],
+        "size": [500, 500], "workspace": {"id": 1}, "mapped": True}
+OTHER = dict(MINE, address="0xb", stableId="2", pid=20, at=[500, 0], **{"class": "firefox"})
+SEAT_MONS = [{"id": 0, "activeWorkspace": {"id": 1}, "specialWorkspace": {"id": 0}}]
+
+
+@pytest.fixture
+def strict_seat(monkeypatch):
+    """A strict seat: cursor at (5, 5) in MINE, the baseline taken there."""
+    monkeypatch.setenv("HYPRUSE_STRICT", "1")
+    now = {"cursor": (5, 5), "active": MINE}
+    monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
+    monkeypatch.setattr(srv.hyprctl, "cursor_pos", lambda: now["cursor"])
+    monkeypatch.setattr(srv.hyprctl, "query",
+                        lambda cmd: now["active"] if cmd == "activewindow" else [MINE, OTHER])
+    monkeypatch.setattr(srv.hyprctl, "batch_query", lambda cmds: [SEAT_MONS, [MINE, OTHER]])
+    monkeypatch.setattr(srv.trust, "guard_pointer", lambda *a, **k: None)
+    monkeypatch.setattr(srv.trust, "guard_session_lock", lambda *a: "")
+    monkeypatch.setattr(srv.trust, "guard_keyboard_layer", lambda *a: "")
+    monkeypatch.setattr(srv, "_pointer_policy", lambda *a: None)
+    monkeypatch.setattr(srv, "_layer_note", lambda *a: "")
+    srv.trust._seat.update(cursor=(5, 5), active=srv.hyprctl.window_key(MINE))
+    return now
+
+
+def _click_lands(now, monkeypatch, cursor, active):
+    def click(x, y, button="left", double=False, hold_ms=0, precheck=None):
+        now["cursor"], now["active"] = cursor, active
+    monkeypatch.setattr(srv.hinput, "click", click)
+
+
+def test_a_click_that_focuses_the_window_it_hit_gives_no_warning(strict_seat, monkeypatch):
+    _click_lands(strict_seat, monkeypatch, (600, 50), OTHER)
+    out = srv.pointer("click", x=600, y=50)
+    assert "WARNING" not in out
+    assert srv.trust._seat["active"] == srv.hyprctl.window_key(OTHER)
+
+
+def test_a_click_whose_cursor_someone_else_moved_warns(strict_seat, monkeypatch):
+    _click_lands(strict_seat, monkeypatch, (900, 900), MINE)  # the human, meanwhile
+    out = srv.pointer("click", x=600, y=50)
+    assert "WARNING" in out and "cursor moved to (900, 900)" in out
+    assert srv.trust._seat["cursor"] == (5, 5)  # kept for the next guard
+
+
+def test_a_typed_steal_still_refuses_with_a_fused_screenshot(strict_seat, monkeypatch):
+    # review of bff18a7: then='screenshot' re-armed the baseline right after
+    # the call warned, so the next windowless key went to the popup
+    popup = dict(OTHER, address="0xp", stableId="9", pid=66, **{"class": "popup"})
+    monkeypatch.setattr(srv.hinput, "type_text", lambda t: strict_seat.update(active=popup))
+    monkeypatch.setattr(srv, "_grab_env", lambda *a, **k: (b"IMG", {}))
+    monkeypatch.setattr(srv, "_package", lambda data, meta: [TextContent(type="text", text="I")])
+    pressed = []
+    monkeypatch.setattr(srv.hinput, "key_combo", pressed.append)
+    out = srv.keyboard("type", text="hello", then="screenshot")
+    assert "focus went to 0xp" in str(out)
+    with pytest.raises(srv.trust.TrustError, match="seat moved"):
+        srv.keyboard("key", keys="enter")
+    assert pressed == []
+
+
+def test_a_close_or_move_credits_the_windows_on_its_workspace(monkeypatch):
+    far = dict(OTHER, address="0xf", stableId="5", workspace={"id": 2})
+    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: [MINE, OTHER, far])
+    for action in ("close_window", "move_window"):
+        caused = srv._hypr_causes(action, "0xa", None)
+        assert {w["address"] for w in caused["windows"]} == {"0xa", "0xb"}  # not 0xf
+    assert srv._hypr_causes("focus_window", "0xa", None) == {"warped": [MINE]}
+    assert srv._hypr_causes("toggle_floating", "", OTHER) == {"windows": [OTHER]}

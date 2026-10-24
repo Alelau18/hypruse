@@ -388,9 +388,10 @@ All notable changes to this project are documented here. The format follows
   pointer the window under the point. Otherwise the baseline stays, the
   next action on the human's screen is refused until `desktop` or
   `screenshot` reads the seat again, and the result ends with a
-  `WARNING` naming the change. A workspace switch and `use_bind`, whose
-  landing window cannot be predicted, still take the seat as they leave
-  it.
+  `WARNING` naming the change. A `then='screenshot'` on the same call does
+  not re-arm the guard (as `then='desktop'` never did); a call of its own
+  does. A workspace switch and `use_bind`, whose landing window cannot be
+  predicted, still take the seat as they leave it.
 - **The background guarantee covers the agent's own windows, not its
   workspaces.** Under `HYPRUSE_BACKGROUND=1`, `keyboard`, `click_ui` and
   `hypr` accepted any window on workspaces 90-99, so a window the human

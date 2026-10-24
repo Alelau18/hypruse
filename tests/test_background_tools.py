@@ -617,13 +617,14 @@ def test_a_launch_claims_only_its_own_window(launch_fake):
     assert launch_fake["claims"] == [["0xnew"], ["0xnew"]]
 
 
-def test_an_app_that_opened_elsewhere_says_whether_focus_moved(launch_fake):
+def test_an_app_that_opened_elsewhere_says_whether_focus_moved(launch_fake, monkeypatch):
     # a single-instance app opens from its running process, on the human's
     # workspace, and is moved after
     launch_fake["lands"] = "1"
     launch_fake["active"][:] = ["0xhuman", "0xother"]
     launch_fake["clients"] = [{"address": "0xother", "workspace": {"id": 1, "name": "1"}},
                               {"address": "0xfar", "workspace": {"id": 5, "name": "5"}}]
+    _known_before(monkeypatch, launch_fake["clients"])
     out = srv.launch("foot")
     assert ("movetoworkspacesilent", "99,address:0xnew") in launch_fake["dispatch"]
     assert "focus" in out["note"] and "0xother" in out["note"] and "agent" in out["note"]
@@ -1671,3 +1672,20 @@ def test_the_guarantee_keeps_off_the_humans_window_on_an_agent_workspace(wired_b
         srv.hypr("close_window", target="0xa")
     assert not (wired_bg["actions"] or wired_bg["inserted"] or wired_bg["shortcuts"]
                 or wired_bg["dispatch"])
+
+
+def _known_before(monkeypatch, clients):
+    """The windows the launch's own refresh saw before its wait."""
+    monkeypatch.setattr(srv, "_known_clients", {srv.hyprctl.window_key(c) for c in clients})
+
+
+def test_a_window_opened_during_the_wait_is_not_the_launchs(launch_fake, monkeypatch):
+    # review of bff18a7: moved away, Hyprland focuses a window where the app
+    # opened; one the human opened there during the wait is not the launch's
+    launch_fake["lands"] = "1"
+    launch_fake["active"][:] = ["0xhuman", "0xduring"]
+    before = {"address": "0xother", "workspace": {"id": 1, "name": "1"}}
+    _known_before(monkeypatch, [before])
+    launch_fake["clients"] = [before, {"address": "0xduring", "workspace": {"id": 1, "name": "1"}}]
+    srv.launch("foot")
+    assert launch_fake["claims"] == [["0xnew", "0xother"]]  # not 0xduring

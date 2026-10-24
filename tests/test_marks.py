@@ -526,3 +526,28 @@ def test_click_ui_middle_click_into_a_password_form_needs_allow_auth(wired, monk
     assert wired["clicks"] == []
     srv.click_ui(name="Save as", button="middle", allow_auth=True)
     assert wired["clicks"] == [(250, 80, "middle")]
+
+
+def test_click_ui_under_strict_warns_only_for_a_change_it_did_not_make(wired, monkeypatch):
+    # review of bff18a7: the click focuses and hits the window; a cursor the
+    # human moved meanwhile is theirs
+    monkeypatch.setenv("HYPRUSE_STRICT", "1")
+    client = wired["client"]
+    now = {"cursor": (5, 5), "active": client}
+    monkeypatch.setattr(srv.hyprctl, "cursor_pos", lambda: now["cursor"])
+    monkeypatch.setattr(srv.hyprctl, "query",
+                        lambda cmd: now["active"] if cmd == "activewindow" else [client])
+    monkeypatch.setattr(srv.hyprctl, "batch_query", lambda cmds: [MONS, [client]])
+    lands = {"at": (150, 80)}
+
+    def click(x, y, button="left", double=False, precheck=None):
+        now["cursor"] = lands["at"]
+        wired["clicks"].append((x, y, button))
+
+    monkeypatch.setattr(srv.hinput, "click", click)
+    srv.trust._seat.update(cursor=(5, 5), active=srv.hyprctl.window_key(client))
+    assert "WARNING" not in srv.click_ui(name="Save")
+    srv.trust._seat.update(cursor=(150, 80), active=srv.hyprctl.window_key(client))
+    lands["at"] = (1500, 900)  # outside the window: the human moved it
+    out = srv.click_ui(name="Save")
+    assert "WARNING" in out and "cursor moved to (1500, 900)" in out

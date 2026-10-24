@@ -417,11 +417,13 @@ def _deliver_capture(
     extra: dict[str, Any] | None = None,
     stable: bool = False,
     lossless: bool = False,
+    rearm: bool = True,
 ) -> list[Any]:
     data, meta = _grab_env(window, region, scale=scale, stable=stable, lossless=lossless)
     meta.update(extra or {})
     trust.notify_capture()  # HYPRUSE_MARK: flash an on-screen notice, rate-limited
-    trust.remember_seat()  # a fresh capture re-arms the strict seat guard
+    if rearm:
+        trust.remember_seat()  # a fresh capture re-arms the strict seat guard
     return _package(data, meta)
 
 
@@ -1042,9 +1044,13 @@ def _acted(msg: str, then: str, window: str = "", fallback: bool = True) -> list
                 # human's own work, not the window that was acted on. The
                 # window's own capture (grim -T) says when it is not on
                 # screen and may be stale.
-                return [head, *_deliver_capture(window=window, stable=True)]
+                return [head, *_deliver_capture(window=window, stable=True, rearm=False)]
+            # appended to an action, it never re-arms the seat guard (as
+            # then='desktop' does not): the action may have just warned that
+            # the seat changed under it, and kept the baseline for the guard
             return [head, *_deliver_capture(
-                stable=True, extra={"view": "the focused monitor, as the human sees it"})]
+                stable=True, extra={"view": "the focused monitor, as the human sees it"},
+                rearm=False)]
         except Exception as exc:
             return _observe_failed(msg, then, exc)
     if then == "ui":
@@ -2542,6 +2548,7 @@ def launch(
     safety.touch("launch")
     _require_finite(wait_s=wait_s)
     _note_clients()  # what wait_for(window_open) counts as already there
+    known_before = set(_known_clients or ())  # the windows there before the wait
     wait_s = min(max(wait_s, 1.0), 30.0)
     # Background mode: with no workspace, automatic mode and the guarantee
     # open the app on the next agent workspace that is off screen
@@ -2674,13 +2681,15 @@ def launch(
             )
     # the new window taking the focus is the launch's doing, and so is
     # Hyprland focusing another window where it opened once it is moved
-    # away; any other change since the last action (the human, during the
-    # wait) stays for the seat guard to see, in off mode too (V62)
+    # away, one that was there before the wait; any other change since the
+    # last action (the human, during the wait, a window they opened there
+    # included) stays for the seat guard to see, in off mode too (V62)
     caused = [win]
     if moved:
         with contextlib.suppress(Exception):
             caused += [c for c in hyprctl.query("clients")
-                       if hyprctl.workspace_ref(c.get("workspace")) == hyprctl.workspace_ref(ws)]
+                       if hyprctl.workspace_ref(c.get("workspace")) == hyprctl.workspace_ref(ws)
+                       and hyprctl.window_key(c) in known_before]
     seat = trust.remember_seat_after(windows=caused)
     if seat:
         result["warning"] = "; ".join(
