@@ -16,6 +16,7 @@ import inspect
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -2031,13 +2032,45 @@ def _program(command: str) -> str:
     return ""
 
 
-def _launched_window(workspace: str, command: str) -> Callable[[dict[str, Any]], bool]:
-    """Which new window a placed launch waits for: one on its workspace, or
-    one of the launched program's own class (a single-instance app's window
-    opens from the running process, which ignores the rule). Any other new
-    window is someone else's, often the human's, and must not be taken over
-    and moved. `workspace` is an event's workspace name or a client's
-    workspace record."""
+# The environment variable a launch exports to the command it runs, with a
+# random value: the command and everything it starts inherit it, which is
+# what ties a new window to this launch rather than to the moment it opened.
+_LAUNCH_VAR = "HYPRUSE_LAUNCH"
+
+
+def _with_token(command: str, token: str) -> str:
+    """`command` with this launch's token exported first. Hyprland runs it
+    with /bin/sh -c, after the [rule] it may start with."""
+    rule = re.match(r"\s*\[[^\]]*\]\s*", command)
+    head = rule.group(0) if rule else ""
+    return f"{head}export {_LAUNCH_VAR}={token}; {command[len(head):]}"
+
+
+def _carries_token(pid: Any, token: str) -> bool:
+    """Whether a process's environment holds this launch's token."""
+    if not token:
+        return False
+    try:
+        with open(f"/proc/{int(pid)}/environ", "rb") as f:
+            return f"{_LAUNCH_VAR}={token}".encode() in f.read().split(b"\0")
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _launched_window(
+    workspace: str, command: str, token: str = ""
+) -> Callable[[dict[str, Any]], str | None]:
+    """How a new window relates to a launch. "proven" when its process
+    carries the launch's token, or it opened on the launch's own workspace
+    (the rule Hyprland applies to the launched command): the agent opened
+    it. "class" when only its class is the program's own: a single-instance
+    app's window opens from the process that was already running, which
+    ignores the rule and carries no token, so nothing ties it to this launch
+    rather than to the human opening one at the same moment. None: someone
+    else's, often the human's, and never taken over. A launch waits for a
+    window that is either; only a proven one is recorded as the agent's.
+    `workspace` is "" for a launch with no placement rule. An event names
+    the workspace by name and carries no pid: its client record is read."""
     prog = _norm(_program(command))
 
     def on_it(ws: Any) -> bool:
@@ -2051,18 +2084,23 @@ def _launched_window(workspace: str, command: str) -> Callable[[dict[str, Any]],
             return False
         return prog in c or c in prog or (len(last) >= 3 and (last in prog or prog in last))
 
-    def accept(win: dict[str, Any]) -> bool:
-        if on_it(win.get("workspace")) or same_app(str(win.get("class", ""))):
-            return True
-        # an event names the workspace by NAME, which a workspace rule's
-        # default name can make differ from its number: ask for the record
-        if not isinstance(win.get("workspace"), dict) and win.get("address"):
+    def classify(win: dict[str, Any]) -> str | None:
+        record = win
+        if ("pid" not in win or not isinstance(win.get("workspace"), dict)) and win.get(
+                "address"):
+            # an event names the workspace by NAME, which a workspace rule's
+            # default name can make differ from its number, and has no pid
             with contextlib.suppress(Exception):
-                c = _client_by_address(win["address"])
-                return bool(c and on_it(c.get("workspace")))
-        return False
+                record = _client_by_address(win["address"]) or win
+        if _carries_token(record.get("pid"), token):
+            return "proven"
+        if workspace and (on_it(win.get("workspace")) or on_it(record.get("workspace"))):
+            return "proven"
+        if same_app(str(win.get("class", ""))):
+            return "class"
+        return None
 
-    return accept
+    return classify
 
 
 def _client_by_address(address: str) -> dict[str, Any] | None:
@@ -2110,7 +2148,9 @@ def launch(
     down to 90 by default) that is not on screen, so the agent can work on
     it in the background; `background=false` opens it on the human's
     workspace instead. It waits for its own window (one on that workspace,
-    or of the program's own class), never one the human opens meanwhile.
+    one its own command opened, or of the program's own class), never one
+    of another app the human opens meanwhile; only one it can prove is its
+    own counts as the agent's (HYPRUSE_CONFINE=launched).
     An app that is already running opens its window from the running
     process, on the human's screen, before it is moved: the note says so.
     Returns the new window's address/class/title/workspace, or a timeout
@@ -2163,16 +2203,23 @@ def launch(
     if journal.dry_run():
         return f"{_DRY} run {rule + command} and wait up to {wait_s:.0f}s for its window"
     active_before = _active_address() if rule else None
-    accept = _launched_window(workspace, command) if rule else None
-    win = _launch_and_wait(rule + command, wait_s, accept)
+    # never "the next window anyone opens": that was the human's, as often
+    # as not, and it became the agent's (in `launched` scope, tagged)
+    token = secrets.token_hex(8)
+    match = _launched_window(workspace, command, token)
+    win = _launch_and_wait(rule + _with_token(command, token), wait_s,
+                           lambda w: match(w) is not None)
     if win is None:
         return (
             f"launched, but no new window appeared within {wait_s:.0f}s, slow or "
             "single-instance apps may open late and on their own workspace; call "
             "desktop() to find the window, then hypr move_window if needed"
         )
-    # owned-set for `launched` confinement; tag + notify when HYPRUSE_MARK
-    trust.note_launched(win, win.get("class", ""))
+    # owned-set for `launched` confinement; tag + notify when HYPRUSE_MARK.
+    # Only a window proven to be this launch's: a class match is not proof
+    proven = match(win) == "proven"
+    if proven:
+        trust.note_launched(win, win.get("class", ""))
     _learn_client(win)  # the result names it: not a window_open to wait for
     ws = win.get("workspace", {})
     result: dict[str, Any] = {
@@ -2181,6 +2228,11 @@ def launch(
         "title": win.get("title", ""),
         "workspace": hyprctl.workspace_ref(ws),
     }
+    if not proven:  # carried into every note below, the moved one included
+        note = (f"{note}; " if note else "") + (
+            "it opened from an already-running process of the app, so nothing ties it to this "
+            "launch rather than to a window opened at the same moment: it is not counted as "
+            "one the agent opened (HYPRUSE_CONFINE=launched, HYPRUSE_MARK)")
     if note:
         result["note"] = note
     moved = bool(workspace) and not _launched_window(workspace, "")(win)

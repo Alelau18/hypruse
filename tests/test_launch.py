@@ -103,10 +103,12 @@ def test_launch_timeout_message_mentions_single_instance(monkeypatch, no_sleep):
 
 
 def test_launch_wait_s_clamped(monkeypatch, no_sleep):
-    fake = FakeHyprctl([[EXISTING], [EXISTING, CHROME]])
+    fake = FakeHyprctl([[EXISTING]])  # nothing ever appears
     _patch(monkeypatch, fake)
-    out = server.launch("app", wait_s=999)  # must not loop for 999s
-    assert out["address"] == "0xb"
+    clock = itertools.count(start=0, step=1.0)
+    monkeypatch.setattr(server.time, "monotonic", lambda: next(clock))
+    server.launch("app", wait_s=999)  # must not loop for 999s
+    assert next(clock) < 40
 
 
 def test_launch_uses_event_socket_when_available(monkeypatch, no_sleep):
@@ -206,3 +208,89 @@ def test_launch_reports_an_id_less_057_workspace_by_name(monkeypatch, no_sleep, 
     _patch(monkeypatch, fake)
     out = server.launch("google-chrome")
     assert out["workspace"] == expect
+
+
+# C7 (F4, F16, F40, V45): a launch adopted the first window anyone opened
+# during its wait (with no placement rule), or any window whose class shared
+# a substring with a word of the command, and made it the agent's: in
+# `launched` scope, tagged hypruse-owned, moved.
+HUMAN = {"address": "0xh", "class": "kitty", "title": "~", "pid": 777,
+         "workspace": {"id": 1, "name": "1"}}
+OURS = {"address": "0xo", "class": "foot", "title": "~", "pid": 4242,
+        "workspace": {"id": 1, "name": "1"}}
+
+
+@pytest.fixture
+def owned(monkeypatch):
+    from hypruse import trust
+
+    trust._owned.clear()
+    monkeypatch.setattr(server, "_carries_token", lambda pid, token: pid == 4242 and bool(token))
+    yield trust.owned
+    trust._owned.clear()
+
+
+def test_a_launch_without_a_rule_does_not_take_the_humans_window(monkeypatch, no_sleep, owned):
+    fake = FakeHyprctl([[EXISTING], [EXISTING, HUMAN]])
+    _patch(monkeypatch, fake)  # the polling fallback (V45) as well as the event path
+    clock = itertools.count(start=0, step=1.0)
+    monkeypatch.setattr(server.time, "monotonic", lambda: next(clock))
+    out = server.launch("foot", background=False, wait_s=3)
+    assert isinstance(out, str) and "no new window" in out
+    assert owned() == set()
+
+
+def test_the_launchs_own_window_is_the_agents(monkeypatch, no_sleep, owned):
+    fake = FakeHyprctl([[EXISTING], [EXISTING, HUMAN, OURS]])
+    _patch(monkeypatch, fake)
+    out = server.launch("foot", background=False)
+    assert out["address"] == "0xo" and "note" not in out
+    assert owned() == {server.hyprctl.window_key(OURS)}
+    (exec_,) = [d for d in fake.dispatched if d[0] == "exec"]
+    assert exec_[1].startswith("export HYPRUSE_LAUNCH=") and exec_[1].endswith("; foot")
+
+
+def test_a_single_instance_window_is_found_and_moved_but_not_the_agents(monkeypatch, no_sleep,
+                                                                       owned):
+    # its window opens from the running process: no token, not on the rule's
+    # workspace, so only its class says it is this launch's
+    fake = FakeHyprctl([[EXISTING], [EXISTING, dict(CHROME, pid=999)]])
+    _patch(monkeypatch, fake)
+    out = server.launch("google-chrome", workspace="2")
+    assert out["address"] == "0xb" and ("movetoworkspacesilent", "2,address:0xb") in fake.dispatched
+    assert "not counted as one the agent opened" in out["note"] and "moved" in out["note"]
+    assert owned() == set()
+
+
+def test_a_command_word_that_contains_a_class_owns_nothing(monkeypatch, no_sleep, owned):
+    # F40: the model chose a command whose name contains the human app's class
+    fake = FakeHyprctl([[EXISTING], [EXISTING, HUMAN]])
+    _patch(monkeypatch, fake)
+    out = server.launch("kittyfoo", background=False)
+    assert owned() == set() and "not counted" in out["note"]
+
+
+def test_the_token_goes_after_a_rule_the_command_starts_with():
+    assert server._with_token("[float] kitty", "t") == "[float] export HYPRUSE_LAUNCH=t; kitty"
+    assert server._with_token("sh -c 'a; b'", "t") == "export HYPRUSE_LAUNCH=t; sh -c 'a; b'"
+
+
+def test_a_process_carries_the_token_it_was_started_with():
+    import os
+    import subprocess
+
+    import time
+
+    child = subprocess.Popen(["sleep", "5"], env={**os.environ, "HYPRUSE_LAUNCH": "abc123"})
+    try:
+        # Popen can return before the child has exec'd; a window maps long after
+        deadline = time.monotonic() + 2
+        while not server._carries_token(child.pid, "abc123") and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert server._carries_token(child.pid, "abc123")
+        assert not server._carries_token(child.pid, "abc12")
+        assert not server._carries_token(child.pid, "")
+        assert not server._carries_token(None, "abc123")
+    finally:
+        child.kill()
+        child.wait()

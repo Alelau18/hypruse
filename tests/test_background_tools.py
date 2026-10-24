@@ -1,6 +1,8 @@
 """The acting tools in background mode: what each does to a window the human
 is not in, with every desktop and accessibility call stubbed."""
 
+import re
+
 import pytest
 
 from hypruse import server as srv
@@ -523,6 +525,8 @@ def launch_fake(monkeypatch):
     monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
 
     def launch_and_wait(rule_command, wait_s, accept=None):
+        s["exec"] = rule_command
+        rule_command = re.sub(r"export HYPRUSE_LAUNCH=\w+; ", "", rule_command)
         s["rule"] = rule_command.removesuffix("foot").strip()
         ws = s["lands"] or (rule_command.split()[1] if rule_command.startswith("[") else "1")
         name = ws.removeprefix("name:")
@@ -530,6 +534,10 @@ def launch_fake(monkeypatch):
                 "workspace": {"id": int(ws) if ws.isdigit() else -1337, "name": name}}
 
     monkeypatch.setattr(srv, "_launch_and_wait", launch_and_wait)
+    # the window is the launch's own (its process carries the token) unless
+    # a test says otherwise
+    s["proven"] = True
+    monkeypatch.setattr(srv, "_carries_token", lambda pid, token: s["proven"] and bool(token))
     monkeypatch.setattr(srv.hyprctl, "query",
                         lambda what: s["monitors"] if what == "monitors" else s["clients"])
     monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: s["dispatch"].append(a))
@@ -853,7 +861,7 @@ def test_launch_waits_for_its_own_window_not_one_the_human_opens(monkeypatch):
 def test_a_single_instance_app_is_recognised_by_its_class(monkeypatch):
     accept = srv._launched_window("99", "firefox --new-window https://example.org")
     assert accept({"address": "0xff", "workspace": "1", "class": "firefox"})
-    assert accept({"address": "0xt", "workspace": "1", "class": "org.gnome.TextEditor"}) is False
+    assert not accept({"address": "0xt", "workspace": "1", "class": "org.gnome.TextEditor"})
     assert srv._launched_window("2", "gnome-text-editor")(
         {"workspace": "1", "class": "org.gnome.TextEditor"})
     assert srv._launched_window("2", "env GDK_BACKEND=wayland foot")(

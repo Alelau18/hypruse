@@ -205,6 +205,17 @@ All notable changes to this project are documented here. The format follows
   never reused (pid and initial class on a Hyprland without one). The
   CLI state drops a bare address an older hypruse wrote, and prunes
   closed windows from the owned-set whatever `HYPRUSE_CONFINE` says.
+- **`launch` owns only the window it opened.** With no placement rule
+  (`background=false`, `HYPRUSE_BACKGROUND=0`), it waited for the next
+  window anyone opened, so the human's next window became the agent's:
+  in `launched` scope, tagged `hypruse-owned`. And a class sharing three
+  letters with any word of the command counted as the program's. A
+  launch now exports a random `HYPRUSE_LAUNCH` token to its command and
+  waits for a window on its rule's workspace, one whose process carries
+  the token, or one of the program's class; only the first two are
+  recorded as the agent's. A single-instance app's window, which opens
+  from the already-running process, is still found and moved, and the
+  result says it is not counted as the agent's.
 - **`keyboard type --allow-auth TEXT` warns** that the text is on the
   verb's own command line, readable from /proc; the skill says to pass it
   on stdin (`keyboard type - --allow-auth`).
