@@ -2696,14 +2696,62 @@ def _step_may_switch_workspace(step: dict[str, Any]) -> bool:
     return op == "click_ui"  # click_ui always focuses its target window first
 
 
-def _step_wait_names(step: dict[str, Any]) -> set[str]:
-    """Watched event NAMES an upcoming wait_for step will consume: a change
+def _step_wait_excuse(step: dict[str, Any]) -> Callable[[str, dict[str, Any]], bool] | None:
+    """The event an upcoming wait_for step will consume, as a test: a change
     the sequence explicitly plans to wait for (click a launcher, then wait
-    for its window) is expected, not an abort. Matched by type because the
-    target address is not known ahead of time."""
+    for its window) is expected, not an abort. Of a type the wait takes AND
+    accepted by its own `match`: matching by type alone let any window open
+    before a filtered wait. Called before the step ahead of the wait runs,
+    so a window_close filter resolves while its window is still open."""
     if step.get("op") != "wait_for":
-        return set()
-    return set(_WAIT_EVENTS.get(step.get("event", ""), set())) & _WATCHED_EVENTS
+        return None
+    event = step.get("event", "")
+    names = set(_WAIT_EVENTS.get(event, set())) & _WATCHED_EVENTS
+    if not names:
+        return None
+    needle = str(step.get("match", "")).lower()
+    if event == "window_close" and needle:
+        targets = _close_targets(needle, hyprctl.query("clients"))
+
+        def matcher(_name: str, payload: dict[str, Any]) -> bool:
+            return str(payload.get("address", "")).lower() in targets
+    else:
+        matcher = _event_matcher(needle)
+    return lambda name, payload: name in names and matcher(name, payload)
+
+
+def _step_target_workspace(step: dict[str, Any]) -> Any:
+    """For a step that may switch the workspace by focusing a window, the
+    workspace that window is on, read BEFORE the step: the switch the step
+    causes is to there. _ANY_WORKSPACE for `hypr workspace`, a switch by
+    definition (and '+1' cannot be predicted); None when the step names no
+    window, so any switch during it is someone else's."""
+    op, action = step.get("op"), step.get("action", "")
+    if op == "hypr" and action == "workspace":
+        return _ANY_WORKSPACE
+    if op == "hypr":
+        window = step.get("target", "")
+    elif op == "click_ui" and step.get("mark"):
+        window = _last_marks.get("window", "")
+    else:
+        window = step.get("window", "")
+    if not window:
+        return None
+    with contextlib.suppress(Exception):
+        return (_resolve_window(_select(str(window))).get("workspace") or None)
+    return None
+
+
+_ANY_WORKSPACE = object()
+
+
+def _same_workspace(ws: dict[str, Any], target: Any) -> bool:
+    if target is _ANY_WORKSPACE:
+        return True
+    if not isinstance(target, dict):
+        return False
+    return (target.get("id") is not None and ws.get("id") == target.get("id")) or bool(
+        target.get("name") and ws.get("name") == target.get("name"))
 
 
 _SEQ_SLEEP_MAX_MS = 60000
@@ -2799,16 +2847,19 @@ def _dispatch_step(step: dict[str, Any]) -> Any:
     return _SEQ_HANDLERS[checked["op"]](**params)
 
 
-def _unexpected(drained, expected_sigs, wait_names):
-    """Watched events that are neither caused by the prior step nor awaited
-    by the next one."""
-    return [
-        (n, p)
-        for n, p in drained
-        if _structural(n, p)
-        and _event_signature(n, p) not in expected_sigs
-        and n not in wait_names
-    ]
+def _unexpected(drained, expected_sigs, excuse=None):
+    """Watched events that are neither caused by the prior step nor the one
+    the next wait step will consume (`excuse`, at most one event: the wait
+    takes one, and any other is a change)."""
+    out, excused = [], False
+    for n, p in drained:
+        if not _structural(n, p) or _event_signature(n, p) in expected_sigs:
+            continue
+        if excuse is not None and not excused and excuse(n, p):
+            excused = True
+            continue
+        out.append((n, p))
+    return out
 
 
 def _seq_wait_for(
@@ -2844,7 +2895,8 @@ def _seq_wait_for(
                 _learn_client(p.get("address"))
             return {"event": n, **p}
     try:
-        hit = stream.wait_for(names, matcher, timeout_s)
+        # what it skips stays on the stream, for the change check after it
+        hit = stream.wait_for(names, matcher, timeout_s, keep=_WATCHED_EVENTS)
     except events.EventError as exc:
         return f"event socket unavailable: {exc}"
     if hit is None:
@@ -2909,6 +2961,7 @@ def sequence(
     # hold from before the sequence is the caller's, a re-press is ours
     pressed_here: str | None = None
     prev_expected: set[str] = set()
+    excuse = None  # the event the coming wait step will consume (_step_wait_excuse)
     backlog: list[tuple[str, dict[str, Any]]] = []  # drained events a wait step may consume
     deadline = time.monotonic() + _SEQ_BUDGET
     try:
@@ -2923,7 +2976,7 @@ def sequence(
                 backlog[:] = [
                     (n, p) for n, p in drained if _event_signature(n, p) not in prev_expected
                 ]
-                changed = _unexpected(drained, prev_expected, _step_wait_names(step))
+                changed = _unexpected(drained, prev_expected, excuse)
                 if changed:
                     names = ", ".join(sorted({n for n, _ in changed}))
                     stopped = f"desktop changed ({names}) before step {i}"
@@ -2937,11 +2990,17 @@ def sequence(
                 run.setdefault("background", background)  # a step's own choice wins
             if step.get("op") == "wait_for":  # never let one wait outlast the budget
                 run["timeout_s"] = min(float(step.get("timeout_s", 10)), max(budget_left, 1.0))
+            target_ws = None
             try:
                 if step.get("op") == "hypr" and hyprctl.is_selector(step.get("target")):
                     # resolved here, not only inside hypr: the step's own
                     # move or close is excused by the address its event names
                     run["target"] = _select(str(step["target"]).strip())
+                # both read before this step runs: the workspace its window is
+                # on, and what the next step, if a wait, will consume
+                if _step_may_switch_workspace(step):
+                    target_ws = _step_target_workspace(run)
+                excuse = _step_wait_excuse(steps[i + 1]) if i + 1 < len(steps) else None
                 if background is True and step.get("op") == "hypr":
                     if step.get("action") in _HYPR_TAKES_VIEW:
                         bg.refuse(_HYPR_TAKES_VIEW[step["action"]])
@@ -2978,22 +3037,23 @@ def sequence(
             label = step.get("action") or step.get("event") or ""
             results.append(f"[{i}] {step.get('op')} {label}: {res}".rstrip())
             prev_expected = _step_expected_signatures(run)
-            if _step_may_switch_workspace(step):
+            if target_ws is not None:
                 # A step that focuses a window (or `hypr workspace` with a
                 # relative/alias target like '+1') lands on a workspace whose
                 # emitted name we cannot predict from the arguments; ask the
-                # compositor what our own action landed on and excuse it, so
-                # the drain does not mistake our focus-induced switch for a
-                # human takeover.
+                # compositor what it landed on, and excuse that switch only
+                # when it is to the workspace the step's window was on: the
+                # human switching meanwhile is a change, not the step's own.
                 with contextlib.suppress(Exception):
                     ws = hyprctl.query("activeworkspace") or {}
-                    prev_expected |= _workspace_signatures(ws)
+                    if _same_workspace(ws, target_ws):
+                        prev_expected |= _workspace_signatures(ws)
     finally:
         if stream is not None:
             # the last step can change the desktop too; a `then` observation
             # would show it, but report it explicitly so nothing is masked
             if stopped is None:
-                tail = _unexpected(stream.drain(_SEQ_SETTLE), prev_expected, set())
+                tail = _unexpected(stream.drain(_SEQ_SETTLE), prev_expected)
                 if tail:
                     names = ", ".join(sorted({n for n, _ in tail}))
                     stopped = f"desktop changed ({names}) after the last step"

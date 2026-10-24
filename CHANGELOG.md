@@ -228,6 +228,17 @@ All notable changes to this project are documented here. The format follows
   default, marks dry entries, and ends with a digest that `--execute
   --plan DIGEST` must match. `hypruse journal` escapes the same way, and
   the shell verbs' output escapes bidi and separator characters.
+- **`sequence` sees the changes around its waits.** A `wait_for` step
+  read and dropped every event it did not match from the stream the
+  change check drains, so a launcher or a window that opened during the
+  wait never stopped the run; before a wait step, every event of the
+  awaited type was let through whatever the step's `match`; and after a
+  focusing step, any workspace switch counted as the step's own, the
+  human's included. The wait now leaves the events it skips for the next
+  check, only the one event the wait's own filter accepts is let through
+  (resolved before the step ahead of it, so a `window_close` filter can
+  still name its window), and a switch counts as the step's only when it
+  is to the workspace the step's window was on.
 - **`keyboard type --allow-auth TEXT` warns** that the text is on the
   verb's own command line, readable from /proc; the skill says to pass it
   on stdin (`keyboard type - --allow-auth`).

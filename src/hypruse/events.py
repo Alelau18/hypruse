@@ -88,14 +88,21 @@ class EventStream:
             self._sock.close()
             raise EventError(f"cannot connect to Hyprland event socket: {exc}") from exc
         self._buf = b""
+        # events a wait_for skipped that its caller asked to keep; the next
+        # drain() returns them first
+        self._kept: list[tuple[str, dict[str, Any]]] = []
 
     def wait_for(
         self,
         names: set[str],
         matcher: Callable[[str, dict[str, Any]], bool] | None,
         timeout: float,
+        keep: set[str] | frozenset[str] = frozenset(),
     ) -> tuple[str, dict[str, Any]] | None:
-        """First matching event within timeout seconds, else None."""
+        """First matching event within timeout seconds, else None. A
+        skipped event whose name is in `keep` is not dropped: the next
+        drain() returns it, so a caller watching the stream for changes
+        (a sequence) sees what happened while it waited."""
         deadline = time.monotonic() + timeout
         while True:
             remaining = deadline - time.monotonic()
@@ -119,13 +126,16 @@ class EventStream:
                 name, payload = parsed
                 if name in names and (matcher is None or matcher(name, payload)):
                     return name, payload
+                if name in keep:
+                    self._kept.append((name, payload))
 
     def drain(self, settle: float = 0.08) -> list[tuple[str, dict[str, Any]]]:
         """Collect the events that arrive within `settle` seconds, then
         return them (in order). Unlike wait_for this does not block on a
         specific event; it answers 'did anything happen just now?', which
-        is how a batched sequence detects the desktop changing under it."""
-        out: list[tuple[str, dict[str, Any]]] = []
+        is how a batched sequence detects the desktop changing under it.
+        Events a wait_for kept come first."""
+        out, self._kept = self._kept, []
         deadline = time.monotonic() + settle
         while True:
             remaining = deadline - time.monotonic()

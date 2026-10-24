@@ -58,3 +58,22 @@ def test_parse_urgent_normalizes_address():
 def test_parse_screencast():
     name, p = events.parse_event("screencast>>1,0")
     assert (name, p) == ("screencast", {"state": "1", "owner": "0"})
+
+
+def test_a_wait_keeps_what_it_skips_for_the_next_drain():
+    # V17/V42: a sequence's wait step read and dropped every other event on
+    # the stream its change check drains
+    import socket
+
+    ours, theirs = socket.socketpair()
+    stream = events.EventStream.__new__(events.EventStream)
+    stream._sock, stream._buf, stream._kept = ours, b"", []
+    theirs.sendall(b"openlayer>>wofi\nwindowtitle>>abc\nopenwindow>>beef,1,kitty,~\n")
+    hit = stream.wait_for({"openwindow"}, None, 1.0, keep={"openlayer"})
+    assert hit[0] == "openwindow"
+    assert stream.drain(0.05) == [("openlayer", {"namespace": "wofi"})]
+    theirs.sendall(b"openlayer>>wofi\nopenwindow>>beef,1,kitty,~\n")
+    stream.wait_for({"openwindow"}, None, 1.0)  # a caller that keeps nothing
+    assert stream.drain(0.05) == []
+    ours.close()
+    theirs.close()

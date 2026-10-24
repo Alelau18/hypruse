@@ -23,18 +23,22 @@ class FakeStream:
 
     def drain(self, settle=0.08):
         self.drains += 1
-        return self.batches.pop(0) if self.batches else []
+        kept, self.kept = getattr(self, "kept", []), []
+        return kept + (self.batches.pop(0) if self.batches else [])
 
-    def wait_for(self, names, matcher, timeout):
+    def wait_for(self, names, matcher, timeout, keep=frozenset()):
         self.wait_calls.append((set(names), timeout))
         if self.wait_error:
             from hypruse import events
 
             raise events.EventError("socket died mid-wait")
+        self.kept = getattr(self, "kept", [])
         while self.waits:
             n, p = self.waits.pop(0)
             if n in names and (matcher is None or matcher(n, p)):
                 return n, p
+            if n in keep:  # as EventStream: the next drain returns it
+                self.kept.append((n, p))
         return None
 
     def close(self):
@@ -61,6 +65,15 @@ def wired(monkeypatch):
 
     monkeypatch.setattr(srv, "_dispatch_step", fake_dispatch)
     return ran
+
+
+def _on_workspace(monkeypatch, address, ws, active):
+    """`address` lives on workspace `ws`; `active` is active after a step."""
+    win = {"address": address, "class": "app", "title": "t", "pid": 1, "at": [0, 0],
+           "size": [9, 9], "workspace": {"id": int(ws), "name": ws}}
+    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: (
+        [win] if cmd == "clients" else {"id": int(active), "name": active}
+        if cmd == "activeworkspace" else {} if cmd == "layers" else {"name": ""}))
 
 
 def _head(out):
@@ -153,7 +166,7 @@ def test_keyboard_window_on_other_workspace_does_not_abort(wired, monkeypatch):
     # keyboard(window=X) focuses X; if X is on another workspace, focusing
     # switches to it and emits a workspace event. That is the sequence's OWN
     # focus-induced switch, not a takeover: the following enter must still run
-    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: {"name": "8"})  # focus landed on ws 8
+    _on_workspace(monkeypatch, "0xterm", "8", active="8")  # focus landed on ws 8, its own
     _stream(monkeypatch, [[("workspace", {"name": "8"})]])
     steps = [
         {"op": "keyboard", "action": "type", "text": "echo hi", "window": "0xterm"},
@@ -167,7 +180,7 @@ def test_keyboard_window_on_other_workspace_does_not_abort(wired, monkeypatch):
 def test_click_ui_step_focus_switch_is_excused(wired, monkeypatch):
     # click_ui always focuses its target window; a cross-workspace target's
     # switch must not abort a following step either
-    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: {"name": "5"})
+    _on_workspace(monkeypatch, "0xapp", "5", active="5")
     _stream(monkeypatch, [[("workspace", {"name": "5"})]])
     steps = [
         {"op": "click_ui", "name": "Save", "window": "0xapp"},
@@ -176,6 +189,19 @@ def test_click_ui_step_focus_switch_is_excused(wired, monkeypatch):
     out = srv.sequence(steps, then="none")
     assert [s["op"] for s in wired] == ["click_ui", "keyboard"]
     assert "all 2/2" in _head(out)
+
+
+def test_a_switch_the_human_made_during_a_focusing_step_stops(wired, monkeypatch):
+    # V60: the step's window is on 5; the workspace active after it is 9
+    _on_workspace(monkeypatch, "0xapp", "5", active="9")
+    _stream(monkeypatch, [[("workspace", {"name": "9"})]])
+    steps = [
+        {"op": "click_ui", "name": "Save", "window": "0xapp"},
+        {"op": "keyboard", "action": "key", "keys": "enter"},
+    ]
+    out = srv.sequence(steps, then="none")
+    assert [s["op"] for s in wired] == ["click_ui"]
+    assert "desktop changed (workspace)" in _head(out)
 
 
 def test_keyboard_without_window_still_stops_on_workspace_takeover(wired, monkeypatch):
@@ -285,16 +311,40 @@ def test_wait_step_without_stream_uses_standalone_dispatch(wired, monkeypatch):
     assert wired[0]["timeout_s"] <= 30  # clamped to the sequence budget
 
 
-def test_wait_step_match_filters_backlog(wired, monkeypatch):
-    # a drained event that does NOT match the filter is not consumed as a hit
+def test_a_window_the_wait_does_not_match_is_a_change(wired, monkeypatch):
+    # V16/V41: before a filtered wait, every openwindow was excused by type,
+    # so a window that was not the awaited one went unnoticed
     stream = _stream(monkeypatch, [[("openwindow", {"address": "0xa", "class": "sidebar"})]])
     steps = [
         {"op": "pointer", "action": "click", "x": 1, "y": 2},
         {"op": "wait_for", "event": "window_open", "match": "kitty", "timeout_s": 1},
     ]
     out = srv.sequence(steps, then="none")
-    assert "timeout" in _head(out)  # sidebar was not the awaited kitty
-    assert len(stream.wait_calls) == 1  # it went on to block for the real one
+    assert "desktop changed (openwindow) before step 1" in _head(out)
+    assert stream.wait_calls == []
+
+
+def test_the_awaited_window_is_excused_once(wired, monkeypatch):
+    kitty = ("openwindow", {"address": "0xk", "class": "kitty"})
+    other = ("openwindow", {"address": "0xo", "class": "kitty"})  # a second, unawaited one
+    _stream(monkeypatch, [[kitty]])
+    steps = [{"op": "pointer", "action": "click", "x": 1, "y": 2},
+             {"op": "wait_for", "event": "window_open", "match": "kitty", "timeout_s": 1}]
+    assert "all 2/2" in _head(srv.sequence(steps, then="none"))
+    _stream(monkeypatch, [[kitty, other]])
+    out = srv.sequence(steps, then="none")
+    assert "desktop changed (openwindow) before step 1" in _head(out)
+
+
+def test_what_happens_during_a_wait_step_is_seen_by_the_next_check(wired, monkeypatch):
+    # V17/V42: the wait read and dropped every event it did not match
+    _stream(monkeypatch, [[]], waits=[("openlayer", {"namespace": "wofi"}),
+                                      ("openwindow", {"address": "0xk", "class": "kitty"})])
+    steps = [{"op": "wait_for", "event": "window_open", "match": "kitty", "timeout_s": 1},
+             {"op": "keyboard", "action": "type", "text": "into-the-launcher"}]
+    out = srv.sequence(steps, then="none")
+    assert [s["op"] for s in wired] == []  # the keyboard step never ran
+    assert "desktop changed (openlayer) before step 1" in _head(out)
 
 
 def test_launcher_layer_opening_stops(wired, monkeypatch):
@@ -470,8 +520,9 @@ def test_expected_signatures_mapping():
     assert exp({"op": "hypr", "action": "workspace", "workspace": "3"}) == {"workspace:3"}
     assert exp({"op": "hypr", "action": "move_window", "target": "0xA"}) == {"movewindow:0xA"}
     assert exp({"op": "pointer", "action": "click"}) == set()
-    assert srv._step_wait_names({"op": "wait_for", "event": "window_open"}) == {"openwindow"}
-    assert srv._step_wait_names({"op": "pointer"}) == set()
+    excuse = srv._step_wait_excuse({"op": "wait_for", "event": "window_open"})
+    assert excuse("openwindow", {"address": "0xa"}) and not excuse("workspace", {"name": "2"})
+    assert srv._step_wait_excuse({"op": "pointer"}) is None
     assert srv._event_signature("workspace", {"name": "5"}) == "workspace:5"
 
 
