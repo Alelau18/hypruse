@@ -415,3 +415,16 @@ def test_a_late_window_in_a_rehearsal_is_recorded_not_tagged(monkeypatch, no_sle
     monkeypatch.setattr(server, "_launch_token_of", lambda pid: token)
     REAL_NOTE_CLIENTS([dict(OURS, pid=5151)])  # must not raise
     assert sent == [] and launches.owned() == {server.hyprctl.window_key(dict(OURS, pid=5151))}
+
+
+def test_a_late_window_in_a_rehearsal_reaches_no_socket(monkeypatch, no_sleep, launches):
+    # the same, through the real dispatch barrier and notify: only the
+    # socket write is replaced, so a dispatch the gate missed would raise
+    token, _ = _timed_out_launch(monkeypatch)
+    monkeypatch.setenv("HYPRUSE_MARK", "1")
+    monkeypatch.setenv("HYPRUSE_DRYRUN", "1")
+    sent = []
+    monkeypatch.setattr(server.hyprctl, "_run", lambda *a: sent.append(a) or "ok")
+    monkeypatch.setattr(server, "_launch_token_of", lambda pid: token)
+    REAL_NOTE_CLIENTS([dict(OURS, pid=5151)])
+    assert sent == [] and launches.owned() == {server.hyprctl.window_key(dict(OURS, pid=5151))}

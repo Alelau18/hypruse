@@ -226,7 +226,8 @@ All notable changes to this project are documented here. The format follows
   which window each call acted on (`targets`: its address with Hyprland's
   `stableId`, and its class), and replay treats an address that now
   belongs to another window as gone, `hypr` targets given as a bare
-  address included. An entry with no key for its own window (an older
+  address included (in any case: `0xABC` is looked up, and sent, as
+  Hyprland writes it). An entry with no key for its own window (an older
   journal) says so in the plan ("address only, no key recorded").
 - **The replay plan is the plan that runs.** It cut every value at 120
   characters, so the tail of a long `launch` command ran unseen; it let
@@ -257,7 +258,8 @@ All notable changes to this project are documented here. The format follows
   `class:`/`title:` match whatever an app calls itself; `keyboard`,
   `click_ui` and `hypr` results now note when their selector matched a
   window that was not there at the agent's previous call, in one
-  wording, and
+  wording (a `click_ui` that returns early, with no tree or with an
+  ambiguous name, included; in a `sequence`, on that step's own line), and
   `wait_for(window_open)` results carry `launched_by_agent`.
 - **`click_ui` never clicks a control another process placed.** When a
   window's accessibility tree comes from another process (the title

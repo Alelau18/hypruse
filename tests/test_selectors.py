@@ -243,3 +243,28 @@ def test_a_step_refused_after_its_selector_resolved_still_notes_it(decoy, monkey
     out = str(srv.sequence([{"op": "hypr", "action": "close_window", "target": "title:^htop$"}],
                            stop_on_change=False, then="none"))
     assert "ERROR" in out and UNSEEN in out
+
+
+# review of 0188016: click_ui's no-tree and ambiguous-name returns skip
+# _acted, so the note was lost standalone and, in a sequence, landed on the
+# next hypr step's line
+
+
+@pytest.mark.parametrize("read", [
+    "kitty exposes no accessibility tree",
+    [{"role": "push button", "name": "Ok", "x": 1, "y": 1},
+     {"role": "push button", "name": "Ok", "x": 2, "y": 2}],
+])
+def test_click_ui_returning_early_still_notes_its_selector(decoy, monkeypatch, read):
+    monkeypatch.setattr(srv, "_ui_read", lambda *a, **kw: read)
+    assert UNSEEN in str(srv.click_ui(name="Ok", window="title:^htop$"))
+
+
+def test_a_click_ui_steps_note_stays_on_its_own_line(decoy, monkeypatch):
+    monkeypatch.setattr(srv, "_ui_read", lambda *a, **kw: "kitty exposes no accessibility tree")
+    steps = [{"op": "click_ui", "name": "Ok", "window": "title:^htop$"},
+             {"op": "hypr", "action": "focus_window", "target": "class:streetfighter"}]
+    lines = str(srv.sequence(steps, stop_on_change=False, then="none")).splitlines()
+    (first,) = [line for line in lines if line.startswith("[0] click_ui")]
+    (second,) = [line for line in lines if line.startswith("[1] hypr")]
+    assert UNSEEN in first and UNSEEN not in second

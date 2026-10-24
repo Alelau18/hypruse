@@ -588,3 +588,61 @@ def test_a_key_recorded_for_another_window_does_not_vouch_for_the_target(tmp_pat
     cli.replay([str(path)])
     out = capsys.readouterr().out
     assert "(address only, no key recorded)" in out and "checked by address only" in out
+
+
+@pytest.fixture
+def journaled_hypr(tmp_path, monkeypatch):
+    """The real hypr tool, journaled, against one kitty window at 0xabc,
+    with whatever it would dispatch recorded instead of sent."""
+    from hypruse import journal
+
+    path = tmp_path / "journal.ndjson"
+    monkeypatch.setenv("HYPRUSE_JOURNAL", str(path))
+    monkeypatch.setattr(journal, "_seq", 0)
+    monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
+    win = {"address": "0xabc", "stableId": "12", "class": "kitty", "workspace": {"id": 1}}
+    monkeypatch.setattr(srv.hyprctl, "query",
+                        lambda cmd: win if cmd == "activewindow" else [win])
+    sent: list[tuple] = []
+    monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: sent.append(a))
+    monkeypatch.setattr(srv, "_close_and_confirm", lambda target: f"closed {target}")
+    monkeypatch.setattr(srv, "_focus_landed", lambda *a: None)
+    monkeypatch.setattr(srv.trust, "remember_seat", lambda: None)
+    return path, sent
+
+
+@pytest.mark.parametrize("given", ["0xabc", "0xABC"])
+@pytest.mark.parametrize("action, extra", [
+    ("close_window", {}), ("move_window", {"workspace": "5"}), ("focus_window", {}),
+    ("fullscreen", {}), ("toggle_floating", {}),
+])
+def test_every_hypr_op_records_a_target_given_by_address(journaled_hypr, action, extra, given):
+    # review of 7419e91: only close_window was covered, and 0xABC passed the
+    # address check but matched no client, so the entry kept no key
+    from hypruse import journal
+
+    path, sent = journaled_hypr
+    srv.TOOLS["hypr"](action, target=given, **extra)
+    (entry,) = [e for e in journal.read(path) if e.get("tool") == "hypr"]
+    assert entry["targets"]["0xabc"]["key"] == "0xabc#12"
+    # what Hyprland is sent is the address as it writes it, or nothing matches
+    assert all("0xABC" not in " ".join(map(str, a)) for a in sent)
+
+
+def test_a_sequence_hypr_step_records_its_target_given_by_address(live, calls, journaled_hypr,
+                                                                  monkeypatch, capsys):
+    # the step is its own entry under the sequence's, and it is what replay
+    # runs (`live` first: its window list has no key)
+    from hypruse import journal
+
+    path, sent = journaled_hypr
+    srv.TOOLS["sequence"]([{"op": "hypr", "action": "toggle_floating", "target": "0xABC"}],
+                          stop_on_change=False)
+    assert sent == [("togglefloating", "address:0xabc")]
+    (step,) = [e for e in journal.read(path) if e.get("tool") == "hypr"]
+    assert step["parent"] and step["targets"]["0xabc"]["key"] == "0xabc#12"
+    monkeypatch.delenv("HYPRUSE_JOURNAL")
+    recycled = {"address": "0xabc", "stableId": "99", "class": "firefox"}
+    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: [recycled])
+    assert execute(path, "--yes") == 1
+    assert calls == [] and "belongs to another window: 0xabc" in capsys.readouterr().out

@@ -523,6 +523,13 @@ _seen_baseline: contextvars.ContextVar[Any] = contextvars.ContextVar(
     "hypruse_seen_baseline", default=_NO_BASELINE)
 
 
+def _take_unseen() -> str:
+    """The pending note, once: whatever puts it in a result clears it."""
+    note = _unseen.get()
+    _unseen.set("")
+    return note
+
+
 def _note_if_unseen(selector: str, client: dict[str, Any]) -> None:
     key = hyprctl.window_key(client)
     baseline = _seen_baseline.get()
@@ -1010,8 +1017,7 @@ def _acted(msg: str, then: str, window: str = "", fallback: bool = True) -> list
     tokens instead of an image: best after typing or toggling in an app
     that exposes a tree, degrades to a note when it does not);
     `'none'` appends nothing."""
-    msg += _unseen.get()
-    _unseen.set("")
+    msg += _take_unseen()
     if then == "none":
         return msg
     head = _text(msg)
@@ -1556,7 +1562,7 @@ def click_ui(
         client = _resolve_window(window)
         elements = _ui_read(client["address"], name=name, handles=True)
         if isinstance(elements, str):
-            return elements
+            return elements + _take_unseen()  # no tree: these returns skip _acted
         exact = [e for e in elements if e["name"].lower() == name.lower()]
         pool = exact or elements
         if index >= 0:
@@ -1566,8 +1572,8 @@ def click_ui(
         if len(pool) > 1:
             public = [{k: v for k, v in c.items() if not k.startswith("_")} for c in pool]
             return [
-                _text(f"{name!r} is ambiguous ({len(pool)} candidates); call again "
-                    "with index=N (0-based) or a more specific name:",
+                _text(f"{name!r} is ambiguous ({len(pool)} candidates){_take_unseen()}; call "
+                    "again with index=N (0-based) or a more specific name:",
                 ),
                 _text(json.dumps(public)),
             ]
@@ -2042,6 +2048,12 @@ def _focus_on_activate(address: str = "") -> int | None:
 _ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
 
 
+def _bare(target: str) -> str:
+    """A bare address as Hyprland writes it: it matches `address:` targets
+    and the client list as exact lowercase text, so 0xABC names no window."""
+    return target.lower() if _ADDR.match(target) else target
+
+
 def _addr(target: str) -> str:
     if not _ADDR.match(target):
         raise ValueError(
@@ -2139,7 +2151,7 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
     only to the agent's own workspaces."""
     safety.touch(f"hypr:{action}")
     _check_then(then)
-    target = _select(target.strip()) if hyprctl.is_selector(target) else target
+    target = _select(target.strip()) if hyprctl.is_selector(target) else _bare(target)
     if target and journal.enabled():
         # which window a bare address is, for replay: a selector was noted
         # when it resolved, but an address never goes through _resolve_window
@@ -2977,7 +2989,8 @@ def _event_signature(name: str, payload: dict[str, Any]) -> str:
     if name == "workspace":
         return f"workspace:{payload.get('name', '')}"
     if name in ("openwindow", "closewindow", "movewindow"):
-        return f"{name}:{payload.get('address', '')}"
+        # lowercase, as a step's address target is (_checked_step)
+        return f"{name}:{str(payload.get('address', '')).lower()}"
     if name in ("openlayer", "closelayer"):
         return f"{name}:{payload.get('namespace', '')}"
     return name
@@ -3157,9 +3170,13 @@ def _checked_step(step: Any) -> dict[str, Any]:
     # `then` is handled once for the whole sequence, never per step
     params = {k: v for k, v in step.items() if k not in ("op", "then")}
     try:
-        return {"op": op, **validated_args(handler, params)}
+        checked = {"op": op, **validated_args(handler, params)}
     except ValueError as exc:
         raise ValueError(f"bad args for {op!r} step: {exc}") from None
+    if op == "hypr" and isinstance(checked.get("target"), str):
+        # the step's own move or close is excused by the address its event names
+        checked["target"] = _bare(checked["target"])
+    return checked
 
 
 def _dispatch_step(step: dict[str, Any]) -> Any:
@@ -3327,12 +3344,13 @@ def _run_sequence(
                 run["timeout_s"] = min(float(step.get("timeout_s", 10)), max(budget_left, 1.0))
             target_ws = None
             step_note = ""
+            _unseen.set("")  # a step's line carries its own note, never an earlier step's
             try:
                 if step.get("op") == "hypr" and hyprctl.is_selector(step.get("target")):
                     # resolved here, not only inside hypr: the step's own
                     # move or close is excused by the address its event names
                     run["target"] = _select(str(step["target"]).strip())
-                    step_note = _unseen.get()  # the step's own call starts afresh
+                    step_note = _take_unseen()  # the step's own call starts afresh
                 # both read before this step runs: the workspace its window is
                 # on, and what the next step, if a wait, will consume
                 if _step_may_switch_workspace(step):
@@ -3369,8 +3387,8 @@ def _run_sequence(
                             pressed_here = after_step
             except Exception as exc:
                 # a step refused after its selector resolved still says so
-                results.append(f"[{i}] {step.get('op')}: ERROR {exc}{step_note or _unseen.get()}")
-                _unseen.set("")
+                note = _take_unseen()
+                results.append(f"[{i}] {step.get('op')}: ERROR {exc}{step_note or note}")
                 stopped = f"step {i} raised: {exc}"
                 break
             label = step.get("action") or step.get("event") or ""

@@ -539,15 +539,17 @@ closed 0x55a4479a1200
 fullscreen toggled
 floating toggled
 fullscreen toggled on 0x55a4479a1200 (kitty, 0x55a4479a1200#18000002)
+fullscreen toggled on 0x55a4479a1200 (kitty, 0x55a4479a1200#18000002) (its focus checked right before; hyprlang's fullscreen acts on whichever window has the focus)
 floating toggled on 0x55a4479a1200 (kitty, 0x55a4479a1200#18000002)
 ```
 
 With no `ADDR`, `fullscreen` and `toggle_floating` act on the window that
 was active when the call was checked and name it with its key. Floating
-(and fullscreen under the Lua config manager) is sent to that window by
-address; hyprlang's fullscreen acts on whichever window has the focus, so
-there the focus is read again right before it, the result says so, and a
-focus that moved since the check is refused.
+(and fullscreen under the Lua config manager, the first fullscreen line)
+is sent to that window by address; hyprlang's fullscreen acts on
+whichever window has the focus, so there the focus is read again right
+before it, the result says so (the second line), and a focus that moved
+since the check is refused.
 
 `close_window` waits up to 1 s for the compositor to confirm; an app that
 prompts instead says so:
