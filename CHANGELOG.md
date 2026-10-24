@@ -411,6 +411,14 @@ All notable changes to this project are documented here. The format follows
   compositor has more than one.
 
 ### Not changed
+- Known gaps from the audit, accepted and now listed in the README's
+  security model: a foreground key press puts the key name on `wtype`'s
+  command line (readable from `/proc`; typed text goes through stdin);
+  a single-instance app's window is the first of its class during the
+  launch wait, which may be one the human opened; a Hyprland without
+  `stableId` leaves address, pid and class to tell windows apart; and GTK 4
+  password entries report the plain text role, so the password checks
+  cannot see them.
 - **`launch` stays outside the trust layers** (audit F3, F48), as the
   security model already said: a launched command can send input or run
   anything itself, and its boundary is the MCP client (ask-first, a deny
