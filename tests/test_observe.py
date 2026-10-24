@@ -196,7 +196,7 @@ def test_pointer_drag_passes_its_pace_through(monkeypatch):
     monkeypatch.setattr(srv.hinput, "drag", lambda *a, **k: seen.append((a, k)))
     srv.pointer("drag", x=1, y=2, to_x=3, to_y=4, duration_ms=500, steps=25)
     ((args, kwargs),) = seen
-    assert callable(kwargs.pop("drop_check"))
+    assert callable(kwargs.pop("drop_check")) and callable(kwargs.pop("press_check"))
     assert (args, kwargs) == ((1, 2, 3, 4), {"button": "left", "duration_ms": 500, "steps": 25})
 
 

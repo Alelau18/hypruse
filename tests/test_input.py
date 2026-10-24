@@ -310,6 +310,7 @@ def _refuse():
     lambda c: hinput.click(5, 6, precheck=c),
     lambda c: hinput.button_down(5, 6, precheck=c),
     lambda c: hinput.scroll(dy=1, x=5, y=6, precheck=c),
+    lambda c: hinput.drag(5, 6, 9, 9, steps=2, press_check=c),  # review of d181d77
 ])
 def test_a_refusal_at_delivery_sends_no_event(pointer_log, deliver):
     with pytest.raises(RuntimeError, match="mapped over"):

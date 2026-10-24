@@ -1416,6 +1416,7 @@ def pointer(
         if not dry:
             hinput.drag(x, y, to_x, to_y, button=button,  # type: ignore[arg-type]
                         duration_ms=duration_ms, steps=steps,
+                        press_check=_point_checks(x, y, button, "the press", allow_auth),
                         drop_check=_point_checks(
                             to_x, to_y, button,
                             "the drop (cancelled: released back where it started)",

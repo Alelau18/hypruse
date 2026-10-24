@@ -565,11 +565,15 @@ def drag(
     duration_ms: float = DRAG_DURATION_MS,
     steps: int = DRAG_STEPS,
     drop_check: Callable[[], None] | None = None,
+    press_check: Callable[[], None] | None = None,
 ) -> None:
-    """`drop_check` runs right before the release, at the drop point and
-    under the seat lock, since a drag can take seconds and a window can map
-    there meanwhile. If it raises, the drop is cancelled: the cursor goes
-    back to the start and the button is released there, never left held."""
+    """`press_check` runs right before the press, at the start point and
+    under the seat lock, as click's precheck does; if it raises, nothing is
+    pressed. `drop_check` runs right before the release, at the drop point
+    and under the seat lock, since a drag can take seconds and a window can
+    map there meanwhile. If it raises, the drop is cancelled: the cursor
+    goes back to the start and the button is released there, never left
+    held."""
     journal.refuse_if_dry("drag")
     _check_button(button)
     check_drag(duration_ms, steps)
@@ -618,6 +622,8 @@ def drag(
         check_down(button)  # the drag's own hold is the one tracked; none may wait
         move(x1, y1)
         time.sleep(0.03)
+        if press_check is not None:
+            press_check()
         _with_pointer(run)
 
 

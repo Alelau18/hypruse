@@ -819,3 +819,20 @@ def test_a_password_field_that_appears_before_delivery_is_caught_there(login_for
                        match=f"the paste check refused {what}.* right before it was delivered"):
         srv.pointer(action, x=1, y=2, button="middle")
     assert login_form["input"] == []
+
+
+def test_a_middle_drags_press_is_checked_when_it_lands(login_form, monkeypatch):
+    # review of d181d77: GTK pastes on the press, which landed ~30 ms after
+    # the only check of the start point
+    found = iter([_census(61), _census(61), _census(61, srv.a11y.PASSWORD_ROLE)])
+    monkeypatch.setattr(srv, "_census", lambda client, every_field: next(found))
+
+    def drag(*a, press_check=None, drop_check=None, **k):
+        press_check()
+        login_form["input"].append(("drag",))
+
+    monkeypatch.setattr(hinput, "drag", drag)
+    with pytest.raises(srv.trust.TrustError,
+                       match="the paste check refused the press right before it was delivered"):
+        srv.pointer("drag", x=1, y=2, to_x=5, to_y=6, button="middle")
+    assert login_form["input"] == []
