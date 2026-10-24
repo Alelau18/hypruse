@@ -353,6 +353,17 @@ All notable changes to this project are documented here. The format follows
 - **`keyboard type --allow-auth TEXT` warns** that the text is on the
   verb's own command line, readable from /proc; the skill says to pass it
   on stdin (`keyboard type - --allow-auth`).
+- **A middle click into a password form needs `allow_auth` under
+  `HYPRUSE_AUTH_GUARD=strict`.** A middle-button press pastes the primary
+  selection, which the agent can set by selecting text, into the field
+  under the pointer, so it put text into a password field without the
+  consent typing there needs. Under strict, a `pointer` middle click or
+  `down`, and a foreground `click_ui` with `button=middle`, into a window
+  whose accessibility tree shows a password field are refused without
+  `allow_auth=true`. Which field is under the point is not worked out, so
+  a password field anywhere in the window counts; a tree hypruse cannot
+  read in full (a large web page) is not refused, so a middle click on a
+  link still opens it.
 - **Typing says when an unrecognized layer may have the keys.** Whether a
   layer holds the keyboard was read off its namespace, which its own
   client picks, and Hyprland's layer list does not say which layer has

@@ -719,3 +719,48 @@ def test_a_release_that_cannot_go_back_quotes_the_guard_not_its_plan(vp, monkeyp
         hinput.button_up(precheck=check)
     assert "cancelled" not in str(caught.value)
     assert "(the pointer guard: a dialog mapped under the cursor)" in str(caught.value)
+
+
+# a middle-button press pastes the primary selection into the field under the
+# pointer: under HYPRUSE_AUTH_GUARD=strict, text into a password field needs
+# allow_auth however it gets in
+
+
+def _fields(*roles):
+    return srv._Census(None, None, False, [("svc", f"/f{i}", r) for i, r in enumerate(roles)],
+                       True, False)
+
+
+@pytest.fixture
+def login_form(tool, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_AUTH_GUARD", "strict")
+    monkeypatch.setattr(srv.trust, "windows_at", lambda x, y: [{"address": "0xl",
+                                                                "class": "login"}])
+    monkeypatch.setattr(srv, "_census", lambda client, every_field: _fields(
+        61, srv.a11y.PASSWORD_ROLE))
+    return tool
+
+
+def test_a_middle_press_into_a_window_with_a_password_field_is_refused(login_form):
+    for action in ("click", "down"):
+        with pytest.raises(srv.trust.TrustError, match="middle click pastes .* login has a "
+                           "password field"):
+            srv.pointer(action, x=1, y=2, button="middle")
+    assert login_form["input"] == []
+
+
+def test_allow_auth_another_button_or_the_default_guard_lets_it_through(login_form,
+                                                                        monkeypatch):
+    srv.pointer("click", x=1, y=2, button="middle", allow_auth=True)
+    srv.pointer("click", x=1, y=2)  # a left click focuses, it pastes nothing
+    monkeypatch.setenv("HYPRUSE_AUTH_GUARD", "1")  # the default checks no field on screen
+    srv.pointer("click", x=1, y=2, button="middle")
+    assert [c[0] for c in login_form["input"]] == ["click"] * 3
+
+
+def test_a_window_with_no_password_field_or_no_tree_takes_the_middle_click(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_AUTH_GUARD", "strict")
+    monkeypatch.setattr(srv, "_census", lambda client, every_field: _fields(61))
+    srv._guard_middle_paste([{"class": "editor"}], False)
+    monkeypatch.setattr(srv, "_census", lambda client, every_field: _fields())  # unreadable
+    srv._guard_middle_paste([{"class": "game"}], False)

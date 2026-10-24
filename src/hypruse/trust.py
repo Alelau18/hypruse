@@ -385,6 +385,14 @@ def _seat_at(x: float, y: float) -> tuple[list[dict[str, Any]], list[dict[str, A
     ]
 
 
+def windows_at(x: float | None, y: float | None) -> list[dict[str, Any]]:
+    """The mapped on-screen windows whose rect covers (x, y), the cursor
+    when either is None."""
+    if x is None or y is None:
+        x, y = hyprctl.cursor_pos()
+    return _seat_at(x, y)[1]
+
+
 def guard_pointer(x: float | None, y: float | None, allow_auth: bool = False) -> None:
     """Guard a pointer action at (x, y): confinement AND the auth interlock,
     resolved from the windows under the point in one query. When x/y are

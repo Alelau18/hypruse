@@ -1325,6 +1325,8 @@ def pointer(
         if hold_ms:
             hinput.check_down(button)
         trust.guard_pointer(x, y, allow_auth)  # None x/y = click at current cursor
+        if button == "middle":
+            _guard_middle_paste(trust.windows_at(x, y), allow_auth)
         note = note or _layer_note(x, y)
         plan = f"{'double-' if double else ''}click {button} at {_at(x, y)}"
         if hold_ms:
@@ -1345,6 +1347,8 @@ def pointer(
         if not ending_hold:
             trust.guard_pointer(x, y, allow_auth)  # None x/y = at the current cursor
             note = note or _layer_note(x, y)
+        if action == "down" and button == "middle":  # the press is what pastes
+            _guard_middle_paste(trust.windows_at(x, y), allow_auth)
         plan = f"{'press' if action == 'down' else 'release'} {button} at {_at(x, y)}"
         if action == "down":
             plan += " and keep it held until pointer action='up'"
@@ -1642,6 +1646,8 @@ def click_ui(
     trust.guard_seat()  # the human's seat: foreground only, as in keyboard
     trust.guard_client(client)  # confinement
     trust.guard_auth_client(client, allow_auth)
+    if button == "middle":
+        _guard_middle_paste([client], allow_auth)
     # a locked session, or a layer over the point, would swallow the click
     # while the result claimed success; refuse before any side effect.
     # click_ui always targets a specific window control, so under a lock
@@ -1776,6 +1782,26 @@ def _password_refusal(census: _Census, cls: str, moves_focus: str) -> tuple[str,
                 " Type each part in a call of its own, with the Tab or Return as a key between "
                 "them, so each part is checked against the field it goes into.")
     return None
+
+
+def _guard_middle_paste(clients: list[dict[str, Any]], allow_auth: bool) -> None:
+    """HYPRUSE_AUTH_GUARD=strict: a middle-button press pastes the primary
+    selection, which the agent can set by selecting text, into the field
+    under the pointer: text going in, like a typed key, so a window whose
+    tree shows a password field refuses it without allow_auth, as typing
+    into it does. Which field is under the point is not worked out, so a
+    password field anywhere in the window counts; a tree that cannot be
+    read, or not all of it (a large web page), cannot be checked and is not
+    refused, so a middle click on a link still opens it."""
+    if allow_auth is True or not trust.auth_strict():
+        return
+    for client in clients:
+        census = _census(client, every_field=True)
+        if any(f[2] == a11y.PASSWORD_ROLE for f in census.fields):
+            raise trust.TrustError(
+                f"a middle click pastes the primary selection into the field under the pointer, "
+                f"and {client.get('class', 'the window')} has a password field; refusing it. "
+                "Pass allow_auth=true only if a human intends this credential entry.")
 
 
 def _refuse_password(census: _Census, cls: str, moves_focus: str, allow_auth: bool) -> None:
