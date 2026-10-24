@@ -1184,6 +1184,15 @@ def _pointer_policy(
 _POINTER_ACTIONS = ("move", "click", "down", "up", "drag", "scroll")
 
 
+def _release_and_sync() -> None:
+    """The shutdown path's release: let go of a held button, then tell a
+    CLI verb run beside us. One cleanup, because cleanups run last in first
+    out: registered as two, the sync ran before the release and the state
+    file kept a hold that was gone."""
+    hinput.release_held()
+    _sync_cli_hold()
+
+
 def _release_refused(x: float | None, ending_hold: bool) -> str:
     """What hinput.button_up does instead of a release its check refuses."""
     if x is not None:
@@ -3733,8 +3742,7 @@ def main() -> None:
         return
     session.ensure_session_env()
     safety.init()
-    safety.on_shutdown(hinput.release_held)  # kill switch mid-drag: release first
-    safety.on_shutdown(_sync_cli_hold)  # and say so to a CLI verb run beside us
+    safety.on_shutdown(_release_and_sync)  # kill switch mid-drag
     journal.start(__version__)  # HYPRUSE_JOURNAL: open the session record
     safety.on_shutdown(journal.stop)  # closed on the SIGTERM path too
     trust.init_marking()  # HYPRUSE_MARK: install the agent-owned border rule

@@ -39,8 +39,8 @@ All notable changes to this project are documented here. The format follows
   carries over to the next verb, and `hypruse stop` releases it. The MCP
   server records its own `down` and `up` in that instance's CLI state when
   the file exists (the button and where it was pressed, in one write, also
-  when the call fails after the button moved), so a shell verb run beside
-  it sees the same hold. A
+  when the call fails after the button moved, and after the release on its
+  way out), so a shell verb run beside it sees the same hold. A
   `sequence` that stops before the step that releases a button it pressed
   releases it.
 

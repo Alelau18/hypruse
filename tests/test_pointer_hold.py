@@ -383,6 +383,7 @@ def test_stop_releases_a_hold_a_shell_down_left(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "test")
     cli_state.restore()
     cli_state.set_flag("held_button", "left")
+    cli_state.set_flag("held_at", [10, 20])
     cli_state.save()
     released = []
     monkeypatch.setattr(hinput, "release_held",
@@ -390,7 +391,8 @@ def test_stop_releases_a_hold_a_shell_down_left(tmp_path, monkeypatch, capsys):
     assert cli.stop() == 0
     assert released == ["left"]
     assert "released the left button" in capsys.readouterr().out
-    assert cli_state.load()["flags"]["held_button"] is None
+    flags = cli_state.load()["flags"]
+    assert flags["held_button"] is None and flags["held_at"] is None  # the point goes too
 
 
 def test_stop_finds_the_hold_without_the_signature_in_its_env(tmp_path, monkeypatch, capsys):

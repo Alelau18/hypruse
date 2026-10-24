@@ -384,6 +384,7 @@ def _release_remembered_hold() -> str | None:
     with contextlib.suppress(Exception):
         cli_state.restore()
         cli_state.set_flag("held_button", None)
+        cli_state.set_flag("held_at", None)  # where it was pressed goes with it
         cli_state.save()
     return held
 

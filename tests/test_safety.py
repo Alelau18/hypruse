@@ -62,8 +62,45 @@ def test_server_main_registers_drag_release_cleanup(tmp_path, monkeypatch):
 
     monkeypatch.setattr(srv.sys, "stdin", Pipe())
     srv.main()
-    assert srv.hinput.release_held in safety._cleanups
+    assert srv._release_and_sync in safety._cleanups  # releases, then tells the CLI state
     safety.shutdown()
+
+
+def test_the_servers_shutdown_releases_then_records_it(tmp_path, monkeypatch):
+    # review of 1c9b161: cleanups run last in first out, and main() registered
+    # the CLI-state sync after the release, so the sync ran first and the file
+    # kept a hold the release then let go
+    from hypruse import cli_state
+    from hypruse import input as hinput
+    from hypruse import server as srv
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "test")
+    monkeypatch.setattr(srv.session, "ensure_session_env", lambda: None)
+    monkeypatch.setattr(srv.mcp, "run", lambda: None)
+    monkeypatch.setattr(srv.sys, "argv", ["hypruse"])
+
+    class Pipe:
+        def isatty(self):
+            return False
+
+    class Pointer:
+        def button(self, button, state):
+            pass
+
+    monkeypatch.setattr(srv.sys, "stdin", Pipe())
+    monkeypatch.setattr(hinput, "_vp", Pointer())
+    monkeypatch.setattr(hinput, "_held_button", None)
+    monkeypatch.setattr(hinput, "_down", None)
+    cli_state.restore()
+    cli_state.save()  # a CLI verb ran on this instance before
+    srv.main()
+    hinput.restore_held("left")  # a `pointer down` the server made, then the kill switch
+    srv._sync_cli_hold()
+    assert cli_state.load()["flags"]["held_button"] == "left"
+    safety.shutdown()
+    assert cli_state.load()["flags"]["held_button"] is None
+    assert hinput.held_button() is None
 
 
 def test_shutdown_runs_registered_cleanups(tmp_path, monkeypatch):
