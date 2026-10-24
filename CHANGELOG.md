@@ -216,6 +216,18 @@ All notable changes to this project are documented here. The format follows
   recorded as the agent's. A single-instance app's window, which opens
   from the already-running process, is still found and moved, and the
   result says it is not counted as the agent's.
+- **The replay plan is the plan that runs.** It cut every value at 120
+  characters, so the tail of a long `launch` command ran unseen; it let
+  newlines and bidi overrides through, so a value could draw plan lines
+  of its own or read backwards; it folded every `False`, so
+  `launch(background=False)` (the human's screen, no placement rule)
+  read like the default; and `--execute` re-read the journal, which a
+  live server keeps appending to. The plan now prints values whole and
+  escapes every character in Unicode categories Cc, Cf, Zl and Zp (and
+  the backslash), folds an argument only when it is the tool's own
+  default, marks dry entries, and ends with a digest that `--execute
+  --plan DIGEST` must match. `hypruse journal` escapes the same way, and
+  the shell verbs' output escapes bidi and separator characters.
 - **`keyboard type --allow-auth TEXT` warns** that the text is on the
   verb's own command line, readable from /proc; the skill says to pass it
   on stdin (`keyboard type - --allow-auth`).

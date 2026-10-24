@@ -310,7 +310,7 @@ Nothing reaches the desktop: not the click, not the keystroke, not even the wind
 
 The honest limit is window addresses: they are heap pointers, so yesterday's journal mostly names windows that are gone, and an address can even be reused by a different window later, which no pre-flight can catch. Replay is for re-running a flow on a desktop that still looks like the one recorded.
 
-Dry run and replay compose in the obvious direction: let the agent work with `HYPRUSE_DRYRUN=1`, read the journal, and replay it with `--execute` once the plan is one you like.
+Dry run and replay compose in the obvious direction: let the agent work with `HYPRUSE_DRYRUN=1`, read the journal, and replay it with `--execute --plan DIGEST` once the plan is one you like. The plan prints every value whole, with newlines, bidi overrides and other unprintable characters escaped, shows an argument whenever it differs from the tool's default (`background=False` included), and ends with its digest; `--execute` runs only a journal that still holds exactly the plan with that digest, since a live server keeps appending to the file.
 
 ## Performance
 

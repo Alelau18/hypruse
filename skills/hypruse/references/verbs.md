@@ -775,12 +775,14 @@ includes each result. The owner's audit; the agent does not run it.
 ## replay
 
 ```
-hypruse replay [PATH] [--execute] [--from N] [--to N] [--speed F] [--max-gap S] [--skip-missing] [--yes]
+hypruse replay [PATH] [--execute --plan DIGEST] [--from N] [--to N] [--speed F] [--max-gap S] [--skip-missing] [--yes]
 ```
 
 Re-issues a journal's actions through the same tool functions and the same
-guards. Prints the plan and stops unless `--execute`; requires `--yes` when
-stdin is not a terminal. Owner-only.
+guards. Prints the plan (every value whole, unprintable characters escaped)
+and its digest, and stops; `--execute --plan DIGEST` runs it only if the
+journal still holds exactly that plan. Requires `--yes` when stdin is not a
+terminal. Owner-only.
 
 ## skill
 

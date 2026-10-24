@@ -763,3 +763,9 @@ def test_a_credential_on_the_command_line_is_warned_about(monkeypatch, capsys):
     assert kwargs_of("keyboard", "type", "-", "--allow-auth")["text"] == "hunter2"
     kwargs_of("keyboard", "type", "hello")
     assert capsys.readouterr().err == ""
+
+
+def test_output_cannot_reorder_or_split_a_line():
+    # V32: a window title with a bidi override or a line separator
+    out = verbs._safe("evil‮title next")
+    assert "‮" not in out and " " not in out and "\\u202e" in out

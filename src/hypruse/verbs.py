@@ -458,12 +458,18 @@ def run(tool: str, kwargs: dict[str, Any], *, json_out: bool = False,
 # --- output -----------------------------------------------------------------------
 
 # window titles and accessible names are written by whatever is on screen and
-# land on a terminal an agent's harness parses: same whitelist as the journal
+# land on a terminal an agent's harness parses. Results are several lines on
+# purpose, so newlines stay (quoted values escape theirs, see _q); the rest
+# of the C0/C1 controls become dots, and bidi overrides, zero-width
+# characters and line separators (which would reorder or split a line) are
+# shown as escapes.
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+_INVISIBLE = re.compile(r"[\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]")
 
 
 def _safe(value: Any) -> str:
-    return _CONTROL.sub(".", str(value))
+    text = _CONTROL.sub(".", str(value))
+    return _INVISIBLE.sub(lambda m: f"\\u{ord(m.group()):04x}", text)
 
 
 def _q(value: Any) -> str:

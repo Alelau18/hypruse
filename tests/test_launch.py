@@ -278,7 +278,6 @@ def test_the_token_goes_after_a_rule_the_command_starts_with():
 def test_a_process_carries_the_token_it_was_started_with():
     import os
     import subprocess
-
     import time
 
     child = subprocess.Popen(["sleep", "5"], env={**os.environ, "HYPRUSE_LAUNCH": "abc123"})

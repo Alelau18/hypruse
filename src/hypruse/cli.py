@@ -23,14 +23,15 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import os
-import re
 import shutil
 import signal
 import subprocess
 import sys
 import time
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -409,15 +410,28 @@ def _clock(ts: str) -> str:
 # `use_bind(combo=)` and the rest verbatim, and the replay plan on screen
 # is the only review a human gives before --execute, so a value carrying
 # ESC sequences could erase the lines above it and show a plan that is
-# not the one that runs. Same treatment as safety._ACTION_JUNK, for the
-# same reason: whitelist before re-embedding in output we build.
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+# not the one that runs, a newline could draw plan lines of its own, and a
+# bidi override could make a command read backwards. So every character
+# that is not printed as itself (Unicode categories Cc, Cf, Zl, Zp) is
+# shown as an escape, and so is the backslash, which keeps it unambiguous:
+# `\n` on screen is a newline in the value, `\\n` a backslash and an n.
+_UNPRINTED = frozenset({"Cc", "Cf", "Zl", "Zp"})
+_NAMED = {"\n": "\\n", "\t": "\\t", "\r": "\\r", "\\": "\\\\"}
 _VALUE_MAX = 120
 
 
-def _safe(value: Any) -> str:
-    text = _CONTROL.sub(".", str(value))
-    return text[:_VALUE_MAX] + "..." if len(text) > _VALUE_MAX else text
+def _escape(text: str) -> str:
+    return "".join(
+        _NAMED.get(ch) or (
+            (f"\\x{ord(ch):02x}" if ord(ch) < 0x100 else f"\\u{ord(ch):04x}")
+            if unicodedata.category(ch) in _UNPRINTED else ch)
+        for ch in text
+    )
+
+
+def _safe(value: Any, limit: int | None = _VALUE_MAX) -> str:
+    text = _escape(str(value))
+    return text[:limit] + "..." if limit is not None and len(text) > limit else text
 
 
 def _skip(value: Any) -> bool:
@@ -434,17 +448,45 @@ _FLAGS = frozenset({"allow_auth", "background", "double", "stop_on_change", "sta
                     "lossless", "actionable"})
 
 
-def _fmt_args(args: Any) -> str:
+def _defaults(tool: Any) -> dict[str, Any]:
+    """The tool's own parameter defaults, by name; {} for a tool this
+    version does not have."""
+    import inspect
+
+    from hypruse import server
+
+    fn = server.TOOLS.get(str(tool))
+    if fn is None:
+        return {}
+    params = inspect.signature(inspect.unwrap(fn)).parameters.values()
+    return {p.name: p.default for p in params if p.default is not p.empty}
+
+
+def _is_default(value: Any, default: Any) -> bool:
+    return type(value) is type(default) and value == default
+
+
+def _fmt_args(args: Any, tool: Any = None, full: bool = False) -> str:
     """Recorded arguments on one line, defaults and redacted text folded
-    down so the interesting part of a call is what shows."""
+    down so the interesting part of a call is what shows. With the tool,
+    an argument is folded only when it is that tool's own default, so
+    `background=False` (the human's screen) never reads like the default
+    background=None. `full` prints every value whole, for the replay plan,
+    the review a human gives before --execute: a launch command cut at 120
+    characters hid whatever came after."""
     if not isinstance(args, dict):  # a hand-edited or truncated journal
         return _safe(args)
+    limit = None if full else _VALUE_MAX
+    defaults = _defaults(tool) if tool else {}
     parts = []
     for key, value in args.items():
         if key in _FLAGS and value is not None and not isinstance(value, bool):
-            parts.append(f"{_safe(key)}=<not a boolean: {_safe(repr(value))}>")
+            parts.append(f"{_safe(key)}=<not a boolean: {_safe(repr(value), limit)}>")
             continue
-        if _skip(value):
+        if key in defaults:
+            if _is_default(value, defaults[key]):
+                continue
+        elif _skip(value):
             continue
         if isinstance(value, float) and value.is_integer():
             value = int(value)  # a validated x=800 is 800.0, the same point
@@ -453,7 +495,7 @@ def _fmt_args(args: Any) -> str:
         elif isinstance(value, list):
             parts.append(f"{_safe(key)}=[{len(value)}]")
         else:
-            parts.append(f"{_safe(key)}={_safe(value)}")
+            parts.append(f"{_safe(key)}={_safe(value, limit)}")
     return " ".join(parts)
 
 
@@ -476,7 +518,8 @@ def _fmt_entry(entry: dict[str, Any], verbose: bool = False) -> str:
             event += f" ({_safe(entry['source'])})"
         return f"{seq:>5}  {when}  session {event} pid {pid} {tail}"
     kind = "act " if entry.get("kind") == "act" else "look"
-    tool, detail = _safe(entry.get("tool", "?")), _fmt_args(entry.get("args"))
+    tool = _safe(entry.get("tool", "?"))
+    detail = _fmt_args(entry.get("args"), entry.get("tool"))
     line = f"{seq:>5}  {when}  {kind} {tool:<10} {detail}"
     if entry.get("dry"):
         line += "  (dry)"
@@ -591,6 +634,16 @@ def _validated(entry: dict[str, Any]) -> dict[str, Any]:
     args = {k: v for k, v in _replay_args(entry).items() if not journal.redacted_text(v)}
     checked = server.validated_args(server.TOOLS[str(entry.get("tool"))], args, strict=True)
     return {**_replay_args(entry), **checked}
+
+
+def _plan_digest(plan: list[dict[str, Any]]) -> str:
+    """The reviewed plan as one short value: what each entry runs, in
+    order. --execute re-reads the journal, which a live server keeps
+    appending to, so without this the plan a human approved in the dry
+    run was not bound to the one that ran."""
+    canon = json.dumps([[e.get("seq"), e.get("tool"), _call_args(e)] for e in plan],
+                       sort_keys=True, default=str, ensure_ascii=False)
+    return hashlib.sha256(canon.encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
 def _call_args(entry: dict[str, Any]) -> dict[str, Any]:
@@ -716,6 +769,8 @@ def replay(argv: list[str]) -> int:
         "--skip-missing", action="store_true", help="skip actions whose window is gone"
     )
     parser.add_argument("--yes", action="store_true", help="no countdown before taking the seat")
+    parser.add_argument("--plan", default="", metavar="DIGEST",
+                        help="with --execute: the digest the dry run printed for this plan")
     args = parser.parse_args(argv)
     if args.speed <= 0:
         parser.error("--speed must be greater than 0")
@@ -738,7 +793,9 @@ def replay(argv: list[str]) -> int:
     print(f"{source}: {len(plan)} action(s) to replay\n")
     for entry in plan:
         seq = _safe(entry.get("seq"))
-        print(f"  {seq:>5}  {_safe(entry.get('tool'))} {_fmt_args(_call_args(entry))}")
+        line = _fmt_args(_call_args(entry), entry.get("tool"), full=True)
+        dry = "  (dry)" if entry.get("dry") else ""
+        print(f"  {seq:>5}  {_safe(entry.get('tool'))} {line}{dry}")
 
     blocked = _unreplayable(plan)
     if blocked:
@@ -774,9 +831,19 @@ def replay(argv: list[str]) -> int:
         if args.execute:
             return 1
 
+    digest = _plan_digest(plan)
     if not args.execute:
-        print("\ndry: nothing was replayed. Pass --execute to perform these actions.")
+        print(f"\ndry: nothing was replayed. This is plan {digest} ({len(plan)} action(s)); "
+              f"to perform exactly it, run again with --execute --plan {digest} and the "
+              "same --from/--to/--skip-missing.")
         return 0
+    if args.plan != digest:
+        print("\nrefusing to replay: " + (
+            f"--execute needs --plan with the digest of the plan you reviewed; this one is "
+            f"{digest} (a dry run, without --execute, prints it)" if not args.plan else
+            f"the journal no longer holds the plan you reviewed ({_safe(args.plan)}): it is "
+            f"now {digest}. Review it again."))
+        return 1
     if _flag_on("HYPRUSE_READONLY"):
         print("HYPRUSE_READONLY is set: refusing to replay actions in read-only mode")
         return 1

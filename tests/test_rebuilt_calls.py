@@ -7,6 +7,7 @@ override, while the journal and the replay plan printed allow_auth=false."""
 import functools
 import inspect
 import json
+import re
 import typing
 
 import pytest
@@ -14,6 +15,21 @@ import pytest
 from hypruse import background as bg
 from hypruse import cli, journal, trust
 from hypruse import server as srv
+
+
+def execute(path, *flags):
+    """`hypruse replay PATH --execute ...` as a human runs it: with the
+    --plan digest its own dry run printed (same filters)."""
+    import contextlib
+    import io
+
+    filters = [f for f in flags if f != "--yes"]
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        cli.replay([str(path), *filters])
+    found = re.search(r"--plan ([0-9a-f]{16})", out.getvalue())
+    return cli.replay([str(path), "--execute", "--plan", found.group(1) if found else "none",
+                       *flags])
 
 POLKIT = {"address": "0xabc", "class": "polkit-gnome-authentication-agent-1", "title": "Auth",
           "pid": 7}
@@ -158,13 +174,13 @@ def test_replay_refuses_a_flag_that_is_not_a_boolean(tmp_path, replaying, capsys
     plan = capsys.readouterr().out
     assert "allow_auth=false" not in plan and "allow_auth=<not a boolean" in plan
     assert "arguments are not the tool's" in plan and "allow_auth" in plan
-    assert cli.replay([str(path), "--execute", "--yes"]) == 1
+    assert execute(path, "--yes") == 1
     assert replaying == []
 
 
 def test_replay_refuses_a_number_recorded_as_text(tmp_path, replaying, capsys):
     path = _journal(tmp_path, {"action": "click", "x": "800", "y": 60}, tool="pointer")
-    assert cli.replay([str(path), "--execute", "--yes"]) == 1
+    assert execute(path, "--yes") == 1
     assert replaying == [] and "x: Input should be a valid number" in capsys.readouterr().out
 
 
@@ -173,7 +189,7 @@ def test_replay_runs_the_plan_it_printed(tmp_path, replaying, capsys):
                                "then": "desktop"})
     assert cli.replay([str(path)]) == 0
     assert "click_ui name=Allow window=0xabc allow_auth=True" in capsys.readouterr().out
-    assert cli.replay([str(path), "--execute", "--yes"]) == 0
+    assert execute(path, "--yes") == 0
     assert replaying == [("click_ui", {"name": "Allow", "window": "0xabc", "allow_auth": True})]
     assert replaying[0][1]["allow_auth"] is True
 
