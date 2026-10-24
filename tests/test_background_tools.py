@@ -1703,3 +1703,23 @@ def test_under_the_guarantee_the_humans_apps_window_is_not_moved(launch_fake, mo
     launch_fake["proven"] = True  # the launch's own window still goes where it was sent
     srv.launch("foot")
     assert ("movetoworkspacesilent", "99,address:0xnew") in launch_fake["dispatch"]
+
+
+def test_under_launched_confinement_the_humans_apps_window_is_not_moved(launch_fake,
+                                                                        monkeypatch):
+    # the same stranding in automatic mode: moved, it would be outside
+    # HYPRUSE_CONFINE=launched, which refuses every input to it
+    monkeypatch.setenv("HYPRUSE_CONFINE", "launched")
+    monkeypatch.setattr(srv.trust, "_owned", set())
+    launch_fake["lands"], launch_fake["proven"] = "1", False
+    out = srv.launch("foot")
+    assert not [d for d in launch_fake["dispatch"] if d[0] == "movetoworkspacesilent"]
+    assert "windows hypruse launched" in out["note"] and "left there" in out["note"]
+    assert "out of the human's sight" not in out["note"]  # not where the launch asked
+
+
+def test_a_scope_the_window_would_be_in_still_moves_it(launch_fake, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_CONFINE", "class:foot")  # its class is in scope anywhere
+    launch_fake["lands"], launch_fake["proven"] = "1", False
+    srv.launch("foot")
+    assert ("movetoworkspacesilent", "99,address:0xnew") in launch_fake["dispatch"]

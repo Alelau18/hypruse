@@ -2467,6 +2467,15 @@ def _launch_token_of(pid: Any) -> str | None:
     return trust.launch_token_of(pid)
 
 
+def _workspace_record(workspace: str) -> dict[str, Any]:
+    """A workspace argument as the record a client carries: a number is
+    the workspace with that id (as Hyprland resolves it), anything else a
+    name."""
+    if workspace.lstrip("-").isdigit():
+        return {"id": int(workspace), "name": workspace}
+    return {"name": workspace.removeprefix("name:")}
+
+
 def _on_workspace(workspace: str, ws: Any) -> bool:
     """Whether a workspace record (or an event's workspace name) is the one
     a launch's rule names."""
@@ -2571,8 +2580,9 @@ def launch(
 ) -> dict[str, Any] | str:
     """Open an app: run `command` via Hyprland exec. Optional `workspace` placement
     (silent; a single-instance app like a browser, whose window opens
-    elsewhere, gets it moved after it appears, except under the background
-    guarantee, where that window is not the agent's) and `wait_s` (1-30, default 8;
+    elsewhere, gets it moved after it appears, except where it would be
+    outside the agent's confinement scope: under the background guarantee
+    or HYPRUSE_CONFINE=launched it is not the agent's) and `wait_s` (1-30, default 8;
     raise for slow apps). Without `workspace`, the app opens silently on
     the next of the agent's own workspaces (HYPRUSE_AGENT_WORKSPACES, 99
     down to 90 by default) that is not on screen, so the agent can work on
@@ -2582,8 +2592,8 @@ def launch(
     of another app the human opens meanwhile; only one it can prove is its
     own counts as the agent's (HYPRUSE_CONFINE=launched).
     An app that is already running opens its window from the running
-    process, on the human's screen, before it is moved (left there under
-    the guarantee): the note says so.
+    process, on the human's screen, before it is moved (left there when it
+    would be outside the agent's scope): the note says so.
     Returns the new window's address/class/title/workspace, or a timeout
     note."""
     safety.touch("launch")
@@ -2676,26 +2686,30 @@ def launch(
         "title": win.get("title", ""),
         "workspace": hyprctl.workspace_ref(ws),
     }
-    if not proven:  # carried into every note below, the moved one included
-        note = (f"{note}; " if note else "") + (
-            "it opened from an already-running process of the app, so nothing ties it to this "
-            "launch rather than to a window opened at the same moment: it is not counted as "
-            "one the agent opened (HYPRUSE_CONFINE=launched, HYPRUSE_MARK), and the "
-            "background guarantee (HYPRUSE_BACKGROUND=1) refuses input to it")
+    unproven = "" if proven else (
+        "it opened from an already-running process of the app, so nothing ties it to this "
+        "launch rather than to a window opened at the same moment: it is not counted as "
+        "one the agent opened (HYPRUSE_CONFINE=launched, HYPRUSE_MARK), and the "
+        "background guarantee (HYPRUSE_BACKGROUND=1) refuses input to it")
+    if unproven:  # carried into every note below, the moved one included
+        note = (f"{note}; " if note else "") + unproven
     if note:
         result["note"] = note
     moved = bool(workspace) and not _on_workspace(workspace, win.get("workspace", {}))
-    if moved and not proven and mode == bg.GUARANTEE:
-        # the human's app's window: on an agent workspace the guarantee
-        # would refuse every input to it, so it would sit there stranded,
-        # out of the human's sight, and keep that workspace from the
-        # agent's next app
+    outside = (trust.out_of_scope(dict(win, workspace=_workspace_record(workspace)))
+               if moved and not proven else None)
+    if outside is not None:
+        # the human's app's window, outside the agent's scope where it would
+        # go (the background guarantee, HYPRUSE_CONFINE=launched): every
+        # input to it there is refused, so it would sit stranded, out of the
+        # human's sight, and keep that workspace from the agent's next app
         moved = False
         landed = ws.get("name") or ws.get("id")
-        result["note"] = (f"{note}; " if note else "") + (
-            f"it opened on workspace {landed} from the app's already-running process and was "
-            "left there, since it is not the agent's to move; start a separate instance "
-            "(a browser: its own profile)")
+        # not the placement note: the window is not where the launch asked
+        result["note"] = f"{unproven}; " + (
+            f"it opened on workspace {landed} and was left there: on workspace {workspace} it "
+            f"would be outside the agent's confinement scope ({outside}), so the agent could "
+            "not use it; start a separate instance (a browser: its own profile)")
     if moved:
         hyprctl.dispatch("movetoworkspacesilent", f"{workspace},address:{win['address']}")
         result["workspace"] = workspace

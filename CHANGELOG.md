@@ -415,8 +415,9 @@ All notable changes to this project are documented here. The format follows
   process carries one of this agent's launch tokens (a launched app's
   dialogs and second windows). Placement uses the same test. An
   already-running app's window, opened from the human's process, is not
-  the agent's: under the guarantee `launch` leaves it where it opened,
-  rather than strand it on an agent workspace, and says to start a
+  the agent's: where it would land outside the agent's confinement scope
+  (under the guarantee, or `HYPRUSE_CONFINE=launched`), `launch` leaves
+  it where it opened, rather than strand it there, and says to start a
   separate instance. Nor is an app a launch hands off to another process
   (`xdg-open`, D-Bus activation), which starts without the launch's token.
 - **`HYPRUSE_SEAT` naming the compositor's only seat is the default

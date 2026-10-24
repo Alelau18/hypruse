@@ -319,6 +319,15 @@ def guards_window_input() -> bool:
     return _confine_scope() is not None or _auth_guard_on()
 
 
+def out_of_scope(client: dict[str, Any]) -> str | None:
+    """The confinement scope `client` falls outside, described, or None
+    when it is inside it or nothing is confined."""
+    scope = _confine_scope()
+    if scope is None or _client_in_scope(client, scope):
+        return None
+    return _describe(scope)
+
+
 def guard_client(client: dict[str, Any]) -> None:
     """Refuse if `client` is outside the confinement scope. Takes an already
     resolved client so a caller that holds one does not re-query hyprctl."""
