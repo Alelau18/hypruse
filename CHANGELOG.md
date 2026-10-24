@@ -351,6 +351,18 @@ All notable changes to this project are documented here. The format follows
 - **`keyboard type --allow-auth TEXT` warns** that the text is on the
   verb's own command line, readable from /proc; the skill says to pass it
   on stdin (`keyboard type - --allow-auth`).
+- **The background guarantee covers the agent's own windows, not its
+  workspaces.** Under `HYPRUSE_BACKGROUND=1`, `keyboard`, `click_ui` and
+  `hypr` accepted any window on workspaces 90-99, so a window the human
+  had parked there (a password manager) could be typed into, pressed or
+  closed in the background, while launch placement already treated a
+  workspace holding the human's window as not the agent's. A window is in
+  scope now when it is on an agent workspace AND the agent opened it: it
+  launched it, an earlier session tagged it `hypruse-owned`, or its
+  process carries one of this agent's launch tokens (a launched app's
+  dialogs and second windows). Placement uses the same test. An
+  already-running app's window, opened from the human's process, is not
+  the agent's: the launch result says the guarantee refuses input to it.
 - **`HYPRUSE_SEAT` naming the compositor's only seat is the default
   seat.** Hyprland has one seat, called "Hyprland", which is the human's;
   naming it made hypruse position its cursor by tracked relative motion,

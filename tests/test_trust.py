@@ -1023,6 +1023,7 @@ def test_the_guarantee_confines_to_the_agent_workspaces(monkeypatch):
     monkeypatch.delenv("HYPRUSE_CONFINE", raising=False)
     monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
     monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-98")
+    monkeypatch.setattr(trust, "_owned", {trust.hyprctl.window_key(client(addr="0xa", ws=98))})
     trust.guard_client(client(addr="0xa", ws=98))
     with pytest.raises(trust.TrustError, match="agent's workspaces"):
         trust.guard_client(client(addr="0xb", ws=5))
@@ -1033,6 +1034,8 @@ def test_under_the_guarantee_an_explicit_confinement_narrows_never_widens(monkey
     monkeypatch.setenv("HYPRUSE_CONFINE", "class:kitty")
     monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
     monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-98")
+    mine = [client(addr="0xa", cls="kitty", ws=99), client(addr="0xc", cls="firefox", ws=99)]
+    monkeypatch.setattr(trust, "_owned", {trust.hyprctl.window_key(c) for c in mine})
     trust.guard_client(client(addr="0xa", cls="kitty", ws=99))
     with pytest.raises(trust.TrustError, match="agent's workspaces"):
         trust.guard_client(client(addr="0xb", cls="kitty", ws=5))
@@ -1180,3 +1183,47 @@ def test_a_bare_move_is_guarded_under_confinement(monkeypatch):
     monkeypatch.setattr(srv.hyprctl, "cursor_pos", lambda: (10, 20))
     srv.pointer("move", x=10, y=20)
     assert checked == [(10, 20)] and moved == [(10, 20)]
+
+
+# V29: the guarantee's scope is the agent's own windows on its workspaces, as
+# launch placement already had it, not whatever sits on those workspaces
+
+
+@pytest.fixture
+def guarantee(monkeypatch):
+    monkeypatch.delenv("HYPRUSE_CONFINE", raising=False)
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-90")
+    monkeypatch.setattr(trust, "_owned", set())
+    monkeypatch.setattr(trust, "_launches", {})
+    monkeypatch.setattr(trust, "launch_token_of", lambda pid: None)
+
+
+def test_the_humans_window_on_an_agent_workspace_is_out_of_scope(guarantee):
+    keepass = client(addr="0xhuman", cls="org.keepassxc.KeePassXC", ws=95)
+    with pytest.raises(trust.TrustError, match="agent's own windows"):
+        trust.guard_client(keepass)
+
+
+def test_a_window_the_agent_opened_is_in_scope_however_it_is_known(guarantee, monkeypatch):
+    launched = client(addr="0xa", ws=95)
+    tagged = dict(client(addr="0xb", ws=95), tags=["hypruse-owned*"])  # an earlier session's
+    dialog = dict(client(addr="0xc", ws=95), pid=4242)  # a launched app's second window
+    monkeypatch.setattr(trust, "_owned", {trust.hyprctl.window_key(launched)})
+    trust.note_launch("tok")
+    monkeypatch.setattr(trust, "launch_token_of", lambda pid: "tok" if pid == 4242 else None)
+    for c in (launched, tagged, dialog):
+        trust.guard_client(c)
+
+
+def test_a_token_the_agent_never_issued_proves_nothing(guarantee, monkeypatch):
+    monkeypatch.setattr(trust, "launch_token_of", lambda pid: "made-up")
+    with pytest.raises(trust.TrustError, match="agent's own windows"):
+        trust.guard_client(client(addr="0xd", ws=95))
+
+
+def test_the_agent_still_needs_its_own_workspace(guarantee, monkeypatch):
+    mine = client(addr="0xa", ws=3)
+    monkeypatch.setattr(trust, "_owned", {trust.hyprctl.window_key(mine)})
+    with pytest.raises(trust.TrustError, match="agent's workspaces"):
+        trust.guard_client(mine)

@@ -118,6 +118,21 @@ def note_launch(token: str, pending: bool = False) -> None:
         del _launches[old]
 
 
+LAUNCH_VAR = "HYPRUSE_LAUNCH"
+
+
+def launch_token_of(pid: Any) -> str | None:
+    """The HYPRUSE_LAUNCH value in a process's environment, if any."""
+    try:
+        with open(f"/proc/{int(pid)}/environ", "rb") as f:
+            for item in f.read().split(b"\0"):
+                if item.startswith(f"{LAUNCH_VAR}=".encode()):
+                    return item.split(b"=", 1)[1].decode(errors="replace")
+    except (OSError, ValueError, TypeError):
+        pass
+    return None
+
+
 def launch_known(token: str | None) -> bool:
     """Whether a token value found in a process's environment is one of this
     agent's launches (a token another process merely claims is not)."""
@@ -260,9 +275,11 @@ def _client_in_scope(client: dict[str, Any], scope: tuple[str, Any]) -> bool:
     if kind == "agent":
         from hypruse import background
 
-        return background.on_agent_workspace(client) and (
-            vals is None or _client_in_scope(client, vals)
-        )
+        # the agent's own window on its own workspace: a window the human
+        # parked on one of those workspaces is theirs still (V29)
+        return (background.on_agent_workspace(client)
+                and background.owned_by_agent(client, _owned)
+                and (vals is None or _client_in_scope(client, vals)))
     if kind == "launched":
         return hyprctl.window_key(client) in _owned
     if kind == "class":
@@ -283,7 +300,8 @@ def _workspace_is(ws: dict[str, Any], value: str) -> bool:
 def _describe(scope: tuple[str, Any]) -> str:
     kind, vals = scope
     if kind == "agent":
-        return "the agent's workspaces" + (f" and {_describe(vals)}" if vals else "")
+        return ("the agent's own windows on the agent's workspaces"
+                + (f" and {_describe(vals)}" if vals else ""))
     return "windows hypruse launched" if kind == "launched" else f"{kind} in {list(vals)}"
 
 

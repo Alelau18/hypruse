@@ -125,16 +125,18 @@ when the human expects it."""
 
 BACKGROUND_GUARANTEE = """
 Background mode is GUARANTEED for this session (HYPRUSE_BACKGROUND=1).
-You work only on windows on the agent's own workspaces ({workspaces}),
-and nothing you do may move the human's cursor, take their keyboard focus
-or switch their workspace. `launch` opens apps there, `click_ui` presses
+You work only on windows you opened (with `launch`, and the dialogs those
+apps open), on the agent's own workspaces ({workspaces}): a window the
+human put there is theirs. Nothing you do may move the human's cursor,
+take their keyboard focus or switch their workspace. `launch` opens apps there, `click_ui` presses
 controls through the accessibility tree, and `keyboard` needs window= and
 types into that window in the background. The pointer, workspace
 switches, focus_window, fullscreen and use_bind are refused, and
 background=false cannot override that. `launch` still runs its command as
 given, so never launch a command that drives the desktop itself, and an
 app that is already running (a browser) opens its window on the human's
-screen first: start a separate instance. A result with a WARNING means
+screen first, from the human's process, so it is not yours: start a
+separate instance (its own profile). A result with a WARNING means
 the human's focus moved: stop and tell them. A hidden window's screenshot
 can be stale (many apps stop drawing while hidden), so read its state
 with `ui`. When something cannot be done, ask the human."""
@@ -2314,7 +2316,7 @@ def _program(command: str) -> str:
 # The environment variable a launch exports to the command it runs, with a
 # random value: the command and everything it starts inherit it, which is
 # what ties a new window to this launch rather than to the moment it opened.
-_LAUNCH_VAR = "HYPRUSE_LAUNCH"
+_LAUNCH_VAR = trust.LAUNCH_VAR
 
 
 def _with_token(command: str, token: str) -> str:
@@ -2332,14 +2334,7 @@ def _carries_token(pid: Any, token: str) -> bool:
 
 def _launch_token_of(pid: Any) -> str | None:
     """The HYPRUSE_LAUNCH value in a process's environment, if any."""
-    try:
-        with open(f"/proc/{int(pid)}/environ", "rb") as f:
-            for item in f.read().split(b"\0"):
-                if item.startswith(f"{_LAUNCH_VAR}=".encode()):
-                    return item.split(b"=", 1)[1].decode(errors="replace")
-    except (OSError, ValueError, TypeError):
-        pass
-    return None
+    return trust.launch_token_of(pid)
 
 
 def _on_workspace(workspace: str, ws: Any) -> bool:
@@ -2552,7 +2547,8 @@ def launch(
         note = (f"{note}; " if note else "") + (
             "it opened from an already-running process of the app, so nothing ties it to this "
             "launch rather than to a window opened at the same moment: it is not counted as "
-            "one the agent opened (HYPRUSE_CONFINE=launched, HYPRUSE_MARK)")
+            "one the agent opened (HYPRUSE_CONFINE=launched, HYPRUSE_MARK), and the "
+            "background guarantee (HYPRUSE_BACKGROUND=1) refuses input to it")
     if note:
         result["note"] = note
     moved = bool(workspace) and not _on_workspace(workspace, win.get("workspace", {}))

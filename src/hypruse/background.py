@@ -131,11 +131,15 @@ def matches(selector: str, ws: dict[str, Any]) -> bool:
 _matches = matches
 
 
-def _owned(client: dict[str, Any], owned: set[str]) -> bool:
-    """The agent opened it: in this session's owned set, or tagged
-    hypruse-owned by an earlier one under HYPRUSE_MARK."""
-    return hyprctl.window_key(client) in owned or any(
-        str(t).rstrip("*") == "hypruse-owned" for t in client.get("tags") or ()
+def owned_by_agent(client: dict[str, Any], owned: set[str]) -> bool:
+    """The agent opened it: in this session's owned set, tagged
+    hypruse-owned by an earlier one under HYPRUSE_MARK, or shown by a
+    process that carries one of this agent's launch tokens, which every
+    process a launched app starts inherits (its dialogs, a second window)."""
+    return (
+        hyprctl.window_key(client) in owned
+        or any(str(t).rstrip("*") == "hypruse-owned" for t in client.get("tags") or ())
+        or trust.launch_known(trust.launch_token_of(client.get("pid")))
     )
 
 
@@ -180,7 +184,7 @@ def next_workspace(
         if allowed is not None and not allowed(sel):
             continue
         here = [c for c in clients if matches(sel, c.get("workspace") or {})]
-        if any(not _owned(c, owned) for c in here):
+        if any(not owned_by_agent(c, owned) for c in here):
             continue  # holds a window the agent did not open
         if any(matches(sel, ws) for ws in shown):
             on_screen = True

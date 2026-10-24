@@ -218,8 +218,14 @@ def test_a_dry_run_names_the_method_and_does_nothing(wired_bg, monkeypatch):
     assert "accessibility action" in str(out) and wired_bg["actions"] == []
 
 
+def _agents(monkeypatch, *clients):
+    """These windows are ones the agent launched."""
+    monkeypatch.setattr(srv.trust, "_owned", {srv.hyprctl.window_key(c) for c in clients})
+
+
 def test_the_guarantee_never_clicks_even_the_active_window(wired_bg, monkeypatch):
     monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    _agents(monkeypatch, CLIENT)
     wired_bg["active"] = "0xa"
     srv.click_ui(name="Save", window="0xa")
     assert wired_bg["actions"] and not wired_bg["clicks"]
@@ -509,6 +515,7 @@ def test_the_guarantee_refuses_pointer_workspace_focus_fullscreen_and_binds(
 
 def test_the_guarantee_keeps_agent_windows_on_agent_workspaces(wired_bg, monkeypatch):
     monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    _agents(monkeypatch, CLIENT)
     with pytest.raises(srv.trust.TrustError, match="agent's workspaces"):
         srv.hypr("move_window", target="0xa", workspace="3")
     srv.hypr("move_window", target="0xa", workspace="98")
@@ -1642,3 +1649,17 @@ def test_a_foreign_roots_control_is_never_clicked_by_mark(real_ui, monkeypatch):
 def test_same_app_ambiguity_still_clicks_in_the_foreground(real_ui):
     srv.click_ui(name="Save", window="0xa", background=False)
     assert real_ui["clicks"] == [(120, 70)]  # window at (100, 50), control centred 20 in
+
+
+def test_the_guarantee_keeps_off_the_humans_window_on_an_agent_workspace(wired_bg, monkeypatch):
+    # V29: a window the human parked on workspace 99 is still theirs
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    monkeypatch.setattr(srv.trust, "_owned", set())
+    with pytest.raises(srv.trust.TrustError, match="agent's own windows"):
+        srv.click_ui(name="Save", window="0xa")
+    with pytest.raises(srv.trust.TrustError, match="agent's own windows"):
+        srv.keyboard("type", text="x", window="0xa")
+    with pytest.raises(srv.trust.TrustError, match="agent's own windows"):
+        srv.hypr("close_window", target="0xa")
+    assert not (wired_bg["actions"] or wired_bg["inserted"] or wired_bg["shortcuts"]
+                or wired_bg["dispatch"])

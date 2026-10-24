@@ -222,3 +222,16 @@ def test_a_workspace_named_like_a_number_is_not_that_number():
     assert not bg.matches("99", {"id": -1337, "name": "99"})  # 0.56: a named one
     assert not bg.matches("99", {"name": "99"})  # 0.57: named ones carry no id
     assert bg.matches("name:99", {"id": -1337, "name": "99"})
+
+
+def test_a_launched_apps_dialog_does_not_make_its_workspace_the_humans(monkeypatch):
+    # V29: placement and the guarantee's scope use one test of "the agent's
+    # window", which counts what a launched process opens later
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-97")
+    monkeypatch.setenv("HYPRUSE_AGENT_FILL", "2")
+    monkeypatch.setattr(trust, "_launches", {})
+    trust.note_launch("tok")
+    monkeypatch.setattr(trust, "launch_token_of", lambda pid: "tok" if pid == 77 else None)
+    dialog = dict(_c("0xd", 99), pid=77)
+    assert bg.next_workspace([dialog], set()) == "99"
+    assert bg.next_workspace([dict(dialog, pid=78)], set()) == "98"  # someone else's

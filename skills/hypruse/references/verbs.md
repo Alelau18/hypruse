@@ -72,7 +72,8 @@ to 90 by default, never one on screen). `pointer` is the human's cursor and
 never runs in the background. `--background` forces the background and
 refuses what cannot be done there; `--foreground` does the action on the
 human's screen. Under HYPRUSE_BACKGROUND=1 (the guarantee) hypruse's input
-stays on the agent's workspaces and `--foreground` is refused; it does not
+stays on the windows the agent opened, on its own workspaces, and
+`--foreground` is refused; it does not
 bound what a launched command does. A refusal ends `so it cannot be done in
 the background: ...` and names what works instead. A background result says
 `(the human's focus untouched)` only when the human's focused window and
@@ -570,7 +571,8 @@ to that workspace, visibly. Window-targeted actions are refused outside
 HYPRUSE_CONFINE (exit 3); `workspace` is never confined. Under
 HYPRUSE_BACKGROUND=1, `workspace`, `focus_window` and `fullscreen` are
 refused because they change the human's view, `move_window` takes only the
-agent's workspaces, and window actions work only on windows there. Closing
+agent's workspaces, and window actions work only on windows the agent
+opened there (a window the human put on one of them is theirs). Closing
 a window can discard unsaved work: confirm first.
 
 ## launch
