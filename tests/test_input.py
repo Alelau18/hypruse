@@ -364,3 +364,32 @@ def test_a_cancelled_drop_that_cannot_go_back_says_where_it_was_released(pointer
         hinput.drag(1, 2, 9, 9, steps=2, drop_check=_refuse)
     assert pointer_log[-1] == ("button", "left", hinput.RELEASED)
     assert hinput.held_button() is None
+
+
+def _seats(monkeypatch, names, wanted):
+    """_resolve_seat against a compositor advertising these wl_seats."""
+    from hypruse import wire
+
+    vp = wire.VirtualPointer.__new__(wire.VirtualPointer)
+    vp._registry, vp._next_id = 2, 3
+    sent = []
+    vp._send = lambda *a: sent.append(a)
+
+    def roundtrip():
+        for oid, name in zip(sorted(vp._seat_names), names, strict=True):
+            vp._seat_names[oid] = name
+
+    vp._roundtrip = roundtrip
+    monkeypatch.setenv(wire.SEAT_ENV, wanted)
+    globals_seen = [(10 + i, wire.SEAT_INTERFACE, 9) for i in range(len(names))]
+    return vp._resolve_seat(globals_seen)
+
+
+def test_naming_a_compositors_only_seat_is_its_default(monkeypatch):
+    # V33: on Hyprland HYPRUSE_SEAT=Hyprland named the human's own seat, and
+    # tracked motion there drifted from the point the guards checked
+    assert _seats(monkeypatch, ["Hyprland"], "Hyprland") == 0
+
+
+def test_a_second_seat_is_used_when_named(monkeypatch):
+    assert _seats(monkeypatch, ["seat0", "agent"], "agent") == 4  # the second bound id

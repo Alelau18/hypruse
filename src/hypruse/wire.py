@@ -227,7 +227,11 @@ class VirtualPointer:
 
         for oid, seat_name in pending.items():
             if seat_name == wanted:
-                return oid
+                # a compositor's only seat is its default, the human's own
+                # (Hyprland's is called "Hyprland"): positioning by tracked
+                # motion there assumes nothing else moves the cursor (V33),
+                # so it takes the default path, which warps to the point
+                return oid if len(pending) > 1 else 0
 
         # Fall back rather than fail. The variable is easy to leave set in a shell
         # profile and then use on a compositor with only one seat, where hard
@@ -326,8 +330,10 @@ class VirtualPointer:
         therefore per seat.
 
         Absolute needs a known origin. The compositor clamps to the output, so a
-        large negative sweep parks the cursor at (0, 0) exactly once; after that the
-        position is tracked, since nothing else moves this cursor.
+        large negative sweep parks the cursor at (0, 0) exactly once (with a monitor
+        at the layout's origin); after that the position is tracked, since nothing
+        else moves this cursor. That holds only on a seat of its own, which is why a
+        compositor's only seat is never used here (_resolve_seat).
         """
         if self._pos is None:
             for _ in range(10):

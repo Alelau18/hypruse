@@ -351,6 +351,12 @@ All notable changes to this project are documented here. The format follows
 - **`keyboard type --allow-auth TEXT` warns** that the text is on the
   verb's own command line, readable from /proc; the skill says to pass it
   on stdin (`keyboard type - --allow-auth`).
+- **`HYPRUSE_SEAT` naming the compositor's only seat is the default
+  seat.** Hyprland has one seat, called "Hyprland", which is the human's;
+  naming it made hypruse position its cursor by tracked relative motion,
+  which drifts from the point the guards checked as soon as anything else
+  moves the cursor. A seat is used as the agent's own only when the
+  compositor has more than one.
 
 ### Not changed
 - **`launch` stays outside the trust layers** (audit F3, F48), as the
