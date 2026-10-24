@@ -800,3 +800,173 @@ def test_one_dedicated_app_scope_is_the_same_app(monkeypatch):
 def test_unrelated_processes_are_not_the_same_app(monkeypatch):
     _procs(monkeypatch, ppid={5: 1, 6: 1})
     assert not a11y.same_app(5, 6) and not a11y.same_app(None, 6)
+
+
+# --- other apps' objects (C3: F2, F11, V3, V6, V7, V78) ---
+#
+# Every (service, path) below an app's root comes from the app's own
+# replies, and an app can name another app's object there. hypruse, which
+# unlike a Flatpak app may call any app on the bus, used to walk into it:
+# read it for `ui`, and press or type into it for a background click_ui or
+# keyboard, while every guard had checked the app's own window.
+
+HOSTILE_PID, VICTIM_PID, WEB_PID, REGISTRY_PID = 1, 2, 5, 3
+FOCUSED_EDITABLE = ALL_STATES | {a11y._STATE_FOCUSED, a11y._STATE_EDITABLE}
+
+
+class LoggingBus(FakeBus):
+    """A FakeBus that records which services were asked anything."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.touched = set()
+
+    def call(self, svc, path, iface, method, *sig):
+        self.touched.add(svc)
+        return super().call(svc, path, iface, method, *sig)
+
+    def prop(self, svc, path, iface, name):
+        self.touched.add(svc)
+        return super().prop(svc, path, iface, name)
+
+
+@pytest.fixture
+def no_proc(monkeypatch):
+    """same_app from the fake pids alone: the web process is the hostile
+    app's own (WebKitGTK), nothing else is related to anything."""
+    related = {(WEB_PID, HOSTILE_PID)}
+    monkeypatch.setattr(a11y, "same_app",
+                        lambda a, b: a is not None and (a == b or (a, b) in related))
+
+
+def _victim_nodes():
+    vroot, ventry, vsend = ("victim", "/root"), ("victim", "/entry"), ("victim", "/send")
+    return {
+        vroot: {"role": 75, "name": "victim", "children": [ventry, vsend]},
+        ventry: {"role": 79, "name": "Message", "extent": (5, 5, 200, 20),
+                 "states": FOCUSED_EDITABLE, "text": "SECRET-MARKER", "children": []},
+        vsend: {"role": 43, "role_name": "push button", "name": "Send",
+                "extent": (5, 40, 60, 20), "states": ALL_STATES, "children": []},
+    }
+
+
+def _hostile(children, extra=None):
+    nodes = {
+        ("app", "/root"): {"role": 75, "name": "app", "children": [("app", "/frame")]},
+        ("app", "/frame"): {"role": 23, "name": "Hostile", "extent": (0, 0, 800, 600),
+                            "states": ALL_STATES, "children": children},
+        **_victim_nodes(),
+        **(extra or {}),
+    }
+    return LoggingBus(nodes, pids={"app": HOSTILE_PID, "victim": VICTIM_PID,
+                                   a11y._REGISTRY_SVC: REGISTRY_PID, "web": WEB_PID})
+
+
+def test_a_child_on_another_apps_connection_is_not_walked(no_proc):
+    bus = _hostile([("victim", "/root")])
+    assert a11y.focused_text(bus, "app", "/root") is None  # was ("victim", "/entry", 79)
+    found, _ = a11y.find_elements(bus, "app", "/root", name="Send")
+    assert found == []  # was the victim's Send button, with svc "victim"
+    assert a11y.editable_fields(bus, "app", "/root") == ([], True)
+    assert a11y.focused_role(bus, "app", "/root") is None
+    assert "victim" not in bus.touched  # not even read
+
+
+def test_the_registry_root_as_a_child_does_not_reach_every_app(no_proc):
+    # the no-knowledge route: the registry root lists every app on the bus
+    reg = (a11y._REGISTRY_SVC, a11y._ROOT)
+    bus = _hostile([reg], {reg: {"role": 75, "name": "main", "children": [("victim", "/root")]}})
+    assert a11y.focused_text(bus, "app", "/root") is None
+    assert a11y.find_elements(bus, "app", "/root", name="Send")[0] == []
+    assert {"victim", a11y._REGISTRY_SVC}.isdisjoint(bus.touched)
+
+
+def test_an_explicit_owner_is_the_windows_app_whatever_the_walk_root(no_proc):
+    # V7: a walk rooted at a frame the app chose must still check against the
+    # window's app, not against the frame's own service
+    bus = _hostile([])
+    owner = a11y.Owner(bus, "app", HOSTILE_PID)
+    assert a11y.focused_text(bus, "victim", "/root", owner=owner) is None
+    assert a11y.find_elements(bus, "victim", "/root", owner=owner)[0] == []
+    assert "victim" not in bus.touched
+
+
+def test_a_label_for_target_on_another_app_is_not_a_control(no_proc):
+    # V3/V6: a label named "Send" whose LABEL_FOR names the victim's button
+    label = ("app", "/label")
+    bus = _hostile([label], {label: {
+        "role": a11y._LABEL_ROLE, "name": "Send", "extent": (10, 10, 40, 20),
+        "states": ALL_STATES, "children": [],
+        "relations": [(a11y._REL_LABEL_FOR, [("victim", "/send"), ("victim", "/entry")])]}})
+    found, _ = a11y.find_elements(bus, "app", "/root", name="Send")
+    assert all(e["svc"] == "app" for e in found) and found == []
+    assert "victim" not in bus.touched
+
+
+def test_a_label_on_another_app_does_not_name_a_field(no_proc):
+    # LABELLED_BY is read for an unnamed field's name: a foreign target is
+    # another app's text
+    field = ("app", "/field")
+    bus = _hostile([field], {field: {
+        "role": 61, "name": "", "extent": (60, 10, 200, 20),
+        "states": ALL_STATES | {a11y._STATE_EDITABLE}, "children": [], "text": "",
+        "relations": [(a11y._REL_LABELLED_BY, [("victim", "/entry")])]}})
+    found, _ = a11y.find_elements(bus, "app", "/root")
+    assert [(e["svc"], e["name"]) for e in found] == [("app", "")]
+    assert "victim" not in bus.touched
+
+
+def test_a_web_process_of_the_windows_own_app_is_walked(no_proc):
+    # WebKitGTK serves the page from its web process, on its own
+    # connection: a same-service rule would lose every web control
+    web = ("web", "/doc")
+    bus = _hostile([web], {web: {"role": 43, "role_name": "push button", "name": "Send",
+                                 "extent": (5, 5, 60, 20), "states": ALL_STATES,
+                                 "children": []}})
+    owner = a11y.Owner(bus, "app", HOSTILE_PID)
+    found, _ = a11y.find_elements(bus, "app", "/root", name="Send", owner=owner)
+    assert [(e["svc"], e["path"]) for e in found] == [("web", "/doc")]
+
+
+def test_a_frame_on_another_apps_connection_is_not_this_window(no_proc):
+    # V7: the frame becomes the root of every later walk
+    nodes = {("app", "/root"): {"role": 75, "name": "app", "children": [("victim", "/root")]},
+             **_victim_nodes()}
+    nodes[("victim", "/root")].update(name="Hostile", extent=(0, 0, 800, 600))
+    bus = LoggingBus(nodes, pids={"app": HOSTILE_PID, "victim": VICTIM_PID})
+    owner = a11y.Owner(bus, "app", HOSTILE_PID)
+    assert a11y.window_frame_for(bus, "app", "/root", "Hostile", (800, 600), [],
+                                 owner=owner) is None
+    assert a11y.window_frame(bus, "app", "/root", "Hostile", (800, 600),
+                             owner=owner) == ("app", "/root")
+
+
+def test_the_title_fallback_does_not_match_another_apps_frame(no_proc):
+    # a root whose child is the victim's frame named like the window
+    reg = (a11y._REGISTRY_SVC, a11y._ROOT)
+    nodes = {reg: {"role": 75, "name": "main", "children": [("app", "/root")]},
+             ("app", "/root"): {"role": 75, "name": "app", "children": [("victim", "/frame")]},
+             ("victim", "/frame"): {"role": 23, "name": "Victim title", "children": []}}
+    bus = LoggingBus(nodes, pids={"app": HOSTILE_PID, "victim": VICTIM_PID})
+    assert a11y.app_for_pid(bus, 99, "Victim title") is None
+
+
+def test_ui_does_not_read_another_apps_text(no_proc, monkeypatch):
+    # V78: the read side. `ui` read the victim's field contents and showed
+    # them as a control of the hostile window
+    from hypruse import server as srv
+
+    reg = (a11y._REGISTRY_SVC, a11y._ROOT)
+    bus = _hostile([("victim", "/entry"), ("app", "/ok")], {
+        reg: {"role": 75, "name": "main", "children": [("app", "/root"), ("victim", "/root")]},
+        ("app", "/ok"): {"role": 43, "role_name": "push button", "name": "OK",
+                         "extent": (5, 5, 60, 20), "states": ALL_STATES, "children": []}})
+    client = {"address": "0xa", "class": "hostile", "title": "Hostile", "at": [0, 0],
+              "size": [800, 600], "pid": HOSTILE_PID}
+    monkeypatch.setattr(srv.a11y, "connect", lambda: bus)
+    monkeypatch.setattr(srv, "_resolve_window", lambda w="": client)
+    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: [client] if cmd == "clients" else {})
+    out = srv._ui_read("0xa", actionable=False)
+    assert "SECRET-MARKER" not in str(out) and "Message" not in str(out)
+    assert [e.get("name") for e in out if "name" in e] == ["Hostile", "OK"]
+    assert "victim" not in bus.touched

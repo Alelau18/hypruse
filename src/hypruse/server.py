@@ -517,7 +517,26 @@ def _proven_frame(
     if peers is None:
         return None
     return a11y.window_frame_for(
-        bus, app[0], app[1], client.get("title", ""), tuple(client["size"]), peers)
+        bus, app[0], app[1], client.get("title", ""), tuple(client["size"]), peers,
+        owner=_owner(bus, client, app))
+
+
+def _owner(bus: a11y.Bus, client: dict[str, Any], app: tuple[str, str]) -> a11y.Owner:
+    """What a walk of this client's tree may follow: objects on the app
+    root's own connection, or on one of the window's own app (a11y.Owner)."""
+    return a11y.Owner(bus, app[0], client.get("pid"))
+
+
+def _guard_owned(bus: a11y.Bus, client: dict[str, Any], svc: str, what: str) -> None:
+    """Refuse to act on an accessibility object unless its connection is the
+    window's own app, checked again at the sink: the walk already drops
+    foreign references, and this also covers a control restored from a
+    marks capture, whose (service, path) came from an earlier walk."""
+    if not a11y.same_app(bus.conn_pid(svc), client.get("pid")):
+        raise trust.TrustError(
+            f"{what} is served by another process than {client.get('class', 'the window')}'s "
+            "own, so acting on it would act in another app; refusing"
+        )
 
 
 # Chromium and every Electron app build their web content's accessibility
@@ -560,13 +579,15 @@ def _ui_read(
             hint = _no_tree_hint(cls)
             return f"{cls} exposes no accessibility tree" + (
                 hint or "; use screenshot + zoom instead")
-        frame = a11y.window_frame(bus, app[0], app[1], title, tuple(client["size"]))
+        owner = _owner(bus, client, app)  # a reading is of this app's objects only
+        frame = a11y.window_frame(bus, app[0], app[1], title, tuple(client["size"]),
+                                  owner=owner)
         # a background press acts on the control itself, and a reading after
         # one must be of this window, not a same-titled one: prove the frame
         exact = _proven_frame(bus, client, app)
         frame = exact or frame
         elements, truncated = a11y.find_elements(
-            bus, frame[0], frame[1], name=name, actionable=actionable
+            bus, frame[0], frame[1], name=name, actionable=actionable, owner=owner
         )
     except a11y.A11yError as exc:
         return f"accessibility read failed: {exc}; use screenshot + zoom instead"
@@ -1418,13 +1439,15 @@ def _keyboard_in_background(
             frame = _proven_frame(bus, client, app)
             unsure = app is not None and frame is None
             if frame is not None:
-                field = a11y.focused_text(bus, *frame)
+                owner = _owner(bus, client, app)
+                field = a11y.focused_text(bus, *frame, owner=owner)
                 if field is None:  # GTK reports no focus inside an inactive window
-                    fields, complete = a11y.editable_fields(bus, *frame)
+                    fields, complete = a11y.editable_fields(bus, *frame, owner=owner)
                     # one field among the elements read is not the only one
                     field = fields[0] if len(fields) == 1 and complete else None
             elif unsure:  # whatever window it is, a password field anywhere counts
-                fields, complete = a11y.editable_fields(bus, *app)
+                fields, complete = a11y.editable_fields(bus, *app,
+                                                        owner=_owner(bus, client, app))
         except a11y.A11yError:
             field, fields = None, []  # no accessibility: keys are the way in
         password = (field is not None and field[2] == a11y.PASSWORD_ROLE) or (
@@ -1443,6 +1466,7 @@ def _keyboard_in_background(
             if journal.dry_run():
                 return _acted(f"{_DRY} type {len(text)} characters into the text field in "
                               f"{cls} through the accessibility interface", then, window=addr)
+            _guard_owned(bus, client, field[0], f"the text field in {cls}")
             seat = _seat_now()
             secret = field[2] == a11y.PASSWORD_ROLE  # never read, only typed with consent
             before = "" if secret else a11y.text_of(bus, field[0], field[1])
@@ -1557,6 +1581,7 @@ def _click_in_background(
     # the reads that can refuse come before the dry run, so a rehearsal
     # refuses what the real run would
     bus = a11y.connect()
+    _guard_owned(bus, client, svc, "this control")  # before any read or action on it
     if not is_text and not a11y.has_action(bus, svc, path):
         bg.refuse("this control has no accessibility action")
     # an action that only focuses (Qt WebEngine's list rows offer just

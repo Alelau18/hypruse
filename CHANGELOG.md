@@ -150,6 +150,20 @@ All notable changes to this project are documented here. The format follows
   runs the checked arguments. The guards take only `True` as an
   override, and `hypruse journal` marks a non-boolean flag
   `<not a boolean: ...>`.
+- **The accessibility walk stays inside the window's own app.** Every
+  object below an app's root comes from that app's own replies, and an
+  app could name another app's object as a child, a label's target or
+  its window frame, the registry root included, which lists every app.
+  hypruse then read it for `ui`, and pressed it (`click_ui`) or typed
+  into it (`keyboard`) in the background, as a deputy with the a11y-bus
+  reach a Flatpak app's own proxy denies it, while every guard had
+  checked the app's window. A reference is now followed only when it is
+  served on the root's own connection or on one whose process is the
+  window's app (`a11y.Owner`, one check per bus name, so WebKitGTK's
+  web process still counts), for children, label relations and frames
+  alike; the background press and the accessibility typing check the
+  object's connection again just before acting, which also covers a
+  control restored from `marks`.
 
 ### Not changed
 - `launch` still only reports where the human's focus went when an

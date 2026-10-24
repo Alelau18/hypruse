@@ -14,7 +14,8 @@ class FakeBus:
 def wired(monkeypatch):
     monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
     monkeypatch.setattr(srv.a11y, "connect", lambda: FakeBus())
-    monkeypatch.setattr(srv.a11y, "window_frame", lambda bus, s, p, title, size: (s, p))
+    monkeypatch.setattr(srv.a11y, "window_frame",
+                        lambda bus, s, p, title, size, owner=None: (s, p))
     # one window, its own process: the frame is proven (test_background_tools
     # covers the unproven case)
     monkeypatch.setattr(srv, "_proven_frame", lambda bus, client, app: app)

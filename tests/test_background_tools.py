@@ -17,6 +17,17 @@ MONS = [{"id": 0, "name": "eDP-1", "x": 0, "y": 0, "width": 1920, "height": 1080
          "scale": 1.0, "activeWorkspace": {"id": 1}, "specialWorkspace": {"id": 0}}]
 
 
+class _Bus:
+    """The a11y bus as the background paths see it once a walk is stubbed:
+    only who serves a bus name. A name not in `pids` is the window's app."""
+
+    def __init__(self, pids):
+        self.pids = pids
+
+    def conn_pid(self, svc):
+        return self.pids.get(svc, CLIENT["pid"])
+
+
 @pytest.fixture
 def wired_bg(monkeypatch):
     s = {"active": "0xhuman", "clicks": [], "dispatch": [], "actions": [], "grabbed": [],
@@ -64,7 +75,10 @@ def wired_bg(monkeypatch):
         srv.hinput, "click",
         lambda x, y, button="left", double=False, hold_ms=0: s["clicks"].append((x, y)))
     monkeypatch.setattr(srv.hinput, "type_text", lambda t: s["typed"].append(t))
-    monkeypatch.setattr(srv.a11y, "connect", lambda: object())
+    # every service is the window's (pid 42) unless a test names one in pids
+    s["pids"] = {}
+    monkeypatch.setattr(srv.a11y, "connect", lambda: _Bus(s["pids"]))
+    monkeypatch.setattr(srv.a11y, "same_app", lambda a, b: a is not None and a == b)
     monkeypatch.setattr(srv.a11y, "has_action", lambda bus, svc, path: s["has_action"])
     s["action_name"], s["focused_after"] = "click", False
     monkeypatch.setattr(srv.a11y, "action_name",
@@ -80,14 +94,15 @@ def wired_bg(monkeypatch):
     monkeypatch.setattr(srv.a11y, "app_for_pid",
                         lambda bus, pid, title="", size=None: ("app", "/root"))
     monkeypatch.setattr(srv.a11y, "window_frame",
-                        lambda bus, svc, path, title="", size=None: (svc, path))
+                        lambda bus, svc, path, title="", size=None, owner=None: (svc, path))
     monkeypatch.setattr(srv, "_proven_frame",
                         lambda bus, client, app: app if s["frame_sure"] else None)
-    monkeypatch.setattr(srv.a11y, "focused_text", lambda bus, svc, path: s["focused_text"])
+    monkeypatch.setattr(srv.a11y, "focused_text",
+                        lambda bus, svc, path, owner=None: s["focused_text"])
     s["fields"] = []
     s["fields_complete"] = True
     monkeypatch.setattr(srv.a11y, "editable_fields",
-                        lambda bus, svc, path: (s["fields"], s["fields_complete"]))
+                        lambda bus, svc, path, owner=None: (s["fields"], s["fields_complete"]))
     texts = {"field": ""}
 
     def insert(bus, svc, path, text):
@@ -680,7 +695,8 @@ def test_a_press_in_a_window_its_tree_cannot_tell_apart_is_refused(wired_bg):
 
 
 def test_ui_read_hands_out_controls_only_from_a_proven_frame(wired_bg, monkeypatch):
-    monkeypatch.setattr(srv.a11y, "find_elements", lambda bus, s_, p, name="", actionable=True: (
+    monkeypatch.setattr(srv.a11y, "find_elements",
+                        lambda bus, s_, p, name="", actionable=True, owner=None: (
         [{"role": "push button", "name": "Save", "extent": (10, 10, 20, 20),
           "clickable": True, "svc": s_, "path": p + "/save"}], False))
     sure = REAL_UI_READ("0xa", handles=True)
@@ -976,7 +992,8 @@ def test_an_unproven_window_with_a_password_field_anywhere_refuses_typing(wired_
 
 
 def test_ui_of_an_unproven_window_says_its_controls_may_be_anothers(wired_bg, monkeypatch):
-    monkeypatch.setattr(srv.a11y, "find_elements", lambda bus, s_, p, name="", actionable=True: (
+    monkeypatch.setattr(srv.a11y, "find_elements",
+                        lambda bus, s_, p, name="", actionable=True, owner=None: (
         [{"role": "push button", "name": "Save", "extent": (10, 10, 20, 20),
           "clickable": True, "svc": s_, "path": p + "/save"}], False))
     wired_bg["frame_sure"] = False
@@ -1199,3 +1216,61 @@ def test_strict_still_guards_foreground_input(wired_bg, monkeypatch):
     with pytest.raises(srv.trust.TrustError, match="seat moved"):
         srv.click_ui(name="Save", window="0xa")
     assert wired_bg["typed"] == [] and wired_bg["clicks"] == []
+
+
+# C3 (F2, F11, V3, V6): a control or field whose bus name another process
+# serves is refused at the sink, whatever handed it over: the walk drops such
+# references, and this also covers a (service, path) restored from marks.
+# `_ui_read` is stubbed here, so the walk's own filter is not what refuses.
+
+
+def test_a_control_another_process_serves_is_never_pressed(wired_bg):
+    wired_bg["pids"]["svc"] = 7777  # the control's bus name is not pid 42's
+    with pytest.raises(srv.trust.TrustError, match="another process"):
+        srv.click_ui(name="Save", window="0xa")
+    assert wired_bg["actions"] == [] and wired_bg["grabbed"] == []
+
+
+def test_a_field_another_process_serves_never_takes_focus(wired_bg):
+    wired_bg["role"] = "text"
+    wired_bg["pids"]["svc"] = 7777
+    with pytest.raises(srv.trust.TrustError, match="another process"):
+        srv.click_ui(name="Name", window="0xa")
+    assert wired_bg["grabbed"] == []
+
+
+def test_a_rehearsal_refuses_a_foreign_control_like_the_real_run(wired_bg, monkeypatch):
+    monkeypatch.setenv("HYPRUSE_DRYRUN", "1")
+    wired_bg["pids"]["svc"] = 7777
+    with pytest.raises(srv.trust.TrustError, match="another process"):
+        srv.click_ui(name="Save", window="0xa")
+
+
+def test_a_mark_whose_control_another_process_serves_is_refused(wired_bg, monkeypatch):
+    monkeypatch.setattr(srv, "_grab_env", lambda **kw: (b"IMG", {
+        "geometry": [100, 50, 800, 600], "scale": 1.0, "image": [800, 600],
+        "format": "jpeg"}))
+    monkeypatch.setattr(srv, "_draw_marks", lambda *a: None)
+    srv._last_marks.clear()
+    srv.marks(window="0xa")
+    wired_bg["pids"]["svc"] = 7777  # checked when the mark is used, not only when drawn
+    with pytest.raises(srv.trust.TrustError, match="another process"):
+        srv.click_ui(mark=1)
+    assert wired_bg["actions"] == []
+
+
+def test_text_never_goes_into_a_field_another_process_serves(wired_bg):
+    wired_bg["focused_text"] = ("other", "/entry", 79)
+    wired_bg["pids"]["other"] = 7777
+    with pytest.raises(srv.trust.TrustError, match="another process"):
+        srv.keyboard("type", text="hi", window="0xa")
+    assert wired_bg["inserted"] == [] and wired_bg["shortcuts"] == []
+
+
+def test_a_field_of_the_windows_own_web_process_takes_text(wired_bg, monkeypatch):
+    # WebKitGTK: the page's field is on the web process's own connection
+    wired_bg["focused_text"] = ("web", "/entry", 79)
+    wired_bg["pids"]["web"] = 4343
+    monkeypatch.setattr(srv.a11y, "same_app", lambda a, b: a == b or (a, b) == (4343, 42))
+    srv.keyboard("type", text="hi", window="0xa")
+    assert wired_bg["inserted"] == [("web", "/entry", "hi")]

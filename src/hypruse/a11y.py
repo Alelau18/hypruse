@@ -264,6 +264,43 @@ def same_app(conn_pid: int | None, window_pid: int | None) -> bool:
         leaf.endswith(".scope") or leaf.endswith(".service"))
 
 
+class Owner:
+    """Which accessibility objects belong to one window's app.
+
+    Every (service, path) below an app's root comes from that app's own
+    replies (GetChildren, GetRelationSet), and nothing stops an app from
+    naming another app's object there: the human's focused text field, a
+    password manager's Delete button, the registry root that lists every
+    app. hypruse may call any object on the bus, which a Flatpak app's own
+    a11y proxy forbids the app, so following such a reference would make
+    hypruse read, press or type into another app on the guarded app's say
+    so. A reference is therefore followed only when it is served on the
+    root's own connection, or on one whose process is the window's app
+    (same_app): WebKitGTK serves a page from its web process, on a
+    connection of its own. Checked once per bus name; a unique name is
+    never reused while the bus runs."""
+
+    def __init__(self, bus: Bus, root_svc: str, pid: int | None):
+        self._bus, self.root_svc, self.pid = bus, root_svc, pid
+        self._known: dict[str, bool] = {root_svc: True}
+
+    def owns(self, svc: Any) -> bool:
+        if not isinstance(svc, str):
+            return False
+        if svc not in self._known:
+            self._known[svc] = same_app(self._bus.conn_pid(svc), self.pid)
+        return self._known[svc]
+
+    def keep(self, refs: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        return [r for r in refs if self.owns(r[0])]
+
+
+def _owner(bus: Bus, root_svc: str, owner: Owner | None) -> Owner:
+    """The owner a walk checks against: the caller's (the window's app), or,
+    for a caller with no window, the root's own process."""
+    return owner if owner is not None else Owner(bus, root_svc, bus.conn_pid(root_svc))
+
+
 def app_for_pid(
     bus: Bus, pid: int, title: str = "", size: tuple[int, int] | None = None
 ) -> tuple[str, str] | None:
@@ -287,7 +324,7 @@ def app_for_pid(
     for svc, path in registered:
         if bus.conn_pid(svc) != pid:
             continue
-        frames = _children(bus, svc, path)
+        frames = Owner(bus, svc, pid).keep(_children(bus, svc, path))
         if not frames:  # an empty root cannot hold the window
             empty = empty or (svc, path)
             continue
@@ -298,7 +335,7 @@ def app_for_pid(
         return nonempty or empty
     if title:
         for svc, path in registered:
-            if _has_frame_named(bus, svc, path, title):
+            if _has_frame_named(bus, svc, path, title, Owner(bus, svc, pid)):
                 return (svc, path)
     return None
 
@@ -322,8 +359,8 @@ def _holds_window(
     return False
 
 
-def _has_frame_named(bus: Bus, svc: str, path: str, title: str) -> bool:
-    return any(_name(bus, cs, cp) == title for cs, cp in _children(bus, svc, path))
+def _has_frame_named(bus: Bus, svc: str, path: str, title: str, owner: Owner) -> bool:
+    return any(_name(bus, cs, cp) == title for cs, cp in owner.keep(_children(bus, svc, path)))
 
 
 def window_frame(
@@ -332,13 +369,15 @@ def window_frame(
     app_path: str,
     title: str = "",
     size: tuple[int, int] | None = None,
+    owner: Owner | None = None,
 ) -> tuple[str, str]:
     """The app's toplevel matching a SPECIFIC window (by accessible name ==
     title, then by extent size), so a multi-window app's OTHER windows are
     not walked and mapped with the wrong origin. Returns the app root when
     there is a single toplevel or no confident match (walking from the root
-    is then correct or the best available)."""
-    frames = _children(bus, app_svc, app_path)
+    is then correct or the best available). Only frames `owner` owns are
+    candidates (see Owner)."""
+    frames = _owner(bus, app_svc, owner).keep(_children(bus, app_svc, app_path))
     if len(frames) <= 1:
         return (app_svc, app_path)
     if title:
@@ -360,6 +399,7 @@ def window_frame_for(
     title: str,
     size: tuple[int, int] | None,
     peers: list[tuple[str, tuple[int, int]]],
+    owner: Owner | None = None,
 ) -> tuple[str, str] | None:
     """The toplevel that is provably THIS window, or None when that cannot
     be told. The background paths act on the object directly, so a guess
@@ -368,8 +408,10 @@ def window_frame_for(
     Hyprland: a title or size one of them shares could pick its frame, so
     it proves nothing. Proof is exactly one frame named `title`, or else
     exactly one frame of `size`. A lone frame is the window when the app has
-    no other window."""
-    frames = _children(bus, app_svc, app_path)
+    no other window. Only frames `owner` owns are candidates: the frame
+    becomes the root of every later walk, so a frame on another app's
+    connection would hand that app's whole window over (see Owner)."""
+    frames = _owner(bus, app_svc, owner).keep(_children(bus, app_svc, app_path))
     if len(frames) == 1 and not peers:
         return (app_svc, app_path)
     if title and all(t != title for t, _ in peers):
@@ -514,10 +556,14 @@ class _Walk:
     afterwards whether objects were left unread, so a caller can tell
     "not there" from "not reached". Each object once, because a toolkit can
     list one under two parents (Qt WebEngine does with a web page's
-    subtrees), and walking the copy spends the budget twice."""
+    subtrees), and walking the copy spends the budget twice. Only objects
+    `owner` owns are walked, the root included (see Owner)."""
 
-    def __init__(self, bus: Bus, root: tuple[str, str], max_nodes: int):
+    def __init__(
+        self, bus: Bus, root: tuple[str, str], max_nodes: int, owner: Owner | None = None
+    ):
         self._bus, self._root, self._max = bus, root, max_nodes
+        self.owner = _owner(bus, root[0], owner)
         self._skip = False
         self.truncated = False
 
@@ -525,7 +571,7 @@ class _Walk:
         self._skip = True
 
     def __iter__(self):
-        stack: list[tuple[str, str]] = [self._root]
+        stack: list[tuple[str, str]] = [self._root] if self.owner.owns(self._root[0]) else []
         done: set[tuple[str, str]] = set()
         while stack:
             node = stack.pop()
@@ -538,7 +584,7 @@ class _Walk:
             self._skip = False
             yield node
             if not self._skip:  # reversed keeps document order under a LIFO stack
-                stack.extend(reversed(_children(self._bus, *node)))
+                stack.extend(reversed(self.owner.keep(_children(self._bus, *node))))
 
 
 def find_elements(
@@ -549,6 +595,7 @@ def find_elements(
     actionable: bool = True,
     max_nodes: int = WALK_BUDGET,
     max_results: int = 60,
+    owner: Owner | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Depth-first over a window's subtree, returning (matching elements,
     truncated). Elements carry WINDOW-relative extents (the caller adds the
@@ -561,7 +608,7 @@ def find_elements(
     results: list[dict[str, Any]] = []
     fallback: list[dict[str, Any]] = []  # named, with an action, in a role not listed
     seen: set[tuple[str, str]] = set()  # a field found through its label is not listed twice
-    walk = _Walk(bus, (app_svc, app_path), max_nodes)
+    walk = _Walk(bus, (app_svc, app_path), max_nodes, owner)
     for svc, path in walk:
         if len(results) >= max_results:
             break
@@ -572,7 +619,7 @@ def find_elements(
         if needle and role_num == _LABEL_ROLE:
             # a name search: the field this label names (GTK's entries are
             # unnamed text, named only by the label beside them)
-            for fs, fp in _related(bus, svc, path, _REL_LABEL_FOR):
+            for fs, fp in _related(bus, svc, path, _REL_LABEL_FOR, walk.owner):
                 if (fs, fp) in seen:
                     continue
                 field = _element(bus, fs, fp, _role_num(bus, fs, fp), nm, actionable=True)
@@ -594,7 +641,7 @@ def find_elements(
             continue
         if editable and not nm:
             nm = next((_name(bus, ls, lp) for ls, lp in
-                       _related(bus, svc, path, _REL_LABELLED_BY)), "")
+                       _related(bus, svc, path, _REL_LABELLED_BY, walk.owner)), "")
         if not nm and not needle and role_num not in _VALUE_BEARING_ROLES:
             # unnamed and valueless: nothing to target or report. An unnamed
             # slider or checkbox still carries a reading worth returning.
@@ -607,8 +654,13 @@ def find_elements(
     return results, walk.truncated and len(results) < max_results
 
 
-def _related(bus: Bus, svc: str, path: str, rel_type: int) -> list[tuple[str, str]]:
-    """The targets of one AT-SPI relation type (LABEL_FOR, LABELLED_BY)."""
+def _related(
+    bus: Bus, svc: str, path: str, rel_type: int, owner: Owner
+) -> list[tuple[str, str]]:
+    """The targets of one AT-SPI relation type (LABEL_FOR, LABELLED_BY) that
+    `owner` owns: a label's target becomes a control under the label's
+    name, so a foreign one would be another app's control under a name the
+    labelling app chose (see Owner)."""
     try:
         rels = bus.call(svc, path, _ACCESSIBLE, "GetRelationSet")[0]
     except (CallRefused, IndexError):
@@ -616,7 +668,7 @@ def _related(bus: Bus, svc: str, path: str, rel_type: int) -> list[tuple[str, st
     out: list[tuple[str, str]] = []
     for kind, targets in rels:
         if int(kind) == rel_type:
-            out.extend((ts, tp) for ts, tp in targets)
+            out.extend(owner.keep([(ts, tp) for ts, tp in targets]))
     return out
 
 
@@ -648,14 +700,15 @@ def _element(
 
 
 def focused_role(
-    bus: Bus, app_svc: str, app_path: str, max_nodes: int = WALK_BUDGET
+    bus: Bus, app_svc: str, app_path: str, max_nodes: int = WALK_BUDGET,
+    owner: Owner | None = None,
 ) -> int | None:
     """The AtspiRole number of the element that currently holds keyboard
     focus in this window, or None if none is found within the node budget.
     Bounded because it runs before typing: a fast, best-effort check for the
     auth guard, not an exhaustive walk. Prunes into non-showing subtrees so
     it does not spend the budget on hidden pages."""
-    walk = _Walk(bus, (app_svc, app_path), max_nodes)
+    walk = _Walk(bus, (app_svc, app_path), max_nodes, owner)
     for svc, path in walk:
         states = _states(bus, svc, path)
         if _STATE_FOCUSED in states:
@@ -755,13 +808,14 @@ def insert_text(bus: Bus, svc: str, path: str, text: str) -> bool:
 
 
 def focused_text(
-    bus: Bus, app_svc: str, app_path: str, max_nodes: int = WALK_BUDGET
+    bus: Bus, app_svc: str, app_path: str, max_nodes: int = WALK_BUDGET,
+    owner: Owner | None = None,
 ) -> tuple[str, str, int] | None:
     """(svc, path, role) of the element holding the app's own keyboard focus
     in this window when it is a text field (password fields included, so a
     caller can refuse them), else None. Walks every child within the
     budget: a hidden window's subtree may not report SHOWING."""
-    for svc, path in _Walk(bus, (app_svc, app_path), max_nodes):
+    for svc, path in _Walk(bus, (app_svc, app_path), max_nodes, owner):
         if _STATE_FOCUSED in _states(bus, svc, path):
             role = _role_num(bus, svc, path)
             return (svc, path, role) if role in _TEXT_ROLES | {PASSWORD_ROLE} else None
@@ -769,7 +823,8 @@ def focused_text(
 
 
 def editable_fields(
-    bus: Bus, app_svc: str, app_path: str, max_nodes: int = WALK_BUDGET
+    bus: Bus, app_svc: str, app_path: str, max_nodes: int = WALK_BUDGET,
+    owner: Owner | None = None,
 ) -> tuple[list[tuple[str, str, int]], bool]:
     """((svc, path, role) of every editable text field in this window, in
     document order; whether the walk read the whole window). GTK reports no
@@ -777,7 +832,7 @@ def editable_fields(
     caller uses this when focused_text finds nothing: a window with exactly
     one field has one place for text, which a walk cut short cannot show."""
     out: list[tuple[str, str, int]] = []
-    walk = _Walk(bus, (app_svc, app_path), max_nodes)
+    walk = _Walk(bus, (app_svc, app_path), max_nodes, owner)
     for svc, path in walk:
         role = _role_num(bus, svc, path)
         if role in _TEXT_ROLES | {PASSWORD_ROLE} and _STATE_EDITABLE in _states(bus, svc, path):
