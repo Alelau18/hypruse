@@ -403,7 +403,10 @@ All notable changes to this project are documented here. The format follows
   process carries one of this agent's launch tokens (a launched app's
   dialogs and second windows). Placement uses the same test. An
   already-running app's window, opened from the human's process, is not
-  the agent's: the launch result says the guarantee refuses input to it.
+  the agent's: under the guarantee `launch` leaves it where it opened,
+  rather than strand it on an agent workspace, and says to start a
+  separate instance. Nor is an app a launch hands off to another process
+  (`xdg-open`, D-Bus activation), which starts without the launch's token.
 - **`HYPRUSE_SEAT` naming the compositor's only seat is the default
   seat.** Hyprland has one seat, called "Hyprland", which is the human's;
   naming it made hypruse position its cursor by tracked relative motion,

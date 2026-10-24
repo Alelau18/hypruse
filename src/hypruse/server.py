@@ -2653,6 +2653,17 @@ def launch(
     if note:
         result["note"] = note
     moved = bool(workspace) and not _on_workspace(workspace, win.get("workspace", {}))
+    if moved and not proven and mode == bg.GUARANTEE:
+        # the human's app's window: on an agent workspace the guarantee
+        # would refuse every input to it, so it would sit there stranded,
+        # out of the human's sight, and keep that workspace from the
+        # agent's next app
+        moved = False
+        landed = ws.get("name") or ws.get("id")
+        result["note"] = (f"{note}; " if note else "") + (
+            f"it opened on workspace {landed} from the app's already-running process and was "
+            "left there, since it is not the agent's to move; start a separate instance "
+            "(a browser: its own profile)")
     if moved:
         hyprctl.dispatch("movetoworkspacesilent", f"{workspace},address:{win['address']}")
         result["workspace"] = workspace

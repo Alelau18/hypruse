@@ -234,9 +234,9 @@ def clamp_notify_ts(ts: Any) -> float:
 def _confine_scope() -> tuple[str, Any] | None:
     """The confinement scope, or None when confinement is off. Under the
     background guarantee (HYPRUSE_BACKGROUND=1) it is ("agent", explicit):
-    a window must be on the agent's workspaces AND inside HYPRUSE_CONFINE
-    when that is set too, so an explicit scope narrows the guarantee and
-    never widens it."""
+    a window must be one the agent opened (background.owned_by_agent), on
+    the agent's workspaces, AND inside HYPRUSE_CONFINE when that is set
+    too, so an explicit scope narrows the guarantee and never widens it."""
     from hypruse import background  # background imports this module
 
     explicit = _explicit_scope()

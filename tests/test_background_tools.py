@@ -1689,3 +1689,17 @@ def test_a_window_opened_during_the_wait_is_not_the_launchs(launch_fake, monkeyp
     launch_fake["clients"] = [before, {"address": "0xduring", "workspace": {"id": 1, "name": "1"}}]
     srv.launch("foot")
     assert launch_fake["claims"] == [["0xnew", "0xother"]]  # not 0xduring
+
+
+def test_under_the_guarantee_the_humans_apps_window_is_not_moved(launch_fake, monkeypatch):
+    # review of 30a795b: moved to an agent workspace, a window from the app's
+    # already-running process is one the guarantee refuses every input to,
+    # so it would sit there stranded and take the workspace from the agent
+    monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
+    launch_fake["lands"], launch_fake["proven"] = "1", False
+    out = srv.launch("foot")
+    assert not [d for d in launch_fake["dispatch"] if d[0] == "movetoworkspacesilent"]
+    assert "left there" in out["note"] and "separate instance" in out["note"]
+    launch_fake["proven"] = True  # the launch's own window still goes where it was sent
+    srv.launch("foot")
+    assert ("movetoworkspacesilent", "99,address:0xnew") in launch_fake["dispatch"]

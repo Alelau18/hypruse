@@ -1201,12 +1201,20 @@ def test_a_bare_move_is_guarded_under_confinement(monkeypatch):
 
 @pytest.fixture
 def guarantee(monkeypatch):
+    # what both the code before the fix and after it have: on the old code
+    # these tests fail by letting the human's window through, not by a name
+    # it lacks (a client's pid 1 has no readable environment, so no token)
     monkeypatch.delenv("HYPRUSE_CONFINE", raising=False)
     monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
     monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", "99-90")
     monkeypatch.setattr(trust, "_owned", set())
     monkeypatch.setattr(trust, "_launches", {})
-    monkeypatch.setattr(trust, "launch_token_of", lambda pid: None)
+
+
+def _tokens(monkeypatch, read):
+    """The launch token a process carries (raising=False: the code before
+    the fix read none)."""
+    monkeypatch.setattr(trust, "launch_token_of", read, raising=False)
 
 
 def test_the_humans_window_on_an_agent_workspace_is_out_of_scope(guarantee):
@@ -1221,13 +1229,13 @@ def test_a_window_the_agent_opened_is_in_scope_however_it_is_known(guarantee, mo
     dialog = dict(client(addr="0xc", ws=95), pid=4242)  # a launched app's second window
     monkeypatch.setattr(trust, "_owned", {trust.hyprctl.window_key(launched)})
     trust.note_launch("tok")
-    monkeypatch.setattr(trust, "launch_token_of", lambda pid: "tok" if pid == 4242 else None)
+    _tokens(monkeypatch, lambda pid: "tok" if pid == 4242 else None)
     for c in (launched, tagged, dialog):
         trust.guard_client(c)
 
 
 def test_a_token_the_agent_never_issued_proves_nothing(guarantee, monkeypatch):
-    monkeypatch.setattr(trust, "launch_token_of", lambda pid: "made-up")
+    _tokens(monkeypatch, lambda pid: "made-up")
     with pytest.raises(trust.TrustError, match="agent's own windows"):
         trust.guard_client(client(addr="0xd", ws=95))
 
