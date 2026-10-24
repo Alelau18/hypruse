@@ -231,6 +231,12 @@ def private_bus(monkeypatch, tmp_path):
     address = proc.stdout.readline().strip()
     monkeypatch.setattr(dbuswire, "connection", real_connection)
     yield address
+    # the process-wide connection a test opened to this bus would outlive it
+    # (a ResourceWarning at exit, once anything changes when it is collected)
+    with dbuswire._connections_lock:
+        conn = dbuswire._connections.pop(address, None)
+    if conn is not None and not conn.closed:
+        conn.close()
     proc.terminate()
     proc.wait(timeout=5)
 

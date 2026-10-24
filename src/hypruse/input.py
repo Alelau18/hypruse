@@ -331,6 +331,22 @@ def _nudge_direction(x: int, y: int) -> int:
     return 1
 
 
+def _layout_origin() -> tuple[float, float]:
+    """Where a sweep up and to the left parks a named seat's cursor: the
+    monitor layout's top-left corner, when a monitor sits there. On a
+    layout with none there (an L shape), where the compositor clamps it
+    cannot be known, so positioning is refused rather than guessed."""
+    rects = [hyprctl.logical_rect(m) for m in hyprctl.query("monitors")]
+    if not rects:
+        raise InputError("no monitors to place a named seat's cursor on")
+    corner = (min(r[0] for r in rects), min(r[1] for r in rects))
+    if not any((r[0], r[1]) == corner for r in rects):
+        raise InputError(
+            f"no monitor sits at the layout's top-left corner {corner}, so where this "
+            f"seat's cursor starts cannot be known; refusing to position it")
+    return float(corner[0]), float(corner[1])
+
+
 def move(x: float, y: float) -> None:
     journal.refuse_if_dry("move")
     with _seat_lock:
@@ -340,7 +356,7 @@ def move(x: float, y: float) -> None:
         def run(p: VirtualPointer) -> bool:
             if not p.on_named_seat:
                 return False
-            p.move_to(x, y)  # relative motion already: clients see it move
+            p.move_to(x, y, origin=_layout_origin)  # relative motion: clients see it move
             return True
 
         if _with_pointer(run):

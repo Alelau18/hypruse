@@ -81,7 +81,7 @@ class FakeVP:
     def nudge(self, direction=1):
         self.events.append("nudge" if direction == 1 else ("nudge", direction))
 
-    def move_to(self, x, y):
+    def move_to(self, x, y, origin=None):
         self.events.append(("move_to", x, y))
 
 
@@ -388,8 +388,48 @@ def _seats(monkeypatch, names, wanted):
 def test_naming_a_compositors_only_seat_is_its_default(monkeypatch):
     # V33: on Hyprland HYPRUSE_SEAT=Hyprland named the human's own seat, and
     # tracked motion there drifted from the point the guards checked
-    assert _seats(monkeypatch, ["Hyprland"], "Hyprland") == 0
+    import warnings
+
+    with warnings.catch_warnings(record=True) as caught:  # not pytest.warns: it re-emits
+        warnings.simplefilter("always")  # whatever else a collection turns up meanwhile
+        assert _seats(monkeypatch, ["Hyprland"], "Hyprland") == 0
+    assert any(w.category is RuntimeWarning and "only seat" in str(w.message) for w in caught)
 
 
 def test_a_second_seat_is_used_when_named(monkeypatch):
     assert _seats(monkeypatch, ["seat0", "agent"], "agent") == 4  # the second bound id
+
+
+def test_a_second_seats_cursor_starts_at_the_layouts_corner():
+    # review of 311df10: the sweep parks it at the layout's top-left, which is
+    # (0, 0) only when a monitor sits there
+    from hypruse import wire
+
+    vp = wire.VirtualPointer.__new__(wire.VirtualPointer)
+    vp._pos, moves = None, []
+    vp.move = lambda dx, dy: moves.append((dx, dy))
+    vp.move_to(100, 50, origin=lambda: (-1920.0, 0.0))
+    assert moves[-1] == (2020.0, 50.0) and vp._pos == (100.0, 50.0)
+    vp.move_to(110, 50, origin=lambda: pytest.fail("read only for the first sweep"))
+    assert moves[-1] == (10.0, 0.0)
+
+
+def _monitor(x, y, w=1920, h=1080):
+    return {"x": x, "y": y, "width": w, "height": h, "scale": 1.0, "transform": 0}
+
+
+@pytest.mark.parametrize("monitors, corner", [
+    ([_monitor(0, 0), _monitor(1920, 0)], (0.0, 0.0)),
+    ([_monitor(1920, 0), _monitor(-1920, 0)], (-1920.0, 0.0)),
+])
+def test_the_layouts_corner_is_where_a_monitor_sits(monkeypatch, monitors, corner):
+    monkeypatch.setattr(hinput.hyprctl, "query", lambda what: monitors)
+    assert hinput._layout_origin() == corner
+
+
+def test_a_layout_with_no_monitor_at_its_corner_refuses_to_guess(monkeypatch):
+    # an L shape: the clamp could leave the cursor at either monitor's edge
+    monkeypatch.setattr(hinput.hyprctl, "query",
+                        lambda what: [_monitor(0, 200), _monitor(1920, 0)])
+    with pytest.raises(hinput.InputError, match="cannot be known"):
+        hinput._layout_origin()

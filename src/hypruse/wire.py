@@ -22,6 +22,7 @@ import socket
 import struct
 import tempfile
 import time
+from collections.abc import Callable
 
 DISPLAY_ID = 1
 # wl_display requests
@@ -40,8 +41,9 @@ SEAT_EV_NAME      = 1
 
 # Multi-seat: when HYPRUSE_SEAT names a seat, the virtual pointer is created ON
 # that seat instead of the compositor default. Requires a compositor that
-# advertises more than one wl_seat; on stock Hyprland this finds nothing and we
-# fall back to the default seat, so the variable is safe to leave set.
+# advertises more than one wl_seat. Stock Hyprland advertises one, "Hyprland",
+# the human's own: naming it, or a seat that does not exist, falls back to the
+# default seat with a warning, so the variable is safe to leave set.
 SEAT_ENV          = "HYPRUSE_SEAT"
 
 BUTTONS = {
@@ -225,20 +227,28 @@ class VirtualPointer:
         self._seat_names = pending
         self._roundtrip()
 
+        import warnings
+
         for oid, seat_name in pending.items():
+            if seat_name == wanted and len(pending) > 1:
+                return oid
             if seat_name == wanted:
                 # a compositor's only seat is its default, the human's own
                 # (Hyprland's is called "Hyprland"): positioning by tracked
                 # motion there assumes nothing else moves the cursor (V33),
                 # so it takes the default path, which warps to the point
-                return oid if len(pending) > 1 else 0
+                warnings.warn(
+                    f"{SEAT_ENV}={wanted!r} names the compositor's only seat, which is the "
+                    "default one, the human's; using it as the default seat",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                return 0
 
         # Fall back rather than fail. The variable is easy to leave set in a shell
         # profile and then use on a compositor with only one seat, where hard
         # failure makes every single call error out for no good reason. Seat 0 is
         # the compositor default, which is what hypruse always used.
-        import warnings
-
         warnings.warn(
             f"{SEAT_ENV}={wanted!r} but this compositor advertises no such seat "
             f"(saw: {sorted(n for n in pending.values() if n)}); "
@@ -322,7 +332,8 @@ class VirtualPointer:
             self._send(self._pointer, PTR_FRAME)
         self._roundtrip()
 
-    def move_to(self, x: float, y: float) -> None:
+    def move_to(self, x: float, y: float,
+                origin: Callable[[], tuple[float, float]] | None = None) -> None:
         """Absolute positioning, built out of relative motion.
 
         The compositor's cursor dispatcher cannot be used on a second seat: it moves the
@@ -330,15 +341,17 @@ class VirtualPointer:
         therefore per seat.
 
         Absolute needs a known origin. The compositor clamps to the output, so a
-        large negative sweep parks the cursor at (0, 0) exactly once (with a monitor
-        at the layout's origin); after that the position is tracked, since nothing
-        else moves this cursor. That holds only on a seat of its own, which is why a
-        compositor's only seat is never used here (_resolve_seat).
+        large negative sweep parks the cursor at the monitor layout's top-left
+        corner exactly once, which `origin` says (read only then; (0, 0) when not
+        given); after that the position is tracked, since nothing else moves this
+        cursor. That holds only on a seat of its own, which is why a compositor's
+        only seat is never used here (_resolve_seat).
         """
         if self._pos is None:
+            start = origin() if origin is not None else (0.0, 0.0)
             for _ in range(10):
                 self.move(-4000, -4000)
-            self._pos = (0.0, 0.0)
+            self._pos = (float(start[0]), float(start[1]))
         self.move(x - self._pos[0], y - self._pos[1])
         self._pos = (float(x), float(y))
 

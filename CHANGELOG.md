@@ -418,7 +418,10 @@ All notable changes to this project are documented here. The format follows
   naming it made hypruse position its cursor by tracked relative motion,
   which drifts from the point the guards checked as soon as anything else
   moves the cursor. A seat is used as the agent's own only when the
-  compositor has more than one.
+  compositor has more than one; naming the only one says so in a warning.
+  On a real second seat, where the cursor starts after the sweep that
+  finds it is the monitor layout's top-left corner, not (0, 0), and a
+  layout with no monitor at that corner is refused rather than guessed.
 
 ### Not changed
 - Known gaps from the audit, accepted and now listed in the README's
