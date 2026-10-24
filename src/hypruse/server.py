@@ -523,7 +523,15 @@ def _proven_frame(
     None. The root must belong to the window's own app instance (a
     multi-process app is matched by title across every process), and the
     frame must be told apart from the app's other windows."""
-    if app is None or not a11y.same_app(bus.conn_pid(app[0]), client.get("pid")):
+    conn, pid = (bus.conn_pid(app[0]), client.get("pid")) if app is not None else (None, None)
+    if app is None or not a11y.same_app(conn, pid):
+        return None
+    if conn != pid and a11y.descends_from(conn, pid):
+        # a root on another process is only found by the title fallback,
+        # and a process the window's own one started (anything run in a
+        # terminal, which has no tree of its own) can register one with a
+        # frame named after the window: same_app accepts it as a
+        # descendant, and typing then went into its field, not the window
         return None
     peers = _peers(client)
     if peers is None:

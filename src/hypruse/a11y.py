@@ -235,6 +235,20 @@ def _cgroup(pid: int) -> str | None:
         return None
 
 
+def descends_from(pid: int | None, ancestor: int | None) -> bool:
+    """Whether `pid` is a process `ancestor` started, at any depth."""
+    if not pid or not ancestor or pid == ancestor:
+        return False
+    p: int | None = pid
+    for _ in range(32):
+        p = _ppid(p) if p else None
+        if p is None or p <= 1:
+            return False
+        if p == ancestor:
+            return True
+    return False
+
+
 def same_app(conn_pid: int | None, window_pid: int | None) -> bool:
     """Whether an accessibility connection's process belongs to the same
     app instance as a window's process: the same process, one an ancestor

@@ -1460,3 +1460,22 @@ def test_a_key_name_the_layout_lacks_is_refused_before_hyprland(wired_bg):
     with pytest.raises(srv.trust.TrustError, match="not a key on the us keyboard layout"):
         srv.keyboard("key", keys="NotAKeyName", window="0xa")
     assert wired_bg["shortcuts"] == []
+
+
+def test_a_root_a_process_inside_the_window_registered_proves_nothing(monkeypatch):
+    # V11: a terminal has no tree; a process started in it registers a root
+    # with a frame named like the terminal's title, and same_app accepts a
+    # descendant of the window's process
+    class Bus:
+        def conn_pid(self, svc):
+            return 4300  # a child of the terminal's shell
+
+    parents = {4300: 4200, 4200: CLIENT["pid"]}
+    monkeypatch.setattr(srv.a11y, "_ppid", lambda pid: parents.get(pid, 1))
+    monkeypatch.setattr(srv.a11y, "same_app", lambda a, b: True)
+    monkeypatch.setattr(srv, "_peers", lambda client: [])
+    monkeypatch.setattr(srv.a11y, "window_frame_for", lambda *a, **k: ("evil", "/frame"))
+    assert REAL_PROVEN_FRAME(Bus(), dict(CLIENT), ("evil", "/root")) is None
+    # the window's own process, or one that started it, still proves the root
+    parents.clear()
+    assert REAL_PROVEN_FRAME(Bus(), dict(CLIENT), ("evil", "/root")) == ("evil", "/frame")

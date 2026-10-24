@@ -239,6 +239,13 @@ All notable changes to this project are documented here. The format follows
   (resolved before the step ahead of it, so a `window_close` filter can
   still name its window), and a switch counts as the step's only when it
   is to the workspace the step's window was on.
+- **A root registered by a process inside the window proves nothing.**
+  A terminal has no accessibility tree, so the title fallback could find
+  a root that a process started in it registered, with a frame named
+  after the terminal's title; `same_app` accepts a descendant of the
+  window's process, so background typing went into that process's field
+  instead of the terminal. A root on another process whose connection
+  descends from the window's process is no longer the window's.
 - **`keyboard type --allow-auth TEXT` warns** that the text is on the
   verb's own command line, readable from /proc; the skill says to pass it
   on stdin (`keyboard type - --allow-auth`).
