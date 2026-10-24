@@ -505,6 +505,7 @@ def button_up(x: float | None = None, y: float | None = None, button: str = "lef
                         time.sleep(0.02)
                     except Exception as exc:
                         where = f"({back[0]:.0f}, {back[1]:.0f})"
+                        refusal = getattr(refusal, "reason", refusal)  # not what it planned
                         if not ending:
                             raise InputError(
                                 f"the release was refused ({refusal}), and moving back to "
@@ -587,6 +588,7 @@ def drag(
                     except Exception as exc:
                         # the release below must still happen, at the drop point:
                         # say so rather than report a cancelled drop
+                        refusal = getattr(refusal, "reason", refusal)
                         raise InputError(
                             f"the drop was refused ({refusal}), and moving back to the start "
                             f"failed ({exc}), so the button was released at the drop point"

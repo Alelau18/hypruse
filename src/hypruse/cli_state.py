@@ -171,9 +171,9 @@ def _merge(current: dict[str, Any], mine: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def set_flag_in_file(name: str, value: Any) -> None:
-    """Set one flag in this instance's state file, when there is one,
-    without loading the rest into this process. For the MCP server, which
+def set_flags_in_file(values: dict[str, Any]) -> None:
+    """Set flags in this instance's state file, when there is one, in one
+    locked write, without loading the rest into this process. For the MCP server, which
     keeps its own state in memory, so that a CLI verb run beside it (a
     `pointer down`, `hypruse stop`) sees a hold the server made or ended.
     Best effort, like save()."""
@@ -189,7 +189,7 @@ def set_flag_in_file(name: str, value: Any) -> None:
         if not state:
             return
         flags = state.get("flags") if isinstance(state.get("flags"), dict) else {}
-        state["flags"] = {**flags, name: value}
+        state["flags"] = {**flags, **values}
         state["updated"] = time.time()
         tmp = target.with_suffix(".tmp")
         tmp.write_text(json.dumps(state))

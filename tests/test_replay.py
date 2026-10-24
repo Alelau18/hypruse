@@ -646,3 +646,27 @@ def test_a_sequence_hypr_step_records_its_target_given_by_address(live, calls, j
     monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: [recycled])
     assert execute(path, "--yes") == 1
     assert calls == [] and "belongs to another window: 0xabc" in capsys.readouterr().out
+
+
+def _hypr_entry(tmp_path, target):
+    entry = {"v": 1, "seq": 1, "ts": "2026-10-24T09:00:00.000Z", "kind": "act", "tool": "hypr",
+             "args": {"action": "close_window", "target": target}, "outcome": "ok", "ms": 1,
+             "targets": {"0xabc": {"key": "0xabc#12", "class": "kitty"}}}
+    path = tmp_path / "j.ndjson"
+    path.write_text(json.dumps(entry) + "\n")
+    return path
+
+
+def test_a_hypr_entry_recorded_in_uppercase_is_checked_by_its_key(tmp_path, live, calls,
+                                                                  monkeypatch, capsys):
+    # review of 889bf85: an entry whose recorded target is 0xABC
+    path = _hypr_entry(tmp_path, "0xABC")
+    monkeypatch.setattr(srv.hyprctl, "query",
+                        lambda cmd: [{"address": "0xabc", "stableId": "12", "class": "kitty"}])
+    assert execute(path, "--yes") == 0
+    assert calls == [("hypr", {"action": "close_window", "target": "0xABC"})]
+    calls.clear()
+    monkeypatch.setattr(srv.hyprctl, "query",
+                        lambda cmd: [{"address": "0xabc", "stableId": "99", "class": "firefox"}])
+    assert execute(path, "--yes") == 1
+    assert calls == [] and "belongs to another window" in capsys.readouterr().out

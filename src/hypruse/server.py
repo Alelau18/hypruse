@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, NamedTuple, get_type_hints
 
@@ -560,8 +560,12 @@ def _at_delivery(guard: str, what: str, check: Callable[[], None]) -> Callable[[
         try:
             check()
         except trust.TrustError as exc:
-            raise trust.TrustError(
-                f"{guard} refused {what} right before it was delivered: {exc}") from None
+            refusal = trust.TrustError(
+                f"{guard} refused {what} right before it was delivered: {exc}")
+            # the guard's own words, for the input layer to quote when it
+            # could not do what `what` says it did instead
+            refusal.reason = f"{guard}: {exc}"  # type: ignore[attr-defined]
+            raise refusal from None
 
     return run
 
@@ -1198,8 +1202,23 @@ def _sync_cli_hold() -> None:
     from hypruse import cli_state
 
     with contextlib.suppress(Exception):
-        cli_state.set_flag_in_file("held_button", hinput.held_button())
-        cli_state.set_flag_in_file("held_at", hinput.held_at())
+        # one write: a verb reading between two would adopt the hold without
+        # where it was pressed
+        cli_state.set_flags_in_file({"held_button": hinput.held_button(),
+                                     "held_at": hinput.held_at()})
+
+
+@contextlib.contextmanager
+def _hold_synced() -> Iterator[None]:
+    """Tell the CLI state about a hold the input inside made or ended, also
+    when it raises after the button moved: a refused release still lets go
+    (hinput.button_up), and a press that fails can leave its hold on record."""
+    before = hinput.held_button(), hinput.held_at()
+    try:
+        yield
+    finally:
+        if (hinput.held_button(), hinput.held_at()) != before:
+            _sync_cli_hold()
 
 
 @journal.journaled("act")
@@ -1256,7 +1275,6 @@ def pointer(
     # The pointer guard still runs right before that release, and a refusal
     # releases it back where it was pressed instead (hinput.button_up). An
     # `up` elsewhere is a move first and is guarded like one.
-    held_at_start = hinput.held_button()
     ending_hold = (action == "up" and x is None and y is None
                    and hinput.held_button() is not None and hinput.held_button() == button)
     if not ending_hold:
@@ -1312,9 +1330,10 @@ def pointer(
         if hold_ms:
             plan += f", holding it {hold_ms:g} ms"
         if not dry:
-            hinput.click(x, y, button=button, double=double, hold_ms=hold_ms,
-                         precheck=_at_delivery("the pointer guard", "the click", lambda: (
-                             trust.guard_pointer(x, y, allow_auth))))
+            with _hold_synced():  # its release lets go of a `down` of that button too
+                hinput.click(x, y, button=button, double=double, hold_ms=hold_ms,
+                             precheck=_at_delivery("the pointer guard", "the click", lambda: (
+                                 trust.guard_pointer(x, y, allow_auth))))
     elif action in ("down", "up"):
         # the same guards as a click: a press or a release is input
         # delivered at a point, and `down` is half of a click there
@@ -1330,14 +1349,17 @@ def pointer(
         if action == "down":
             plan += " and keep it held until pointer action='up'"
         if not dry and action == "down":
-            hinput.button_down(x, y, button=button, precheck=_at_delivery(
-                "the pointer guard", "the press", lambda: trust.guard_pointer(x, y, allow_auth)))
+            with _hold_synced():
+                hinput.button_down(x, y, button=button, precheck=_at_delivery(
+                    "the pointer guard", "the press",
+                    lambda: trust.guard_pointer(x, y, allow_auth)))
         elif not dry:
             # a release is the drop of a caller-paced drag (down, moves, up),
             # checked again right before it lands, the up ending the hold too
-            hinput.button_up(x, y, button=button, precheck=_at_delivery(
-                "the pointer guard", f"the release ({_release_refused(x, ending_hold)})",
-                lambda: trust.guard_pointer(x, y, allow_auth)))
+            with _hold_synced():
+                hinput.button_up(x, y, button=button, precheck=_at_delivery(
+                    "the pointer guard", f"the release ({_release_refused(x, ending_hold)})",
+                    lambda: trust.guard_pointer(x, y, allow_auth)))
     elif action == "drag":
         if None in (x, y, to_x, to_y):
             raise ValueError("drag needs x, y, to_x, to_y")
@@ -1370,8 +1392,6 @@ def pointer(
         raise ValueError(f"unknown action {action!r}: {'|'.join(_POINTER_ACTIONS)}")
     if dry:
         return _acted(f"{_DRY} {plan}{note}", then)
-    if hinput.held_button() != held_at_start:
-        _sync_cli_hold()
     trust.remember_seat()
     held = hinput.held_button()
     tail = f"; the {held} button is held down until pointer action='up'" if held else ""
@@ -1649,8 +1669,9 @@ def click_ui(
         trust.guard_covering_layer(x, y, allow_auth)
         trust.check_click_point(now, x, y, allow_auth, focused=True)
 
-    hinput.click(x, y, button=button, double=double,
-                 precheck=_at_delivery("the click-point check", "the click", at_the_point))
+    with _hold_synced():
+        hinput.click(x, y, button=button, double=double,
+                     precheck=_at_delivery("the click-point check", "the click", at_the_point))
     trust.remember_seat()
     # observe the CLICKED window, not whatever holds focus after the click
     # (the click itself may have spawned a dialog that stole it)

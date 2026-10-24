@@ -229,6 +229,17 @@ def test_move_window_expected_by_address(wired, monkeypatch):
     assert [s["op"] for s in wired] == ["hypr", "pointer"]  # own move excused
 
 
+def test_an_uppercase_address_still_excuses_the_steps_own_move(wired, monkeypatch):
+    # review of 889bf85: Hyprland's event names the address in lowercase
+    _stream(monkeypatch, [[("movewindow", {"address": "0xab", "workspace": "3"})]])
+    steps = [
+        {"op": "hypr", "action": "move_window", "target": "0xAB", "workspace": "3"},
+        {"op": "pointer", "action": "click", "x": 1, "y": 1},
+    ]
+    srv.sequence(steps, then="none")
+    assert [s["op"] for s in wired] == ["hypr", "pointer"]
+
+
 def test_click_then_wait_is_not_aborted(wired, monkeypatch):
     # click a launcher (opens a window), then wait_for that window: the
     # openwindow is what the next step waits for, not an unexpected change

@@ -674,3 +674,48 @@ def test_a_release_at_a_point_refused_at_delivery_names_the_guard(tool, monkeypa
                        r"\(cancelled: released back where the cursor was\) right before"):
         srv.pointer("up", x=30, y=40, button="right")
     assert tool["input"] == []
+
+
+def test_a_refused_release_from_the_server_still_updates_the_cli_state(vp, state_dir,
+                                                                      monkeypatch):
+    # review of 7b2b553: the button was let go, then the refusal raised past the
+    # sync, so a shell verb beside the server still saw the hold
+    monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
+    monkeypatch.setattr(srv.trust, "guard_session_lock", lambda *a: "")
+    monkeypatch.setattr(srv.trust, "guard_seat", lambda: None)
+    monkeypatch.setattr(srv.trust, "remember_seat", lambda: None)
+    monkeypatch.setattr(srv, "_pointer_policy", lambda *a: None)
+    monkeypatch.setattr(srv, "_layer_note", lambda *a: "")
+    monkeypatch.setattr(srv.hyprctl, "cursor_pos", lambda: (7, 8))
+    answers = iter([None, None])  # the down's check, and again at its delivery
+
+    def guard(x, y, allow_auth=False):
+        if next(answers, "refuse") == "refuse":
+            raise srv.trust.TrustError("a dialog mapped under the cursor")
+
+    monkeypatch.setattr(srv.trust, "guard_pointer", guard)
+    cli_state.restore()
+    cli_state.save()  # a CLI verb ran on this instance before
+    srv.pointer("down", x=10, y=20)
+    flags = cli_state.load()["flags"]
+    assert flags["held_button"] == "left" and flags["held_at"] == [10, 20]
+    with pytest.raises(srv.trust.TrustError, match="released back where it was pressed"):
+        srv.pointer("up")
+    flags = cli_state.load()["flags"]
+    assert flags["held_button"] is None and flags["held_at"] is None
+    assert vp.events[-1][:2] == ("left", RELEASED)
+
+
+def test_a_release_that_cannot_go_back_quotes_the_guard_not_its_plan(vp, monkeypatch):
+    hinput.button_down(10, 20)
+
+    def stuck(x, y):
+        raise hinput.WireError("compositor gone")
+
+    monkeypatch.setattr(hinput, "move", stuck)
+    check = srv._at_delivery("the pointer guard", "the release (cancelled: released back "
+                             "where it was pressed, at (10, 20))", lambda: _no())
+    with pytest.raises(hinput.InputError) as caught:
+        hinput.button_up(precheck=check)
+    assert "cancelled" not in str(caught.value)
+    assert "(the pointer guard: a dialog mapped under the cursor)" in str(caught.value)

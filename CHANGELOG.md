@@ -38,7 +38,9 @@ All notable changes to this project are documented here. The format follows
   [--button B]` and `pointer click ... --hold-ms N`; a shell `down`
   carries over to the next verb, and `hypruse stop` releases it. The MCP
   server records its own `down` and `up` in that instance's CLI state when
-  the file exists, so a shell verb run beside it sees the same hold. A
+  the file exists (the button and where it was pressed, in one write, also
+  when the call fails after the button moved), so a shell verb run beside
+  it sees the same hold. A
   `sequence` that stops before the step that releases a button it pressed
   releases it.
 
