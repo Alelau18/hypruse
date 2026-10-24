@@ -329,6 +329,13 @@ def normalize(verb: str, ns: argparse.Namespace) -> tuple[dict[str, Any], dict[s
                 d["x"], d["y"] = d.pop("at")
     elif verb == "keyboard":
         if "text" in d:
+            if d.get("allow_auth") is True and d["text"] != "-":
+                # a credential on this verb's own argv is in /proc/<pid>/cmdline,
+                # readable by any local user, for as long as the verb runs
+                # (including its wait for another verb's lock)
+                print("hypruse: warning: --allow-auth with the text on the command line puts it "
+                      "where any local user can read it (/proc/PID/cmdline); pass - and the "
+                      "text on stdin instead", file=sys.stderr)
             d["text"] = _stdin_text(d["text"])
     elif verb == "click_ui":
         if ("name" in d) == ("mark" in d):

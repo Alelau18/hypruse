@@ -147,7 +147,8 @@ multi-monitor layouts and fractional scale; never convert by hand from
   the keyboard, strict-mode seat contention, read-only mode). Report the
   reason verbatim. Do not retry, do not route around it with another verb,
   and do not add `--allow-auth` unless the user asked for that credential
-  entry. A background refusal ("so it cannot be done in the background")
+  entry, and then pass the text on stdin (`keyboard type - --allow-auth`),
+  never on the command line, which other local users can read. A background refusal ("so it cannot be done in the background")
   is the one that names its own way forward: follow that, or ask.
 - Confirm before anything that sends, submits, deletes, pays or closes
   unsaved work. Type, verify with `--then ui` or a screenshot, then press

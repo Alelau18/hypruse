@@ -1,9 +1,14 @@
 """Thin layer over Hyprland's hyprctl IPC.
 
 Everything hypruse knows about the desktop comes through here, and every
-workspace/window action goes back out through dispatch(). It shells out to
-the hyprctl binary rather than opening the .socket directly so behaviour
-always matches what the user's own shell would do.
+workspace/window action goes back out through dispatch(). Requests are the
+ones the hyprctl binary would send, written to Hyprland's request socket
+directly (_run): the binary re-reads the request it assembles from argv,
+so an argument that merely CONTAINED "/--batch" (a window class in a
+notice, a workspace name, a key) turned the request into a batch that
+Hyprland splits on ';', each piece a request of its own, and every
+argument sat in a child process's argv, which any local user can read
+from /proc, typed characters included.
 
 Hyprland 0.56 shipped a second config manager, and which one a session runs
 changes the IPC, not just how the config is written: under the Lua manager
@@ -21,9 +26,9 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
-import shutil
-import subprocess
+import socket
 from typing import Any
 
 from hypruse import journal
@@ -33,19 +38,63 @@ class HyprctlError(RuntimeError):
     """hyprctl failed, returned an error, or is unreachable."""
 
 
-def _run(*args: str) -> str:
-    if shutil.which("hyprctl") is None:
-        raise HyprctlError("hyprctl not found, hypruse needs a running Hyprland session")
+def socket_path() -> str:
+    """Hyprland's request socket, the one the hyprctl binary writes to."""
+    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+    if not sig:
+        raise HyprctlError(
+            "HYPRLAND_INSTANCE_SIGNATURE is not set, hypruse needs a running Hyprland session")
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    return os.path.join(runtime, "hypr", sig, ".socket.sock")
+
+
+def _request(request: str, what: str) -> str:
+    """Send one request and read the reply until Hyprland closes the
+    connection, as hyprctl does; a reply starting "error:" is a failure,
+    which is hyprctl's exit status 7."""
+    if "\0" in request:
+        raise HyprctlError("a NUL byte cannot be sent to Hyprland")
+    path = socket_path()
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(5)
+    chunks: list[bytes] = []
     try:
-        proc = subprocess.run(
-            ["hyprctl", *args], capture_output=True, text=True, timeout=5
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise HyprctlError(f"hyprctl {' '.join(args)} timed out") from exc
-    out = proc.stdout.strip()
-    if proc.returncode != 0:
-        raise HyprctlError(f"hyprctl {' '.join(args)}: {proc.stderr.strip() or out}")
+        sock.connect(path)
+        sock.sendall(request.encode("utf-8", "surrogateescape"))
+        while chunk := sock.recv(65536):
+            chunks.append(chunk)
+    except TimeoutError as exc:
+        raise HyprctlError(f"hyprctl {what} timed out") from exc
+    except OSError as exc:
+        raise HyprctlError(
+            f"cannot reach Hyprland at {path} ({exc.strerror or exc}), hypruse needs a "
+            "running Hyprland session") from exc
+    finally:
+        sock.close()
+    # a title or class is the client's own bytes: an invalid one must not
+    # make the whole desktop unreadable
+    out = b"".join(chunks).decode("utf-8", errors="replace").strip()
+    if out.startswith("error:"):
+        raise HyprctlError(f"hyprctl {what}: {out}")
     return out
+
+
+def _run(*args: str) -> str:
+    """`hyprctl ARGS`: the request the binary would build from these argv
+    words (flags, a "/", the command and its arguments joined by spaces),
+    written to the socket. The command is always one of hypruse's own fixed
+    words, so free text in an argument stays an argument: Hyprland batches
+    only a request that STARTS with [[BATCH]], which only batch_query
+    builds, from its own query names."""
+    rest = list(args)
+    flags = ""
+    while rest and rest[0] == "-j":
+        flags += "j"
+        rest.pop(0)
+    what = " ".join(args)
+    if rest and rest[0] == "--batch":
+        return _request("[[BATCH]]" + " ".join(rest[1:]), what)
+    return _request(f"{flags}/{' '.join(rest)}", what)
 
 
 def query(command: str) -> Any:

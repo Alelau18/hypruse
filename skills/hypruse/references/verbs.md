@@ -45,7 +45,9 @@ in `$XDG_RUNTIME_DIR/hypruse/` (tmpfs, newest 20 kept). The map back is
 
 **Text from stdin.** `keyboard type -` and `clipboard write -` read the text
 from stdin, which sidesteps shell quoting. `sequence -` reads its JSON array
-from stdin. The `launch` command is the remaining positional words joined
+from stdin. Stdin also keeps the text off the verb's own command line, which
+any local user can read from /proc while the verb runs: use `-` for anything
+secret, and always with `--allow-auth` (the verb warns otherwise). The `launch` command is the remaining positional words joined
 with spaces; put the app's own flags after `--`.
 
 **Shared acting flags.** Every acting verb takes `--dry-run`, and every one

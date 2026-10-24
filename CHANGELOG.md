@@ -181,6 +181,21 @@ All notable changes to this project are documented here. The format follows
   says it is the default. A `keys` combo that types a character is
   journaled as a digest, like typed text, and a result names it "a
   character key"; replay refuses such an entry as it refuses typed text.
+- **Requests go to Hyprland's socket, not through the hyprctl binary.**
+  The binary sends any request that merely contains `/--batch` as a
+  batch, which Hyprland splits on `;`: with `HYPRUSE_MARK` on, a launched
+  app whose window class carried `x;dispatch exec ...;/--batch` ran a
+  host command through hypruse's notice (reproduced). And each background
+  key was one `hyprctl dispatch sendshortcut` child process whose argv,
+  the typed character included, any local user can read from /proc.
+  hypruse now writes the request the binary would build (a fixed command
+  word before any argument) to `.socket.sock` itself; only `batch_query`
+  builds a batch. A reply that is not valid UTF-8 (a hostile title) is
+  read with replacement characters instead of failing. The `hyprctl`
+  binary is still used for `hyprctl -j instances`.
+- **`keyboard type --allow-auth TEXT` warns** that the text is on the
+  verb's own command line, readable from /proc; the skill says to pass it
+  on stdin (`keyboard type - --allow-auth`).
 
 ### Not changed
 - `launch` still only reports where the human's focus went when an

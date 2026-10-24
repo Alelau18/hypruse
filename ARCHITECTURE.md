@@ -123,6 +123,25 @@ hands its argument to the compositor's interpreter as an expression with
 the standard library open, so an argument that is not a literal is code
 running inside the compositor.
 
+Requests are the ones the hyprctl binary would build from its argv (`j/`
+or `/` before a fixed command word, then the arguments), written to
+`$XDG_RUNTIME_DIR/hypr/<sig>/.socket.sock` directly (`hyprctl._run`). The
+binary itself is not used for requests, for two reasons. It re-reads the
+request it assembles and sends any request that CONTAINS `/--batch` (or
+any argument `--batch`) as a batch, which Hyprland splits on `;` into
+requests of their own, so free text in an argument (a launched window's
+class in a notice) could issue arbitrary compositor requests; Hyprland
+batches only a request that starts with `[[BATCH]]`, which only
+`batch_query` builds. And each request was a child process whose argv,
+typed characters for background keys included, any local user can read
+from /proc. `hyprctl -j instances` is still the binary: it is answered
+client-side, from the runtime directory.
+
+`hyprctl.send_shortcut` also holds its three fields to the grammar
+hypruse produces (Hyprland modifier names, one keysym name, a `0x`
+address), since its third field is a window selector: text after a comma
+in a key would name the window the key goes to.
+
 ## Why input works the way it does
 
 - **Position** via the compositor's own cursor dispatcher (`movecursor` on

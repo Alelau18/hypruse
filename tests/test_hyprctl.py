@@ -627,3 +627,131 @@ def test_a_sleeping_monitor_says_dpms_off():
     assert "dpms" not in hyprctl._monitor(dict(m, dpmsStatus=True))
     assert "dpms" not in hyprctl._monitor(m)  # an older Hyprland without the field
     assert hyprctl._monitor(dict(m, dpmsStatus=False))["dpms"] == "off"
+
+
+# --- the request socket (C4: V1, V2; C5: V4, V9) ---
+#
+# Requests used to go through the hyprctl binary's argv. The binary re-reads
+# the request it assembles: one that merely CONTAINED "/--batch" became a
+# batch Hyprland splits on ';', each piece a request of its own (a window
+# class in a notice ran a host command), and every argument, typed
+# characters included, sat in a child's argv for any local user to read.
+
+
+class FakeHyprland:
+    """Hyprland's request socket: records each request, answers `reply`."""
+
+    def __init__(self, base, reply="ok"):
+        import socket
+        import threading
+
+        self.requests, self.reply = [], reply
+        sock_dir = base / "hypr" / "SIG"
+        sock_dir.mkdir(parents=True)
+        self._srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._srv.bind(str(sock_dir / ".socket.sock"))
+        self._srv.listen(8)
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self):
+        while True:
+            try:
+                conn, _ = self._srv.accept()
+            except OSError:
+                return
+            with conn:
+                self.requests.append(conn.recv(65536))
+                reply = self.reply(self.requests[-1]) if callable(self.reply) else self.reply
+                conn.sendall(reply if isinstance(reply, bytes) else reply.encode())
+
+    def close(self):
+        self._srv.close()
+
+
+@pytest.fixture
+def hyprland(monkeypatch):
+    import shutil as _shutil
+    import tempfile
+
+    base = Path(tempfile.mkdtemp(prefix="hu", dir="/tmp"))  # a UNIX socket path is short
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(base))
+    monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "SIG")
+    fake = FakeHyprland(base)
+    yield fake
+    fake.close()
+    _shutil.rmtree(base, ignore_errors=True)
+
+
+@pytest.fixture
+def no_child_processes(monkeypatch):
+    import subprocess
+
+    def spawned(*a, **k):
+        raise AssertionError(f"a child process was started: {a[0] if a else k}")
+
+    monkeypatch.setattr(subprocess, "Popen", spawned)
+    monkeypatch.setattr(subprocess, "run", spawned)
+
+
+@pytest.mark.parametrize("prov", [hyprctl.HYPRLANG, hyprctl.LUA])
+def test_free_text_in_a_dispatch_never_becomes_a_batch(hyprland, monkeypatch, prov):
+    # V1: hyprctl turned any request containing "/--batch" into a batch
+    monkeypatch.setattr(hyprctl, "_provider", prov)
+    hyprctl.dispatch("tagwindow", "x;dispatch exec touch /tmp/pwn;/--batch", "address:0xabc")
+    (request,) = hyprland.requests
+    assert request.startswith(b"/dispatch ") and b"[[BATCH]]" not in request
+
+
+def test_a_window_class_in_a_notice_never_becomes_a_batch(hyprland, monkeypatch):
+    # V2: HYPRUSE_MARK put a launched app's class into `hyprctl notify`
+    monkeypatch.setenv("HYPRUSE_MARK", "1")
+    from hypruse import trust
+
+    trust.note_launched("0xabc", "x;dispatch exec touch /tmp/pwn;/--batch")
+    notices = [r for r in hyprland.requests if b"notify" in r]
+    assert notices and all(r.startswith(b"/notify ") for r in notices)
+    assert not any(r.startswith(b"[[BATCH]]") for r in hyprland.requests)
+
+
+def test_requests_are_what_hyprctl_would_send(hyprland):
+    hyprland.reply = lambda req: "[]" if req.startswith(b"j/") else "ok"
+    real_query("clients")
+    hyprctl.dispatch("focuswindow", "address:0xabc")
+    assert hyprland.requests == [b"j/clients", b"/dispatch focuswindow address:0xabc"]
+
+
+def test_a_batch_query_is_the_only_batch(hyprland):
+    hyprland.reply = '{"a": 1}\n\n\n[2]'
+    assert real_batch_query(["activewindow", "clients"]) == [{"a": 1}, [2]]
+    assert hyprland.requests == [b"[[BATCH]]j/activewindow ; j/clients"]
+
+
+def test_background_typing_starts_no_process(hyprland, no_child_processes):
+    # V4/V9: one `hyprctl dispatch sendshortcut ", h, address:.."` child per
+    # typed character, its argv readable from /proc by any local user
+    for mods, key in [("SHIFT", "h"), ("", "u"), ("", "exclam")]:
+        hyprctl.send_shortcut(mods, key, "0xabc")
+    assert [r.split(b", ")[1] for r in hyprland.requests] == [b"h", b"u", b"exclam"]
+
+
+def test_an_error_reply_is_an_error(hyprland):
+    hyprland.reply = "error: no such window"
+    with pytest.raises(hyprctl.HyprctlError, match="no such window"):
+        hyprctl.dispatch("focuswindow", "address:0xabc")
+
+
+def test_a_reply_that_is_not_utf8_is_still_read(hyprland):
+    # a title is the client's own bytes
+    hyprland.reply = b'[{"title": "caf\xe9"}]'
+    assert real_query("clients")[0]["title"] == "caf\ufffd"
+
+
+def test_no_compositor_is_a_hyprctl_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "nope")
+    with pytest.raises(hyprctl.HyprctlError, match="cannot reach Hyprland"):
+        real_query("clients")
+    monkeypatch.delenv("HYPRLAND_INSTANCE_SIGNATURE")
+    with pytest.raises(hyprctl.HyprctlError, match="HYPRLAND_INSTANCE_SIGNATURE"):
+        real_query("clients")

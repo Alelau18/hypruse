@@ -752,3 +752,13 @@ def test_desktop_lines_carry_the_compact_flags():
     out = verbs._render_desktop(snap)
     assert "scale 1.0 ws 1 dpms off" in out
     assert out.splitlines()[1].endswith("10x10 xwayland pinned")
+
+
+def test_a_credential_on_the_command_line_is_warned_about(monkeypatch, capsys):
+    # V20: the verb's own argv is readable by any local user from /proc
+    kwargs_of("keyboard", "type", "hunter2", "--allow-auth")
+    assert "any local user can read it" in capsys.readouterr().err
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("hunter2"))
+    assert kwargs_of("keyboard", "type", "-", "--allow-auth")["text"] == "hunter2"
+    kwargs_of("keyboard", "type", "hello")
+    assert capsys.readouterr().err == ""
