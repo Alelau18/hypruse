@@ -64,6 +64,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from hypruse import keymap
+
 RECORD_VERSION = 1
 
 _ON = ("1", "true", "yes", "on")
@@ -294,10 +296,38 @@ def redact(value: Any) -> Any:
     if text_recorded():
         return value
     if isinstance(value, dict):
-        return {k: _digest(_as_text(v)) if k == "text" else redact(v) for k, v in value.items()}
+        return {
+            k: _digest(_as_text(v)) if k == "text" or (k == "keys" and keys_are_text(v))
+            else redact(v)
+            for k, v in value.items()
+        }
     if isinstance(value, list):
         return [redact(v) for v in value]
     return value
+
+
+_COMMAND_MODS = frozenset({"ctrl", "control", "alt", "super", "meta", "win", "cmd"})
+_SHIFT_MODS = frozenset({"shift", "altgr"})
+
+
+def keys_are_text(keys: Any) -> bool:
+    """Whether a `keys` combo types a character, which is as secret as typed
+    text (a password can be entered one key per call), rather than run a
+    shortcut: a key with no modifier but Shift or AltGr whose name is one
+    character or a keysym that stands for one ("plus", "space"). Shortcuts
+    (ctrl+s) and keys that type nothing (Return, F5) stay readable. Anything
+    that is not a string is treated as text."""
+    if not isinstance(keys, str):
+        return True
+    parts = [p.strip() for p in keys.split("+") if p.strip()]
+    if not parts:
+        return False
+    *mods, key = parts
+    if any(m.lower() in _COMMAND_MODS for m in mods):
+        return False
+    if key.lower() in _COMMAND_MODS | _SHIFT_MODS:
+        return False  # a bare modifier tap
+    return len(key) == 1 or keymap.keysym_char(key) is not None
 
 
 def _as_text(value: Any) -> str:

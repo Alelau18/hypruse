@@ -400,13 +400,17 @@ def test_a_hidden_window_with_one_field_gets_accessibility_text(wired_bg):
 
 def test_one_field_in_a_walk_cut_short_is_not_the_only_field(wired_bg):
     # a large window may hold more fields past the elements read, so the
-    # one found first is not provably where the text belongs
+    # one found first is not provably where the text belongs, and one of
+    # those it did not read may be a password field (V63)
     wired_bg["fields"] = [("svc", "/name", 61)]
     wired_bg["fields_complete"] = False
-    srv.keyboard("type", text="hi", window="0xa")
+    with pytest.raises(srv.trust.TrustError, match="more elements than hypruse reads"):
+        srv.keyboard("type", text="hi", window="0xa")
+    assert wired_bg["inserted"] == [] and wired_bg["shortcuts"] == []
+    srv.keyboard("type", text="hi", window="0xa", allow_auth=True)
     assert wired_bg["inserted"] == [] and len(wired_bg["shortcuts"]) == 2
     with pytest.raises(srv.trust.TrustError, match="more elements than hypruse reads"):
-        srv.keyboard("type", text="上", window="0xa")
+        srv.keyboard("type", text="上", window="0xa", allow_auth=True)
 
 
 def test_several_fields_and_no_focus_report_fall_back_to_keys(wired_bg):
@@ -1274,3 +1278,148 @@ def test_a_field_of_the_windows_own_web_process_takes_text(wired_bg, monkeypatch
     monkeypatch.setattr(srv.a11y, "same_app", lambda a, b: a == b or (a, b) == (4343, 42))
     srv.keyboard("type", text="hi", window="0xa")
     assert wired_bg["inserted"] == [("web", "/entry", "hi")]
+
+
+# C9: one password-field decision for every way text gets into a window,
+# on both paths (V8, V18, V19, V54, V26, V40, V63; V25/V65/V71 for the
+# journal). PW is a password field, USER a plain entry beside it.
+PW, USER = ("svc", "/pw", 40), ("svc", "/user", 79)
+
+
+@pytest.mark.parametrize("keys", ["h", "shift+h", "2", "plus", "space", "ctrl+v",
+                                  "ctrl+shift+v", "shift+Insert"])
+def test_a_key_that_types_or_pastes_into_a_password_field_is_refused(wired_bg, keys):
+    # V8/V18: a password went in one key per call, or by a paste
+    wired_bg["focused_text"] = PW
+    with pytest.raises(srv.trust.TrustError, match="password field"):
+        srv.keyboard("key", keys=keys, window="0xa")
+    assert wired_bg["shortcuts"] == []
+    srv.keyboard("key", keys=keys, window="0xa", allow_auth=True)
+    assert len(wired_bg["shortcuts"]) == 1
+
+
+@pytest.mark.parametrize("keys", ["ctrl+s", "Return", "Tab", "esc", "F5", "alt+F4"])
+def test_a_shortcut_into_a_password_field_is_not_typing(wired_bg, keys):
+    wired_bg["focused_text"] = PW
+    srv.keyboard("key", keys=keys, window="0xa")
+    assert len(wired_bg["shortcuts"]) == 1
+
+
+def test_a_password_typed_key_by_key_in_a_sequence_is_refused(wired_bg, monkeypatch):
+    monkeypatch.setattr(srv.events, "EventStream", lambda: (_ for _ in ()).throw(
+        srv.events.EventError("none")))
+    wired_bg["focused_text"] = PW
+    out = str(srv.sequence([{"op": "keyboard", "action": "key", "keys": ch, "window": "0xa"}
+                            for ch in "hunter2"], then="none"))
+    assert "password field" in out and wired_bg["shortcuts"] == []
+
+
+def test_a_key_into_a_window_that_hides_its_focus_among_a_password_field(wired_bg):
+    wired_bg["fields"] = [USER, PW]  # GTK: no focus reported in an inactive window
+    with pytest.raises(srv.trust.TrustError, match="password field"):
+        srv.keyboard("key", keys="h", window="0xa")
+
+
+@pytest.mark.parametrize("text", ["alice\thunter2", "alice\nhunter2", "alice\rhunter2"])
+def test_a_tab_or_line_break_cannot_carry_text_into_a_password_field(wired_bg, text):
+    # V19/V54: the check saw the username field; the Tab moved the rest
+    # into the password field
+    wired_bg["focused_text"] = USER
+    wired_bg["fields"] = [USER, PW]
+    with pytest.raises(srv.trust.TrustError, match="Tab or a line break"):
+        srv.keyboard("type", text=text, window="0xa")
+    assert wired_bg["shortcuts"] == [] and wired_bg["inserted"] == []
+    srv.keyboard("type", text=text, window="0xa", allow_auth=True)
+    assert len(wired_bg["shortcuts"]) == len(text)
+
+
+def test_line_breaks_into_a_window_with_no_password_field_still_go(wired_bg):
+    wired_bg["focused_text"] = USER
+    wired_bg["fields"] = [USER, ("svc", "/notes", 61)]
+    srv.keyboard("type", text="one\ntwo", window="0xa")
+    assert len(wired_bg["shortcuts"]) == 7
+
+
+def test_a_tab_into_a_window_read_only_in_part_is_refused(wired_bg):
+    # V54 with V63: a password field may be next, past the elements read
+    wired_bg["focused_text"] = USER
+    wired_bg["fields"], wired_bg["fields_complete"] = [USER], False
+    with pytest.raises(srv.trust.TrustError, match="may be next"):
+        srv.keyboard("type", text="a\tb", window="0xa")
+
+
+def test_a_password_field_past_the_walk_budget_is_not_assumed_absent(wired_bg):
+    # V63: fields_complete=False and no focus report; the password field
+    # was beyond the 2000 elements read
+    wired_bg["fields"], wired_bg["fields_complete"] = [USER, ("svc", "/x", 61)], False
+    with pytest.raises(srv.trust.TrustError, match="more elements than hypruse reads"):
+        srv.keyboard("type", text="hunter2", window="0xa")
+    assert wired_bg["shortcuts"] == []
+
+
+@pytest.fixture
+def strict_fg(wired_bg, monkeypatch):
+    """The foreground path (background=false) under HYPRUSE_AUTH_GUARD=strict."""
+    monkeypatch.setenv("HYPRUSE_AUTH_GUARD", "strict")
+    wired_bg["keys"] = []
+    monkeypatch.setattr(srv.hinput, "key_combo", lambda k: wired_bg["keys"].append(k))
+    return wired_bg
+
+
+def test_strict_refuses_a_key_into_a_password_field_in_the_foreground(strict_fg):
+    strict_fg["focused_text"] = PW
+    with pytest.raises(srv.trust.TrustError, match="password field"):
+        srv.keyboard("key", keys="h", window="0xa", background=False)
+    assert strict_fg["keys"] == [] and strict_fg["dispatch"] == []  # focus not moved
+    srv.keyboard("key", keys="ctrl+s", window="0xa", background=False)
+    assert strict_fg["keys"] == ["ctrl+s"]
+
+
+def test_strict_refuses_a_tab_into_a_password_field_in_the_foreground(strict_fg):
+    strict_fg["focused_text"] = USER
+    strict_fg["fields"] = [USER, PW]
+    with pytest.raises(srv.trust.TrustError, match="Tab or a line break"):
+        srv.keyboard("type", text="alice\thunter2\n", window="0xa", background=False)
+    assert strict_fg["typed"] == [] and strict_fg["dispatch"] == []
+
+
+def test_strict_reads_the_fields_of_an_inactive_target_that_hides_its_focus(strict_fg):
+    # V26: the old check asked only for the focused element, which GTK does
+    # not report in an inactive window, and let the typing through
+    strict_fg["fields"] = [USER, PW]
+    with pytest.raises(srv.trust.TrustError, match="password field"):
+        srv.keyboard("type", text="hunter2", window="0xa", background=False)
+    assert strict_fg["typed"] == []
+
+
+def test_strict_checks_every_field_of_a_frame_it_cannot_prove(strict_fg):
+    # V40: the old check walked an unproven root's first focused element
+    strict_fg["frame_sure"] = False
+    strict_fg["fields"] = [PW]
+    with pytest.raises(srv.trust.TrustError, match="cannot place"):
+        srv.keyboard("type", text="hunter2", window="0xa", background=False)
+
+
+def test_strict_is_opt_in_in_the_foreground(wired_bg, monkeypatch):
+    # V64: the default is the class check only; the docstring says so now
+    walked = []
+    monkeypatch.setattr(srv, "_census", lambda *a, **k: walked.append(1))
+    srv.keyboard("type", text="hunter2", window="0xa", background=False)
+    assert walked == [] and wired_bg["typed"] == ["hunter2"]
+    assert "HYPRUSE_AUTH_GUARD=strict" in srv.keyboard.__doc__
+
+
+def test_strict_fails_open_on_an_app_with_no_tree(strict_fg, monkeypatch):
+    def no_bus():
+        raise srv.a11y.A11yError("no bus")
+
+    monkeypatch.setattr(srv.a11y, "connect", no_bus)
+    srv.keyboard("type", text="hello", window="0xa", background=False)
+    assert strict_fg["typed"] == ["hello"]
+
+
+def test_a_character_key_is_not_named_in_the_result(wired_bg):
+    # V25/V65/V71: the journal keeps every result line
+    out = str(srv.keyboard("key", keys="h", window="0xa"))
+    assert "sent a character key to 0xa" in out
+    assert "ctrl+s" in str(srv.keyboard("key", keys="ctrl+s", window="0xa"))

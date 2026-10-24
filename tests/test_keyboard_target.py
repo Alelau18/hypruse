@@ -208,10 +208,9 @@ def test_password_field_refusal_does_not_move_focus_first(stub, monkeypatch):
     # refusal must happen BEFORE focuswindow: a refused call must not have
     # moved the human's focus on its way out
     monkeypatch.setenv("HYPRUSE_AUTH_GUARD", "strict")
-    monkeypatch.setattr(srv.a11y, "connect", lambda: object())
-    monkeypatch.setattr(srv.a11y, "app_for_pid", lambda *a: ("svc", "/p"))
-    monkeypatch.setattr(srv.a11y, "focused_role", lambda *a: srv.a11y.PASSWORD_ROLE)
-    with pytest.raises(srv.trust.TrustError, match="password entry"):
+    monkeypatch.setattr(srv, "_census", lambda client, every_field: srv._Census(
+        None, ("svc", "/pw", srv.a11y.PASSWORD_ROLE), True, [], True, False))
+    with pytest.raises(srv.trust.TrustError, match="password field"):
         srv.keyboard("type", text="hunter2", window="0xabc")
     assert stub["typed"] == []
     assert stub["dispatch"] == []  # focus NOT moved on the refusing path

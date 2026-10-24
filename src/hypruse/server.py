@@ -22,7 +22,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, get_type_hints
+from typing import Any, NamedTuple, get_type_hints
 
 from hypruse import __version__, a11y, events, hyprctl, journal, keymap, safety, session, trust
 from hypruse import background as bg
@@ -1190,9 +1190,12 @@ def keyboard(
     (ctrl+t, ctrl+l). It does NOT trigger Hyprland's own keybinds
     (super+...): those go through `use_bind`, and workspace/window actions
     through `hypr`. `then` ('desktop'|'screenshot'|'ui'|'none') appends the
-    result to this call. `allow_auth=true` overrides the default refusal to
-    type into a password field or a system authentication dialog (only when
-    a human intends that credential entry)."""
+    result to this call. `allow_auth=true` overrides the refusal to type
+    into a system authentication dialog, or into a password field the
+    accessibility tree shows (a key that types a character or pastes counts
+    as typing; in the background always, on the human's window only under
+    HYPRUSE_AUTH_GUARD=strict), only when a human intends that credential
+    entry."""
     safety.touch(f"keyboard:{action}")
     _check_then(then)
     window = _select(window)
@@ -1244,16 +1247,21 @@ def keyboard(
         if target is not None:
             trust.guard_client(target)  # confinement
             trust.guard_auth_client(target, allow_auth)
-            if action == "type":
-                # the a11y focused-role read is per-pid, independent of
-                # compositor focus, so it runs BEFORE the focuswindow
-                # dispatch: a refused call must not move the human's focus
-                trust.guard_password_field(target, allow_auth)
+            # HYPRUSE_AUTH_GUARD=strict: the background's field decision, for
+            # typed text and for a key that types a character alike. The
+            # a11y read is per-pid, independent of compositor focus, so it
+            # runs BEFORE the focuswindow dispatch: a refused call must not
+            # move the human's focus
+            if allow_auth is not True and trust.auth_strict() and (
+                    action == "type" or _key_types_text(*hinput.parse_combo(keys))):
+                moves_focus = action == "type" and any(ch in _MOVES_FOCUS for ch in text)
+                _refuse_password(_census(target, every_field=moves_focus),
+                                 target.get("class", "the window"), moves_focus, allow_auth)
     into = f" into {window}" if window else ""
     # focusing the target is itself a visible change to the seat, so the
     # dry run stops short of it, not just short of the keystrokes
     if journal.dry_run():
-        plan = f"type {len(text)} characters" if action == "type" else f"press {keys}"
+        plan = f"type {len(text)} characters" if action == "type" else f"press {_key_label(keys)}"
         return _acted(f"{_DRY} {plan}{into}{note}", then)
     if window:
         hyprctl.dispatch("focuswindow", addr_str)
@@ -1264,7 +1272,7 @@ def keyboard(
         return _acted(f"typed {len(text)} characters{into}{note}", then)
     hinput.key_combo(keys)
     trust.remember_seat()
-    return _acted(f"pressed {keys}{into}{note}", then)
+    return _acted(f"pressed {_key_label(keys)}{into}{note}", then)
 
 
 @journal.journaled("act")
@@ -1413,6 +1421,119 @@ def click_ui(
     )
 
 
+class _Census(NamedTuple):
+    """What a window's accessibility tree says about its text fields: the
+    password-field decision and the background's choice of field read it."""
+
+    bus: a11y.Bus | None
+    field: tuple[str, str, int] | None  # where text goes: the focused field, or the only one
+    focused: bool  # `field` is the one the app reports focused, not only the only one
+    fields: list[tuple[str, str, int]]  # every editable field read, when they were read
+    complete: bool  # `fields` is the whole window's, not cut short by the walk budget
+    unsure: bool  # the tree cannot tell this window from another of the app
+
+
+def _census(client: dict[str, Any], every_field: bool) -> _Census:
+    """Read the client's text fields from its proven accessibility frame.
+    `every_field` lists the window's fields even when one has the focus,
+    for text that moves the focus partway through. An unreadable tree reads
+    as no fields: such an app cannot be checked, and is not refused."""
+    bus, field, focused, fields, complete, unsure = None, None, False, [], True, False
+    try:
+        bus = a11y.connect()
+        title, size = client.get("title", ""), tuple(client["size"])
+        app = a11y.app_for_pid(bus, client.get("pid"), title, size)
+        frame = _proven_frame(bus, client, app)
+        unsure = app is not None and frame is None
+        if frame is not None:
+            owner = _owner(bus, client, app)
+            field = a11y.focused_text(bus, *frame, owner=owner)
+            focused = field is not None
+            if field is None or every_field:  # GTK reports no focus inside an inactive window
+                fields, complete = a11y.editable_fields(bus, *frame, owner=owner)
+            if field is None:  # one field among the elements read is not the only one
+                field = fields[0] if len(fields) == 1 and complete else None
+        elif unsure:  # whatever window it is, a password field anywhere counts
+            fields, complete = a11y.editable_fields(bus, *app, owner=_owner(bus, client, app))
+    except a11y.A11yError:
+        field, focused, fields = None, False, []  # no accessibility: keys are the way in
+    return _Census(bus, field, focused, fields, complete, unsure)
+
+
+# a Tab or a line break moves an app's focus to the next field partway
+# through the text (Return does in many login forms)
+_MOVES_FOCUS = frozenset("\t\n\r")
+
+
+def _password_refusal(census: _Census, cls: str, moves_focus: bool) -> tuple[str, str] | None:
+    """Why text must not go into this window without allow_auth, and what
+    to do instead ("" when nothing else works), or None.
+    One decision for every way text gets in: typed text, a key that types a
+    character, a paste, on the background path and on the foreground's
+    strict check alike. It refuses a password field that has the focus, a
+    window that does not say which field has it while one of its fields is
+    a password field or its fields could not all be read, and text that
+    moves the focus while the window has (or may have) a password field,
+    since the check sees only the field focused when the call starts."""
+    password = [f for f in census.fields if f[2] == a11y.PASSWORD_ROLE]
+    if census.field is not None and census.field[2] == a11y.PASSWORD_ROLE:
+        which = "the focused field" if census.focused else "its only text field"
+        return f"{which} in {cls} is a password field", ""
+    if census.field is None:
+        if password:
+            where = ("a text field it cannot place" if census.unsure
+                     else f"one of its {len(census.fields)} text fields, and it does not say "
+                     "which has its focus,")
+            return f"{where} in {cls} is a password field", ""
+        if not census.complete:
+            return (f"{cls} has more elements than hypruse reads ({a11y.WALK_BUDGET}) and does "
+                    "not say which text field has its focus, so it may be a password field", "")
+    if moves_focus and (password or not census.complete):
+        has = "has a password field" if password else (
+            f"has more elements than hypruse reads ({a11y.WALK_BUDGET}), so a password field "
+            "may be next")
+        return (f"the text has a Tab or a line break, which moves the focus to another field "
+                f"partway through, and {cls} {has}",
+                " Type each part in a call of its own, with the Tab or Return as a key between "
+                "them, so each part is checked against the field it goes into.")
+    return None
+
+
+def _refuse_password(census: _Census, cls: str, moves_focus: bool, allow_auth: bool) -> None:
+    refusal = _password_refusal(census, cls, moves_focus)
+    if refusal is not None and allow_auth is not True:
+        reason, instead = refusal
+        raise trust.TrustError(
+            f"{reason}; refusing to type into it.{instead} Pass allow_auth=true only if a "
+            "human intends this credential entry."
+        )
+
+
+_PASTE_KEYS = frozenset({"v", "V"})
+
+
+def _key_types_text(mods: list[str], key: str | None) -> bool:
+    """Whether a parsed key combo puts text into the focused field: a key
+    with no modifier but Shift or AltGr that types a character, or a paste
+    (ctrl+v, ctrl+shift+v, shift+Insert)."""
+    if key is None:
+        return False
+    held = set(mods)
+    if key in _PASTE_KEYS and "ctrl" in held and held <= {"ctrl", "shift"}:
+        return True
+    if key in ("Insert", "XF86Paste") and held <= {"shift"} and (held or key == "XF86Paste"):
+        return True
+    if held - {"shift", "altgr"}:
+        return False
+    return key.isprintable() if len(key) == 1 else keymap.keysym_char(key) is not None
+
+
+def _key_label(keys: str) -> str:
+    """How a result names a key combo: a key that types a character is as
+    secret as typed text, and the journal keeps every result line."""
+    return "a character key" if journal.keys_are_text(keys) else keys
+
+
 # Hyprland's modifier names for sendshortcut, from input.MODS' wtype names
 _HYPR_MODS = {"ctrl": "CTRL", "shift": "SHIFT", "alt": "ALT", "logo": "SUPER", "altgr": "MOD5"}
 
@@ -1430,37 +1551,11 @@ def _keyboard_in_background(
     layout = hyprctl.active_layout()
     kmap = keymap.for_layout(*layout)
     if action == "type":
-        field, fields, unsure, complete = None, [], False, True
-        bus = None
-        try:
-            bus = a11y.connect()
-            title, size = client.get("title", ""), tuple(client["size"])
-            app = a11y.app_for_pid(bus, client.get("pid"), title, size)
-            frame = _proven_frame(bus, client, app)
-            unsure = app is not None and frame is None
-            if frame is not None:
-                owner = _owner(bus, client, app)
-                field = a11y.focused_text(bus, *frame, owner=owner)
-                if field is None:  # GTK reports no focus inside an inactive window
-                    fields, complete = a11y.editable_fields(bus, *frame, owner=owner)
-                    # one field among the elements read is not the only one
-                    field = fields[0] if len(fields) == 1 and complete else None
-            elif unsure:  # whatever window it is, a password field anywhere counts
-                fields, complete = a11y.editable_fields(bus, *app,
-                                                        owner=_owner(bus, client, app))
-        except a11y.A11yError:
-            field, fields = None, []  # no accessibility: keys are the way in
-        password = (field is not None and field[2] == a11y.PASSWORD_ROLE) or (
-            field is None and any(f[2] == a11y.PASSWORD_ROLE for f in fields))
-        if password and allow_auth is not True:
-            where = ("the focused field" if field is not None
-                     else "a text field it cannot place" if unsure
-                     else f"one of its {len(fields)} text fields, and it does not say which "
-                     "has its focus,")
-            raise trust.TrustError(
-                f"{where} in {cls} is a password field; refusing to type into it. "
-                "Pass allow_auth=true only if a human intends this credential entry."
-            )
+        moves_focus = any(ch in _MOVES_FOCUS for ch in text)
+        census = _census(client, every_field=moves_focus)
+        _refuse_password(census, cls, moves_focus, allow_auth)
+        bus, field, fields, complete, unsure = (
+            census.bus, census.field, census.fields, census.complete, census.unsure)
         keys_only = any(ch in keymap.CONTROL_CHARS for ch in text)
         if field is not None and bus is not None and not keys_only:
             if journal.dry_run():
@@ -1504,11 +1599,13 @@ def _keyboard_in_background(
         mods, key = hinput.parse_combo(keys)
         if key is None:
             bg.refuse("a bare modifier tap cannot be sent to one window")
+        if _key_types_text(mods, key):  # the same field decision as typed text
+            _refuse_password(_census(client, every_field=False), cls, False, allow_auth)
         names = [_HYPR_MODS.get(m, m.upper()) for m in mods]
         if len(key) == 1:  # a character key: its base key on this layout
             chord = kmap.chord(key)
             if chord is None:
-                bg.refuse(f"{key!r} has no key on the {layout[0]} keyboard layout")
+                bg.refuse(f"the key has no key on the {layout[0]} keyboard layout")
         else:  # a keysym name: a shifted one ("plus") goes through its character
             chord = kmap.chord_for_key(key)
         if chord is not None:
@@ -1525,7 +1622,7 @@ def _keyboard_in_background(
     if client.get("xwayland"):
         bg.refuse(f"{cls} is an XWayland window, and Hyprland sends background keys between "
                   "two XWayland windows to the focused one instead")
-    what = f"{len(chords)} keys" if action == "type" else f"{keys}"
+    what = f"{len(chords)} keys" if action == "type" else _key_label(keys)
     if journal.dry_run():
         return _acted(f"{_DRY} send {what} to {addr} with sendshortcut", then, window=addr)
     seat = _seat_now()

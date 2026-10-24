@@ -202,33 +202,6 @@ def test_auth_guard_can_be_disabled(monkeypatch):
     trust.guard_auth_client(client(cls="hyprpolkitagent"), allow_auth=False)
 
 
-def test_password_field_check_is_opt_in(monkeypatch):
-    # default (class-only) mode never walks the tree
-    called = []
-    monkeypatch.setattr(trust.a11y, "connect", lambda: called.append(1))
-    trust.guard_password_field(client(), allow_auth=False)
-    assert called == []
-
-
-def test_password_field_blocks_in_strict_mode(monkeypatch):
-    monkeypatch.setenv("HYPRUSE_AUTH_GUARD", "strict")
-    monkeypatch.setattr(trust.a11y, "connect", lambda: "bus")
-    monkeypatch.setattr(trust.a11y, "app_for_pid", lambda *a: ("svc", "/p"))
-    monkeypatch.setattr(trust.a11y, "focused_role", lambda *a: trust.a11y.PASSWORD_ROLE)
-    with pytest.raises(trust.TrustError, match="password entry"):
-        trust.guard_password_field(client(), allow_auth=False)
-
-
-def test_password_field_fails_open_on_unreadable_tree(monkeypatch):
-    monkeypatch.setenv("HYPRUSE_AUTH_GUARD", "strict")
-
-    def boom():
-        raise trust.a11y.A11yError("no bus")
-
-    monkeypatch.setattr(trust.a11y, "connect", boom)
-    trust.guard_password_field(client(), allow_auth=False)  # no raise: typing allowed
-
-
 # --- seat-contention guard --------------------------------------------------
 
 

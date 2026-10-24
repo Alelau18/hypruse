@@ -606,7 +606,8 @@ def _redacted_steps(entries: list[dict[str, Any]]) -> list[int]:
     from hypruse import journal
 
     return [
-        e.get("seq", -1) for e in entries if journal.redacted_text(_args_of(e).get("text"))
+        e.get("seq", -1) for e in entries
+        if any(journal.redacted_text(_args_of(e).get(k)) for k in ("text", "keys"))
     ]
 
 

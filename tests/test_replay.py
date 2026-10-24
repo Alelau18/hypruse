@@ -401,3 +401,10 @@ def test_aborting_the_countdown_exits_cleanly(journal_file, live, calls, monkeyp
     monkeypatch.setattr(cli, "_countdown", lambda s: False)
     assert cli.replay([str(journal_file), "--execute"]) == 1
     assert calls == []
+
+
+def test_a_key_recorded_as_a_digest_is_not_replayed(tmp_path, live, calls, capsys):
+    path = _one(tmp_path, tool="keyboard", args={
+        "action": "key", "keys": {"redacted": True, "chars": 1, "sha256": "abc"}})
+    assert cli.replay([str(path), "--execute", "--yes"]) == 1
+    assert calls == [] and "recorded as a digest" in capsys.readouterr().out

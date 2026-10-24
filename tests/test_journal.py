@@ -448,3 +448,21 @@ def test_replay_origin_is_recorded(journal_file):
     finally:
         journal.set_origin("")
     assert entries(journal_file)[0]["by"] == "replay"
+
+
+# V25/V65/V71: a password entered one key per call reached the record as
+# plain `keys`, while typed text was digested
+@pytest.mark.parametrize("keys", ["h", "shift+h", "plus", "space", "altgr+e", "KP_1"])
+def test_a_key_that_types_a_character_is_recorded_as_a_digest(keys):
+    assert journal.redacted_text(journal.redact({"action": "key", "keys": keys})["keys"])
+
+
+@pytest.mark.parametrize("keys", ["ctrl+s", "Return", "Tab", "F5", "alt+F4", "super",
+                                  "XF86AudioPlay"])
+def test_a_shortcut_stays_readable_in_the_record(keys):
+    assert journal.redact({"action": "key", "keys": keys})["keys"] == keys
+
+
+def test_keys_in_a_sequence_step_are_digested_too():
+    steps = journal.redact({"steps": [{"op": "keyboard", "action": "key", "keys": "x"}]})
+    assert journal.redacted_text(steps["steps"][0]["keys"])

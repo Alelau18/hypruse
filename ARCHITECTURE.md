@@ -208,8 +208,13 @@ ask the human.
 - `keyboard` with `window=` goes through `_keyboard_in_background`. Text
   goes into the focused text field with `EditableText.InsertText` at the
   caret. GTK reports no FOCUSED state inside an inactive window, so a
-  window with exactly one editable field uses that one; a password field
-  among several refuses without `allow_auth`. Text with a newline, tab or
+  window with exactly one editable field uses that one. One decision,
+  `_password_refusal`, reads the field census (`_census`) for typed text,
+  for a key that types a character or pastes, on the background path and
+  on the foreground's strict check alike: a focused password field, one
+  among several when focus is not reported, a census cut short by the walk
+  budget, or a Tab or line break (which moves the focus partway through)
+  into a window with a password field refuses without `allow_auth`. Text with a newline, tab or
   backspace goes key by key, as wtype would press them, and the result
   describes the field without repeating it, since the journal stores
   every result line. InsertText's

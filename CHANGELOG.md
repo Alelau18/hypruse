@@ -164,6 +164,23 @@ All notable changes to this project are documented here. The format follows
   alike; the background press and the accessibility typing check the
   object's connection again just before acting, which also covers a
   control restored from `marks`.
+- **The password-field refusal is about the field, not the verb.** It ran
+  for `keyboard(action='type')` only, so `action='key'` entered the same
+  password one key per call (or pasted it with ctrl+v); it checked only
+  the field focused when the call started, so `user<Tab>secret` put the
+  secret into the next field; it took "no password field among the
+  fields read" as "none" when the walk stopped at its budget; and the
+  strict foreground check asked only for the focused element, which GTK
+  does not report in an inactive window, walking a root it had not
+  proved. One decision now serves typed text, a key that types a
+  character or pastes, both paths: it refuses a focused password field,
+  one among several when focus is not reported, a field census cut
+  short, and text with a Tab or a line break into a window that has (or
+  may have) a password field. The foreground still checks only under
+  `HYPRUSE_AUTH_GUARD=strict`; the keyboard tool's description no longer
+  says it is the default. A `keys` combo that types a character is
+  journaled as a digest, like typed text, and a result names it "a
+  character key"; replay refuses such an entry as it refuses typed text.
 
 ### Not changed
 - `launch` still only reports where the human's focus went when an

@@ -99,6 +99,18 @@ class Keymap:
         return self.chord(chr(ch)) if ch and chr(ch).isprintable() else None
 
 
+def keysym_char(name: str) -> str | None:
+    """The printable character a keysym NAME stands for ("plus" is "+",
+    "KP_1" is "1", "space" is " "), or None for a key that types none
+    (Return, Tab, F5) and for a name XKB does not know."""
+    lib = _lib()
+    if lib is None:
+        return None
+    sym = lib.xkb_keysym_from_name(name.encode(), 0)
+    ch = lib.xkb_keysym_to_utf32(sym) if sym else 0
+    return chr(ch) if ch and chr(ch).isprintable() else None
+
+
 @functools.cache
 def for_layout(layout: str, variant: str = "", options: str = "") -> Keymap:
     return Keymap(layout, variant, options)

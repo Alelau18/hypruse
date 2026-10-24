@@ -45,7 +45,7 @@ import os
 import sys
 from typing import Any
 
-from hypruse import a11y, hyprctl
+from hypruse import hyprctl
 
 
 class TrustError(RuntimeError):
@@ -919,9 +919,11 @@ def _auth_guard_on() -> bool:
     return os.environ.get("HYPRUSE_AUTH_GUARD", "1").lower() not in ("", "0", "false", "no", "off")
 
 
-def _auth_strict() -> bool:
-    # the password-field check walks the a11y tree, a call or two per
-    # element, too costly for every keystroke, so it is opt-in
+def auth_strict() -> bool:
+    """HYPRUSE_AUTH_GUARD=strict: refuse a password field in the human's own
+    window too (the background always does). It walks the a11y tree, a call
+    or two per element, too costly for every keystroke, so it is opt-in;
+    the server's keyboard tool runs the check (server._password_refusal)."""
     return os.environ.get("HYPRUSE_AUTH_GUARD", "1").lower() in ("strict", "2", "field", "fields")
 
 
@@ -958,30 +960,6 @@ def _auth_consent(c: dict[str, Any]) -> str:
             "if a human intends this."
         )
     return "Pass allow_auth=true only if a human intends this credential action."
-
-
-def guard_password_field(client: dict[str, Any], allow_auth: bool) -> None:
-    """Refuse to TYPE when the focused control is a password field. The
-    class check above is the strong guarantee; this adds cover for a
-    password box inside an ordinary window (a browser login). Opt-in
-    (HYPRUSE_AUTH_GUARD=strict) because it walks the a11y tree. Best-effort
-    and fail-open: an unreadable tree does not block typing, but a positive
-    password-field detection does."""
-    if allow_auth is True or not _auth_strict():
-        return
-    try:
-        bus = a11y.connect()
-        app = a11y.app_for_pid(
-            bus, client.get("pid"), client.get("title", ""), tuple(client.get("size") or ()) or None
-        )
-        role = a11y.focused_role(bus, app[0], app[1]) if app else None
-    except Exception:
-        return  # unreadable tree: the class check is the real guarantee
-    if role == a11y.PASSWORD_ROLE:
-        raise TrustError(
-            "the focused field is a password entry; refusing to type into it. "
-            "Pass allow_auth=true only if a human intends this."
-        )
 
 
 # --- seat-contention guard --------------------------------------------------

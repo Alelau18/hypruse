@@ -420,10 +420,14 @@ workspace actions through `hypr`. Refused (exit 3): a locked session, a
 window outside HYPRUSE_CONFINE, a system authentication dialog; on the
 human's window, a launcher holding the grab while `--window` names a target
 and a password field under HYPRUSE_AUTH_GUARD=strict. In the background,
-typing (not a key combo) into a password field the tree shows (the focused
-one, one among several when the window does not say which has focus, or one
-anywhere in an app whose windows cannot be told apart) without
-`--allow-auth`, a character the keyboard
+typing into a password field the tree shows (the focused one, one among
+several when the window does not say which has focus, or one anywhere in an
+app whose windows cannot be told apart), or into a window too large to read
+all its fields when it does not say which has focus, without
+`--allow-auth`; a key that types a character or pastes (`h`, `shift+h`,
+`ctrl+v`) counts as typing, and so does text with a tab or a newline into a
+window that has a password field, since those move the focus partway
+through (type each part in its own call); a character the keyboard
 layout has no key for when the text cannot go through the accessibility
 interface (checked before any key is sent), an XWayland window or a
 keyboard switched away from its first layout on the sendshortcut path, and
