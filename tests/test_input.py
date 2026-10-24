@@ -271,3 +271,61 @@ def test_an_f_key_takes_only_ascii_digits():
     assert hinput.parse_combo("F12") == ([], "F12")
     with pytest.raises(hinput.InputError, match="not a key name"):
         hinput.parse_combo("F٤")  # ARABIC-INDIC DIGIT FOUR: isdigit() but no key
+
+
+# F9, V14, V15: the caller's guards run again at the moment of delivery,
+# under the seat lock, and a refusal delivers nothing (a drag: no drop)
+
+
+class _Pointer:
+    def __init__(self, log):
+        self.log = log
+
+    def click(self, button, double=False):
+        self.log.append(("click", button))
+
+    def button(self, button, state):
+        self.log.append(("button", button, state))
+
+    def scroll(self, dy=0.0, dx=0.0):
+        self.log.append(("scroll", dy, dx))
+
+
+@pytest.fixture
+def pointer_log(monkeypatch):
+    log = []
+    monkeypatch.setattr(hinput, "move", lambda x, y: log.append(("move", x, y)))
+    monkeypatch.setattr(hinput, "_with_pointer", lambda fn: fn(_Pointer(log)))
+    monkeypatch.setattr(hinput.time, "sleep", lambda s: None)
+    monkeypatch.setattr(hinput, "_held_button", None)
+    return log
+
+
+def _refuse():
+    assert hinput._seat_lock._is_owned()  # the same lock as the event it gates
+    raise RuntimeError("a dialog mapped over the point")
+
+
+@pytest.mark.parametrize("deliver", [
+    lambda c: hinput.click(5, 6, precheck=c),
+    lambda c: hinput.button_down(5, 6, precheck=c),
+    lambda c: hinput.scroll(dy=1, x=5, y=6, precheck=c),
+])
+def test_a_refusal_at_delivery_sends_no_event(pointer_log, deliver):
+    with pytest.raises(RuntimeError, match="mapped over"):
+        deliver(_refuse)
+    assert pointer_log == [("move", 5, 6)]  # the cursor went there, nothing was pressed
+    assert hinput.held_button() is None
+
+
+def test_a_drop_refused_at_delivery_is_released_back_where_it_started(pointer_log):
+    with pytest.raises(RuntimeError, match="mapped over"):
+        hinput.drag(1, 2, 9, 9, steps=2, drop_check=_refuse)
+    assert pointer_log[-2:] == [("move", 1, 2), ("button", "left", hinput.RELEASED)]
+    assert ("button", "left", hinput.PRESSED) in pointer_log
+    assert hinput.held_button() is None  # never left held
+
+
+def test_a_drop_that_passes_is_released_at_the_target(pointer_log):
+    hinput.drag(1, 2, 9, 9, steps=2, drop_check=lambda: None)
+    assert pointer_log[-2:] == [("move", 9, 9), ("button", "left", hinput.RELEASED)]

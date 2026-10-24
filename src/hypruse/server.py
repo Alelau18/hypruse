@@ -511,6 +511,23 @@ def _active_address() -> str | None:
     return None
 
 
+def _at_delivery(guard: str, what: str, check: Callable[[], None]) -> Callable[[], None]:
+    """`check` for the input layer to run again right before the event it
+    gates, under the seat lock (F9, V14, V15): the point was checked, then
+    the cursor was warped and moved, and a window can map over it in the
+    tens of milliseconds (a drag: seconds) in between. A refusal names the
+    guard and says nothing of `what` was delivered."""
+
+    def run() -> None:
+        try:
+            check()
+        except trust.TrustError as exc:
+            raise trust.TrustError(
+                f"{guard} refused {what} right before it was delivered: {exc}") from None
+
+    return run
+
+
 def _pinned(client: dict[str, Any]) -> str:
     """How a result names the window an action was pinned to: its address,
     class, and the key that tells it from a later window at that address."""
@@ -1218,7 +1235,9 @@ def pointer(
         if hold_ms:
             plan += f", holding it {hold_ms:g} ms"
         if not dry:
-            hinput.click(x, y, button=button, double=double, hold_ms=hold_ms)
+            hinput.click(x, y, button=button, double=double, hold_ms=hold_ms,
+                         precheck=_at_delivery("the pointer guard", "the click", lambda: (
+                             trust.guard_pointer(x, y, allow_auth))))
     elif action in ("down", "up"):
         # the same guards as a click: a press or a release is input
         # delivered at a point, and `down` is half of a click there
@@ -1233,9 +1252,11 @@ def pointer(
         plan = f"{'press' if action == 'down' else 'release'} {button} at {_at(x, y)}"
         if action == "down":
             plan += " and keep it held until pointer action='up'"
-        if not dry:
-            fn = hinput.button_down if action == "down" else hinput.button_up
-            fn(x, y, button=button)
+        if not dry and action == "down":
+            hinput.button_down(x, y, button=button, precheck=_at_delivery(
+                "the pointer guard", "the press", lambda: trust.guard_pointer(x, y, allow_auth)))
+        elif not dry:
+            hinput.button_up(x, y, button=button)
     elif action == "drag":
         if None in (x, y, to_x, to_y):
             raise ValueError("drag needs x, y, to_x, to_y")
@@ -1249,7 +1270,11 @@ def pointer(
             plan += f" over {duration_ms:g} ms in {steps} steps"
         if not dry:
             hinput.drag(x, y, to_x, to_y, button=button,  # type: ignore[arg-type]
-                        duration_ms=duration_ms, steps=steps)
+                        duration_ms=duration_ms, steps=steps,
+                        drop_check=_at_delivery(
+                            "the pointer guard at the drop point",
+                            "the drop (cancelled: released back where it started)",
+                            lambda: trust.guard_pointer(to_x, to_y, allow_auth)))
     elif action == "scroll":
         hinput.check_scroll(scroll_dy, scroll_dx)
         hinput.check_xy(x, y)
@@ -1257,7 +1282,9 @@ def pointer(
         note = note or _layer_note(x, y)
         plan = f"scroll dy={scroll_dy:g} dx={scroll_dx:g} at {_at(x, y)}"
         if not dry:
-            hinput.scroll(dy=scroll_dy, dx=scroll_dx, x=x, y=y)
+            hinput.scroll(dy=scroll_dy, dx=scroll_dx, x=x, y=y,
+                          precheck=_at_delivery("the pointer guard", "the scroll", lambda: (
+                              trust.guard_pointer(x, y, allow_auth))))
     else:
         raise ValueError(f"unknown action {action!r}: {'|'.join(_POINTER_ACTIONS)}")
     if dry:
@@ -1526,7 +1553,13 @@ def click_ui(
         )
     trust.guard_covering_layer(x, y, allow_auth)
     trust.check_click_point(now, x, y, allow_auth, focused=True)
-    hinput.click(x, y, button=button, double=double)
+
+    def at_the_point() -> None:  # what covers the point, again at the press
+        trust.guard_covering_layer(x, y, allow_auth)
+        trust.check_click_point(now, x, y, allow_auth, focused=True)
+
+    hinput.click(x, y, button=button, double=double,
+                 precheck=_at_delivery("the click-point check", "the click", at_the_point))
     trust.remember_seat()
     # observe the CLICKED window, not whatever holds focus after the click
     # (the click itself may have spawned a dialog that stole it)

@@ -274,6 +274,14 @@ All notable changes to this project are documented here. The format follows
   window under it. A digit workspace selector (`HYPRUSE_AGENT_WORKSPACES`,
   `HYPRUSE_CONFINE=workspace:3`) matches the workspace with that number
   only, as Hyprland resolves it, never one named "3"; `name:3` names it.
+- **Pointer input is checked again at the moment it is delivered.** A
+  click, press or scroll checked its point, then warped the cursor and
+  pressed 20 ms later; a drag checked its drop point, then released up
+  to 5 s later; a foreground `click_ui` checked what covered the point
+  the same way. The same guards now run again right before the press,
+  scroll or release, under the seat lock; a refusal names the guard and
+  delivers nothing, and a refused drop is released back where it
+  started.
 - **Actions on "the active window" are pinned to the window checked.**
   `hypr toggle_floating` and `fullscreen` with no target acted on
   whatever had the focus when the dispatch landed. Floating (and

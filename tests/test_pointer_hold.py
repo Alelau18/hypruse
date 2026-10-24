@@ -188,7 +188,9 @@ def tool(monkeypatch):
     monkeypatch.setattr(hinput, "_held_button", None)
     monkeypatch.setattr(hinput, "_down", None)
 
-    def down(x=None, y=None, button="left"):
+    def down(x=None, y=None, button="left", precheck=None):
+        if precheck is not None:
+            precheck()
         calls["input"].append(("down", x, y, button))
         hinput.restore_held(button)
 
@@ -206,7 +208,8 @@ def tool(monkeypatch):
 def test_down_and_up_go_through_the_click_guards(tool):
     out = srv.pointer("down", x=10, y=20, button="right")
     assert tool["input"] == [("down", 10, 20, "right")]
-    assert tool["guard"] == [(10, 20)] and tool["lock"] == 1
+    # checked, then again right before the press (V14)
+    assert tool["guard"] == [(10, 20), (10, 20)] and tool["lock"] == 1
     assert "right button is held down until pointer action='up'" in out
     out = srv.pointer("up", x=30, y=40, button="right")  # a move first: guarded
     assert tool["input"][-1] == ("up", 30, 40, "right")
@@ -232,8 +235,9 @@ def test_a_second_down_is_refused_by_the_tool(tool):
 
 def test_hold_ms_reaches_the_click(tool):
     srv.pointer("click", x=1, y=2, hold_ms=750)
-    assert tool["input"] == [("click", (1, 2), {"button": "left", "double": False,
-                                                "hold_ms": 750})]
+    ((_, args, kwargs),) = tool["input"]
+    assert callable(kwargs.pop("precheck"))
+    assert (args, kwargs) == ((1, 2), {"button": "left", "double": False, "hold_ms": 750})
 
 
 def test_down_up_and_a_long_click_rehearse(tool, monkeypatch):
@@ -528,3 +532,20 @@ def test_a_cli_verb_does_not_go_through_the_server_sync(tool, state_dir, monkeyp
     cli_state.save()
     srv.pointer("down")
     assert cli_state.load()["flags"].get("held_button") is None
+
+
+def test_a_click_refused_at_delivery_names_the_guard(tool, monkeypatch):
+    # V14: the point passed when checked; a dialog mapped there before the press
+    answers = iter([None])
+
+    def guard(x, y, allow_auth=False):
+        if next(answers, "refuse") == "refuse":
+            raise srv.trust.TrustError("an authentication dialog covers (1, 2)")
+
+    monkeypatch.setattr(srv.trust, "guard_pointer", guard)
+    monkeypatch.setattr(hinput, "click", lambda x, y, precheck=None, **k: (
+        precheck(), tool["input"].append(("click", x, y))))
+    with pytest.raises(srv.trust.TrustError,
+                       match="the pointer guard refused the click right before it was delivered"):
+        srv.pointer("click", x=1, y=2)
+    assert tool["input"] == []

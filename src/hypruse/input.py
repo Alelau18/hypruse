@@ -371,7 +371,12 @@ def click(
     button: str = "left",
     double: bool = False,
     hold_ms: float = 0,
+    precheck: Callable[[], None] | None = None,
 ) -> None:
+    """`precheck` runs right before the press, after the cursor moved and
+    under the seat lock: the caller's guards, again at the moment of
+    delivery, since a window can map over the point in between. If it
+    raises, nothing is pressed."""
     journal.refuse_if_dry("click")
     _check_button(button)
     has_xy = _check_xy(x, y)
@@ -382,6 +387,8 @@ def click(
         if has_xy:
             move(x, y)  # type: ignore[arg-type]
             time.sleep(0.02)
+        if precheck is not None:
+            precheck()
         if not hold_ms:
             _with_pointer(lambda p: p.click(button, double=double))
             if _down == button:  # its release let go of a `down` too
@@ -401,10 +408,12 @@ def click(
         _with_pointer(held)
 
 
-def button_down(x: float | None = None, y: float | None = None, button: str = "left") -> None:
+def button_down(x: float | None = None, y: float | None = None, button: str = "left",
+                precheck: Callable[[], None] | None = None) -> None:
     """Press a button and leave it held, for a hold or a drag the caller
     paces itself (down, a few moves, a screenshot, up). The hold outlives
-    this call, so it is recorded where the shutdown path will find it."""
+    this call, so it is recorded where the shutdown path will find it.
+    `precheck` as for click."""
     journal.refuse_if_dry("button_down")
     check_down(button)
     has_xy = _check_xy(x, y)
@@ -413,6 +422,8 @@ def button_down(x: float | None = None, y: float | None = None, button: str = "l
         if has_xy:
             move(x, y)  # type: ignore[arg-type]
             time.sleep(0.02)
+        if precheck is not None:
+            precheck()
 
         def press(p: VirtualPointer) -> None:
             global _held_button, _down
@@ -462,7 +473,12 @@ def drag(
     button: str = "left",
     duration_ms: float = DRAG_DURATION_MS,
     steps: int = DRAG_STEPS,
+    drop_check: Callable[[], None] | None = None,
 ) -> None:
+    """`drop_check` runs right before the release, at the drop point and
+    under the seat lock, since a drag can take seconds and a window can map
+    there meanwhile. If it raises, the drop is cancelled: the cursor goes
+    back to the start and the button is released there, never left held."""
     journal.refuse_if_dry("drag")
     _check_button(button)
     check_drag(duration_ms, steps)
@@ -487,6 +503,13 @@ def drag(
                 else:
                     move(x1 + (x2 - x1) * i / steps, y1 + (y2 - y1) * i / steps)
                 time.sleep(pause)
+            if drop_check is not None:
+                try:
+                    drop_check()
+                except Exception:
+                    move(x1, y1)  # cancelled: released where it was picked up
+                    time.sleep(0.03)
+                    raise
         finally:
             p.button(button, RELEASED)
             _held_button = None
@@ -499,8 +522,10 @@ def drag(
 
 
 def scroll(
-    dy: float = 0.0, dx: float = 0.0, x: float | None = None, y: float | None = None
+    dy: float = 0.0, dx: float = 0.0, x: float | None = None, y: float | None = None,
+    precheck: Callable[[], None] | None = None,
 ) -> None:
+    """`precheck` as for click, right before the scroll."""
     journal.refuse_if_dry("scroll")
     check_scroll(dy, dx)
     has_xy = _check_xy(x, y)
@@ -508,4 +533,6 @@ def scroll(
         if has_xy:
             move(x, y)  # type: ignore[arg-type]
             time.sleep(0.02)
+        if precheck is not None:
+            precheck()
         _with_pointer(lambda p: p.scroll(dy=dy, dx=dx))

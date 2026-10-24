@@ -191,7 +191,9 @@ def test_pointer_drag_passes_its_pace_through(monkeypatch):
     seen = []
     monkeypatch.setattr(srv.hinput, "drag", lambda *a, **k: seen.append((a, k)))
     srv.pointer("drag", x=1, y=2, to_x=3, to_y=4, duration_ms=500, steps=25)
-    assert seen == [((1, 2, 3, 4), {"button": "left", "duration_ms": 500, "steps": 25})]
+    ((args, kwargs),) = seen
+    assert callable(kwargs.pop("drop_check"))
+    assert (args, kwargs) == ((1, 2, 3, 4), {"button": "left", "duration_ms": 500, "steps": 25})
 
 
 def test_pointer_click_is_silent_without_a_covering_layer(monkeypatch):

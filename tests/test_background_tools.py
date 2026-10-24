@@ -80,7 +80,8 @@ def wired_bg(monkeypatch):
     monkeypatch.setattr(srv.hyprctl, "layout_group", lambda: (0, 1))
     monkeypatch.setattr(
         srv.hinput, "click",
-        lambda x, y, button="left", double=False, hold_ms=0: s["clicks"].append((x, y)))
+        lambda x, y, button="left", double=False, hold_ms=0, precheck=None: (
+            precheck and precheck(), s["clicks"].append((x, y))))
     monkeypatch.setattr(srv.hinput, "type_text", lambda t: s["typed"].append(t))
     # every service is the window's (pid 42) unless a test names one in pids
     s["pids"] = {}
@@ -1571,3 +1572,21 @@ def test_a_keysyms_other_name_goes_as_the_key_the_layout_has(wired_bg):
     srv.keyboard("key", keys="pgup", window="0xa")
     srv.keyboard("key", keys="ISO_Left_Tab", window="0xa")
     assert wired_bg["shortcuts"] == [("", "Prior", "0xa"), ("SHIFT", "Tab", "0xa")]
+
+
+def test_a_foreground_click_ui_checks_the_point_again_at_the_press(wired_bg, monkeypatch):
+    # F9: what covers the point was checked, then the cursor moved and the
+    # press came tens of milliseconds later
+    calls = []
+
+    def point(client, x, y, allow_auth=False, focused=False):
+        calls.append((x, y))
+        if len(calls) > 2:  # before the focus, after it, then at the press
+            raise srv.trust.TrustError("a window mapped over the point")
+
+    monkeypatch.setattr(srv.trust, "check_click_point", point)
+    monkeypatch.setattr(srv.trust, "guard_covering_layer", lambda *a, **k: None)
+    with pytest.raises(srv.trust.TrustError,
+                       match="the click-point check refused the click right before it"):
+        srv.click_ui(name="Save", window="0xa", background=False)
+    assert len(calls) == 3 and wired_bg["clicks"] == []

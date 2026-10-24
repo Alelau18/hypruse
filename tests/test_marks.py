@@ -51,7 +51,8 @@ def wired(monkeypatch):
     monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: calls["dispatch"].append(a))
     monkeypatch.setattr(
         srv.hinput, "click",
-        lambda x, y, button="left", double=False: calls["clicks"].append((x, y, button)),
+        lambda x, y, button="left", double=False, precheck=None: (
+            precheck and precheck(), calls["clicks"].append((x, y, button))),
     )
     monkeypatch.setattr(srv.time, "sleep", lambda s: None)
     # no layer surface covers anything unless a test says so (the real
