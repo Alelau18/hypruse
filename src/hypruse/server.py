@@ -2234,7 +2234,8 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
             # still be the focused one, read right before the dispatch
             _still_focused(active, "the fullscreen")
             hyprctl.dispatch("fullscreen", "0")
-            msg = f"fullscreen toggled on {_pinned(active)}"
+            msg = (f"fullscreen toggled on {_pinned(active)} (its focus checked right before; "
+                   "hyprlang's fullscreen acts on whichever window has the focus)")
         else:
             hyprctl.dispatch("fullscreen", "0")
             msg = "fullscreen toggled"

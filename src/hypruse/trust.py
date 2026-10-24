@@ -48,7 +48,7 @@ import sys
 import time
 from typing import Any
 
-from hypruse import flags, hyprctl
+from hypruse import flags, hyprctl, journal
 
 
 class TrustError(RuntimeError):
@@ -77,7 +77,9 @@ def note_launched(client: dict[str, Any], label: str = "") -> None:
         return
     address = client["address"]
     _owned.add(key)
-    if _flag("HYPRUSE_MARK"):
+    # a rehearsal changes nothing on screen: a late window adopted from a
+    # restored pending launch under HYPRUSE_DRYRUN is recorded, not tagged
+    if _flag("HYPRUSE_MARK") and not journal.dry_run():
         with contextlib.suppress(hyprctl.HyprctlError):
             hyprctl.dispatch("tagwindow", f"+{_OWNED_TAG}", f"address:{address}")
         hyprctl.notify(f"hypruse opened {label}".rstrip(), ms=2500, color="rgb(ff5555)")

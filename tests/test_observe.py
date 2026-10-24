@@ -520,6 +520,11 @@ def test_targetless_fullscreen_on_lua_names_its_window(focused, monkeypatch):
         'window = "address:0xa" })')
 
 
+def test_targetless_fullscreen_on_hyprlang_says_the_focus_was_checked(focused):
+    out = srv.hypr("fullscreen")
+    assert focused["sent"] == [("fullscreen", "0")] and "its focus checked right before" in out
+
+
 def test_targetless_fullscreen_on_hyprlang_refuses_a_focus_that_moved(focused, monkeypatch):
     reads = iter([{"address": "0xa", "stableId": "1", "class": "kitty"},  # what the guards saw
                   {"address": "0xb", "stableId": "2", "class": "firefox"}])  # right before

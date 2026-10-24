@@ -389,3 +389,29 @@ def test_the_record_keeps_digests_and_only_believable_ones(launches):
     assert launches.launch_pending("secret-token")
     assert set(launches._launches) == {*exported, "fedcba9876543210"}
     assert launches._launches["fedcba9876543210"]["pending_until"] == 0.0
+
+
+def test_a_late_window_is_tagged_under_marking(monkeypatch, no_sleep, launches):
+    # review of 574651b: adoption goes through note_launched, tag included
+    token, _ = _timed_out_launch(monkeypatch)
+    monkeypatch.setenv("HYPRUSE_MARK", "1")
+    sent = []
+    monkeypatch.setattr(server.hyprctl, "dispatch", lambda *a: sent.append(a))
+    monkeypatch.setattr(server.hyprctl, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_launch_token_of", lambda pid: token)
+    REAL_NOTE_CLIENTS([dict(OURS, pid=5151)])
+    assert ("tagwindow", "+hypruse-owned", "address:0xo") in sent
+
+
+def test_a_late_window_in_a_rehearsal_is_recorded_not_tagged(monkeypatch, no_sleep, launches):
+    # a pending launch restored into a HYPRUSE_DRYRUN session made every
+    # tool's refresh raise on the tag dispatch
+    token, _ = _timed_out_launch(monkeypatch)
+    monkeypatch.setenv("HYPRUSE_MARK", "1")
+    monkeypatch.setenv("HYPRUSE_DRYRUN", "1")
+    sent = []
+    monkeypatch.setattr(server.hyprctl, "dispatch", lambda *a: sent.append(a))
+    monkeypatch.setattr(server.hyprctl, "notify", lambda *a, **k: sent.append(("notify",)))
+    monkeypatch.setattr(server, "_launch_token_of", lambda pid: token)
+    REAL_NOTE_CLIENTS([dict(OURS, pid=5151)])  # must not raise
+    assert sent == [] and launches.owned() == {server.hyprctl.window_key(dict(OURS, pid=5151))}
