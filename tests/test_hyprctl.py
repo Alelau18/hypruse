@@ -547,6 +547,52 @@ def test_send_shortcut_lua():
                     'window = "address:0xabc" })')
 
 
+@pytest.mark.parametrize("prov", [hyprctl.HYPRLANG, hyprctl.LUA])
+@pytest.mark.parametrize("mods, key, address", [
+    ("", "x, active", "0xabc"),             # the selector after a comma (F1/F49)
+    ("", "x, class:^kitty$|\\", "0xabc"),  # the hyprlang escape of the next comma (F10)
+    ("", "z, title:WIN_B|", "0xabc"),
+    ("", "Return ", "0xabc"),
+    ("", "", "0xabc"),
+    ("CTRL, active,", "x", "0xabc"),        # the same through the modifiers
+    ("CTRL  SHIFT", "x", "0xabc"),
+    ("BANANA", "x", "0xabc"),
+    ("", "x", "0xabc, active"),             # and through the address
+    ("", "x", "active"),
+])
+def test_send_shortcut_refuses_fields_outside_its_grammar(monkeypatch, prov, mods, key,
+                                                           address):
+    sent = []
+    monkeypatch.setattr(hyprctl, "_provider", prov)
+    monkeypatch.setattr(hyprctl, "_run", lambda *a: sent.append(a) or "ok")
+    with pytest.raises(hyprctl.HyprctlError, match="sendshortcut"):
+        hyprctl.send_shortcut(mods, key, address)
+    assert sent == []  # refused before Hyprland was asked anything
+
+
+@pytest.mark.parametrize("prov", [hyprctl.HYPRLANG, hyprctl.LUA])
+def test_send_shortcut_names_only_the_window_it_was_given(monkeypatch, prov):
+    sent = []
+    monkeypatch.setattr(hyprctl, "_provider", prov)
+    monkeypatch.setattr(hyprctl, "_run", lambda *a: sent.append(a) or "ok")
+    hyprctl.send_shortcut("CTRL SHIFT", "Return", "0xabc")
+    ((_, *request),) = sent
+    if prov == hyprctl.HYPRLANG:
+        assert request == ["sendshortcut", "CTRL SHIFT, Return, address:0xabc"]
+    else:
+        assert request == ['hl.dsp.send_shortcut({ mods = "CTRL SHIFT", key = "Return", '
+                           'window = "address:0xabc" })']
+
+
+def test_the_lua_sendshortcut_builder_wants_exactly_three_fields():
+    # it used to split on the first two commas only, so a fourth field
+    # joined the window selector: "active, address:0xabc" is the focused window
+    with pytest.raises(hyprctl.HyprctlError, match="3|three|fields"):
+        hyprctl.lua_dispatch("sendshortcut", (", Return, active, address:0xabc",))
+    with pytest.raises(hyprctl.HyprctlError):
+        hyprctl.lua_dispatch("sendshortcut", ("Return, address:0xabc",))
+
+
 def test_active_layout(monkeypatch):
     monkeypatch.setattr(hyprctl, "query", lambda what: {"keyboards": [
         {"main": False, "layout": "us"},

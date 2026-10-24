@@ -26,6 +26,29 @@ def test_parse_combo_rejects_garbage():
         hinput.parse_combo("banana+t")
 
 
+# keys that carry a Hyprland window selector after a comma (F1, F10, F49):
+# on the Lua config manager the text after the comma used to become
+# sendshortcut's window field and send the key to whatever it named
+SELECTOR_KEYS = ["x, active", "Return, active", "z, title:WIN_B|", "x, class:^kitty$|\\",
+                 "alt+F4, active", "ctrl+a, class:^(kitty)$|", "Return, class:.*polkit.*|",
+                 "Page Up", "x\\", "Return,", "a|b"]
+
+
+@pytest.mark.parametrize("combo", SELECTOR_KEYS)
+def test_parse_combo_refuses_a_key_that_is_not_a_key_name(combo):
+    with pytest.raises(hinput.InputError, match="not a key name"):
+        hinput.parse_combo(combo)
+
+
+def test_parse_combo_keeps_punctuation_keys_and_keysym_names():
+    # one character is a key whatever it is: the background path maps it to
+    # its keysym name ("comma", "bar") through the layout before Hyprland
+    assert hinput.parse_combo("ctrl+,") == (["ctrl"], ",")
+    assert hinput.parse_combo("shift+|") == (["shift"], "|")
+    assert hinput.parse_combo("KP_Enter") == ([], "KP_Enter")
+    assert hinput.parse_combo("ctrl+dead_acute") == (["ctrl"], "dead_acute")
+
+
 def test_combo_to_wtype_args_press_release_order():
     args = hinput.combo_to_wtype_args(["ctrl", "shift"], "t")
     assert args == ["-M", "ctrl", "-M", "shift", "-k", "t", "-m", "shift", "-m", "ctrl"]

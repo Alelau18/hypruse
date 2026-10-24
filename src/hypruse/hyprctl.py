@@ -239,7 +239,14 @@ def _lua_tagwindow(tag: str, window: str = "") -> str:
 # identically either way; the two places where the Lua defaults are not the
 # legacy ones (a silent move, a fullscreen toggle) are spelled out above.
 def _lua_sendshortcut(arg: str) -> str:
-    mods, key, window = (p.strip() for p in arg.split(",", 2))
+    # every comma, not the first two: the window field is a selector, and a
+    # split that leaves later commas inside it hands Hyprland whatever
+    # selector the text after them names (send_shortcut checks the fields;
+    # this keeps the builder from being the place that check can be missed)
+    fields = [p.strip() for p in arg.split(",")]
+    if len(fields) != 3:
+        raise ValueError(f"expected mods, key, window; got {len(fields)} fields")
+    mods, key, window = fields
     return (
         f"hl.dsp.send_shortcut({{ mods = {lua_str(mods)}, key = {lua_str(key)}, "
         f"window = {lua_str(window)} }})"
@@ -329,12 +336,40 @@ def dispatch(name: str, *args: str) -> None:
         _dispatch_as(now, name, args)
 
 
+# What send_shortcut accepts in each of its three fields. They travel as ONE
+# comma-separated string that both config managers split on commas (the
+# hyprlang translator with CVarList2, the Lua builder above), and the third
+# field is a window SELECTOR: text after a comma in a key or a modifier ends
+# up there, where "active", "class:REGEX|" or "title:REGEX|" sends the key to
+# a window no guard looked at, while every guard checked `address`. hyprlang
+# on hyprutils 0.14 refuses the extra field today only because CVarList2
+# ignores its field limit, which is an accident, not a contract. So the
+# fields are held to the grammar hypruse itself produces, here, the one
+# place every sendshortcut goes through.
+KEYSYM_NAME = re.compile(r"[A-Za-z0-9_]+")
+SHORTCUT_MODS = frozenset(
+    {"SHIFT", "CAPS", "CTRL", "CONTROL", "ALT", "MOD2", "MOD3", "SUPER", "WIN", "LOGO",
+     "MOD4", "META", "MOD5"})
+_ADDRESS = re.compile(r"0x[0-9a-fA-F]+")
+
+
 def send_shortcut(mods: str, key: str, address: str) -> None:
     """Send one key, with modifiers, to a window without focusing it.
     Hyprland moves keyboard focus to the window, sends the key and restores
     focus inside one event-loop step (Actions::pass), so the human's own
     keys cannot interleave. Refuse an XWayland target before calling this:
-    between two XWayland windows Hyprland delivers to the focused one."""
+    between two XWayland windows Hyprland delivers to the focused one.
+
+    `mods` is space-separated Hyprland modifier names, `key` one keysym
+    name, `address` a window address; anything else is refused before
+    Hyprland is asked (see KEYSYM_NAME). Not echoed: on the typing path a
+    key names a typed character."""
+    if not KEYSYM_NAME.fullmatch(key):
+        raise HyprctlError("sendshortcut: the key is not a keysym name")
+    if mods and not set(mods.split(" ")) <= SHORTCUT_MODS:
+        raise HyprctlError("sendshortcut: the modifiers are not Hyprland modifier names")
+    if not _ADDRESS.fullmatch(address):
+        raise HyprctlError(f"sendshortcut: {address!r} is not a window address")
     dispatch("sendshortcut", f"{mods}, {key}, address:{address}")
 
 

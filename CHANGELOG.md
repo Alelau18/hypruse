@@ -126,6 +126,20 @@ All notable changes to this project are documented here. The format follows
   and `steps` (1-100, default 12); the CLI takes `--duration-ms` and
   `--steps`.
 
+### Security
+- **A key combo cannot name a different window.** In a background
+  `keyboard(action='key')`, text after a comma in `keys` (`'x, active'`,
+  `'Return, class:REGEX|'`) reached `sendshortcut`'s window field, so the
+  key went to the human's focused window or any window the regex matched,
+  after every guard had checked the named one, and the result said the
+  human's focus was untouched. Reproduced under the Lua config manager;
+  the hyprlang manager refused the extra field only because hyprutils'
+  `CVarList2` ignores its field limit. A key is now one character or an
+  XKB keysym name (letters, digits, underscores), checked when the combo
+  is parsed, and `hyprctl.send_shortcut` refuses any modifier, key or
+  address outside that grammar before Hyprland is asked; the Lua builder
+  wants exactly three fields.
+
 ### Not changed
 - `launch` still only reports where the human's focus went when an
   already-running app's window opens on their screen and is moved away

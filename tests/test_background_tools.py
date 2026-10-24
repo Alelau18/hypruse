@@ -7,6 +7,8 @@ from hypruse import server as srv
 
 REAL_UI_READ = srv._ui_read  # bound before the fixture stubs it
 REAL_PROVEN_FRAME = srv._proven_frame
+REAL_SEND_SHORTCUT = srv.hyprctl.send_shortcut
+REAL_DISPATCH = srv.hyprctl.dispatch
 
 CLIENT = {"address": "0xa", "class": "gedit", "title": "doc", "at": [100, 50],
           "size": [800, 600], "pid": 42, "workspace": {"id": 99}, "monitor": 0,
@@ -295,6 +297,57 @@ def test_a_key_combo_goes_through_sendshortcut(wired_bg):
     out = str(srv.keyboard("key", keys="ctrl+s", window="0xa"))
     assert wired_bg["shortcuts"] == [("CTRL", "s", "0xa")]
     assert "sendshortcut" in out
+
+
+# F1/F10/F49: a key string that carries a window selector after a comma.
+# Live (Lua manager), two windows logging their keystrokes: keys aimed at
+# 0xa landed in the focused window or any window the regex named, after
+# every guard had checked 0xa, and the result said the focus was untouched.
+SELECTOR_KEYS = ["x, active", "Return, active", "z, title:WIN_B|", "x, class:^kitty$|\\",
+                 "alt+F4, active", "Return, class:.*polkit.*|"]
+
+
+@pytest.mark.parametrize("keys", SELECTOR_KEYS)
+def test_a_selector_in_the_keys_is_refused_before_any_key(wired_bg, keys):
+    with pytest.raises(srv.hinput.InputError, match="not a key name"):
+        srv.keyboard("key", keys=keys, window="0xa")
+    assert wired_bg["shortcuts"] == [] and wired_bg["dispatch"] == []
+
+
+@pytest.mark.parametrize("prov", [srv.hyprctl.HYPRLANG, srv.hyprctl.LUA])
+@pytest.mark.parametrize("keys", ["y", "ctrl+s", "Return", "ctrl+,", "shift+|", "F5", "plus",
+                                  "alt+F4"])
+def test_the_key_goes_to_the_window_the_guards_checked(wired_bg, monkeypatch, prov, keys):
+    # the recipient is the window field of the one string that reaches
+    # hyprctl, so that field, and only it, must name the guarded window
+    sent = []
+    monkeypatch.setattr(srv.hyprctl, "send_shortcut", REAL_SEND_SHORTCUT)
+    monkeypatch.setattr(srv.hyprctl, "dispatch", REAL_DISPATCH)
+    monkeypatch.setattr(srv.hyprctl, "_provider", prov)
+    monkeypatch.setattr(srv.hyprctl, "_run", lambda *a: sent.append(a) or "ok")
+    srv.keyboard("key", keys=keys, window="0xa")
+    ((verb, *request),) = sent
+    assert verb == "dispatch"
+    if prov == srv.hyprctl.HYPRLANG:
+        name, arg = request
+        assert name == "sendshortcut"
+        fields = [f.strip() for f in arg.split(",")]
+        assert len(fields) == 3 and fields[2] == "address:0xa"
+    else:
+        (expr,) = request
+        assert expr.count("window =") == 1 and expr.endswith('window = "address:0xa" })')
+
+
+def test_a_selector_in_the_keys_never_reaches_hyprland_from_a_sequence(wired_bg, monkeypatch):
+    sent = []
+    monkeypatch.setattr(srv.hyprctl, "send_shortcut", REAL_SEND_SHORTCUT)
+    monkeypatch.setattr(srv.hyprctl, "dispatch", REAL_DISPATCH)
+    monkeypatch.setattr(srv.hyprctl, "_provider", srv.hyprctl.LUA)
+    monkeypatch.setattr(srv.hyprctl, "_run", lambda *a: sent.append(a) or "ok")
+    out = str(srv.sequence([{"op": "keyboard", "action": "key", "keys": "x, active",
+                             "window": "0xa"}]))
+    assert "not a key name" in out
+    assert sent == []
 
 
 def test_keys_to_an_xwayland_window_are_refused(wired_bg):

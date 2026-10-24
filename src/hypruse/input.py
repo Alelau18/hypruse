@@ -90,8 +90,16 @@ def parse_combo(combo: str) -> tuple[list[str], str | None]:
             key = part
         elif lower.startswith("f") and lower[1:].isdigit():
             key = part.upper()
-        else:
+        elif hyprctl.KEYSYM_NAME.fullmatch(part):
             key = part  # assume a literal XKB keysym name (case-sensitive)
+        else:
+            # a comma or a space here is how a window selector rides into
+            # sendshortcut (see hyprctl.send_shortcut), so the combo is
+            # refused before any guard or seat change, on every path
+            raise InputError(
+                "the last part of the key combo is not a key name: a key is one "
+                "character or an XKB keysym name (letters, digits, underscores)"
+            )
     return mods, key
 
 
