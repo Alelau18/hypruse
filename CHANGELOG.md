@@ -374,14 +374,16 @@ All notable changes to this project are documented here. The format follows
   keyboard, at any level (Hyprland gives the keyboard to a layer that asks
   for it whatever its level, and an on-demand one when it maps). It is a
   note, not a refusal, since most such layers are a shell's widgets.
-  Noctalia 5.3's layers are recognized: the click shield behind its
-  panels, its bar-attached panels, overview launcher, window switcher,
-  screenshot region and annotation overlay as launchers; a persistent
-  panel (which shares the `noctalia-panel` name and takes the keyboard on
-  demand) as a new `panel` kind, which is noted; its bar and dock,
-  notifications and OSD; and its screen and hot corners, desktop widgets,
-  backdrop and idle dimming as a new `decoration` kind. Its polkit prompt
-  is one of its panels and reads as a launcher, not as `auth`.
+  Noctalia 5.3's layers are recognized: its panels (`noctalia-panel`,
+  which on Hyprland takes the keyboard itself, with no click shield), the
+  click shield it uses elsewhere, its bar-attached panels, overview
+  launcher, window switcher, screenshot region and annotation overlay as
+  launchers; its widget editors, which take the keyboard on demand, as a
+  new `panel` kind, which is noted; its bar and dock, notifications and
+  OSD; and its screen and hot corners, desktop widgets, backdrop and idle
+  dimming as a new `decoration` kind. Its polkit prompt, and a plugin's
+  persistent panel, are `noctalia-panel` layers too, so both read as a
+  launcher (listed in the README's known gaps).
 - **`HYPRUSE_STRICT` takes in only the seat changes an action made.**
   Every acting tool re-baselined the seat guard with whatever the seat was
   once it finished, so a popup that took the focus mid-action, or the

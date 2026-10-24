@@ -864,8 +864,8 @@ def test_init_marking_warns_instead_of_dying_when_the_rule_will_not_install(
         ("omarchy-osd", "unknown"),
         # Noctalia 5 (src/shell)
         ("noctalia-bar-default", "bar"),
-        ("noctalia-panel", "panel"),  # a persistent one stays open beside the apps
-        ("noctalia-panel-click-shield", "launcher"),  # with every other panel, exclusive
+        ("noctalia-panel", "launcher"),  # on Hyprland the panel holds the keyboard itself
+        ("noctalia-panel-click-shield", "launcher"),  # what it lays over the screen elsewhere
         ("noctalia-attached-panel", "launcher"),
         ("noctalia-overview-launcher", "launcher"),
         ("noctalia-window-switcher", "launcher"),
@@ -1357,18 +1357,26 @@ def test_layers_known_to_take_no_keyboard_are_not_noted(monkeypatch, raw):
 
 
 @pytest.mark.parametrize("raw", [_layer("notes", level="1"),  # Hyprland: any level grabs
-                                 _layer("noctalia-panel", level="2")])  # on demand, on map
+                                 _layer("noctalia-desktop-widgets-editor", level="1")])
 def test_a_layer_that_may_hold_the_keyboard_is_noted_at_any_level(monkeypatch, raw):
     # review of f44b789
     monkeypatch.setattr(trust.hyprctl, "query", lambda cmd: raw)
     assert "may hold the keyboard" in trust.guard_keyboard_layer(True, False)
 
 
-def test_an_open_noctalia_panel_refuses_typing_into_a_named_window(monkeypatch):
-    # its click shield takes the keyboard, so the keys cannot reach the window
-    shielded = {"DP-1": {"levels": {"3": [
-        {"namespace": "noctalia-panel", "x": 0, "y": 0, "w": 400, "h": 600},
-        {"namespace": "noctalia-panel-click-shield", "x": 0, "y": 0, "w": 1920, "h": 1080}]}}}
-    monkeypatch.setattr(trust.hyprctl, "query", lambda cmd: shielded)
-    with pytest.raises(trust.TrustError, match="noctalia-panel-click-shield"):
-        trust.guard_keyboard_layer(True, False)
+LONE_PANEL = {"DP-1": {"levels": {"2": [
+    {"namespace": "noctalia-panel", "x": 760, "y": 240, "w": 400, "h": 600}]}}}
+
+
+def test_a_lone_noctalia_panel_is_refused_as_a_launcher(monkeypatch):
+    # review of e44b442: on Hyprland Noctalia lays no click shield behind its
+    # panels (it uses the compositor's focus grab), so its launcher, control
+    # center and polkit prompt map as a lone noctalia-panel holding the keyboard
+    monkeypatch.setattr(trust.hyprctl, "query", lambda cmd: LONE_PANEL)
+    with pytest.raises(trust.TrustError, match="noctalia-panel"):
+        trust.guard_keyboard_layer(True, False)  # keys cannot reach the window named
+    monkeypatch.setenv("HYPRUSE_CONFINE", "class:kitty")
+    with pytest.raises(trust.TrustError, match="cannot be confined"):
+        trust.guard_keyboard_layer(False, False)
+    with pytest.raises(trust.TrustError, match="noctalia-panel"):
+        trust.guard_covering_layer(900, 500)  # a click_ui point under it

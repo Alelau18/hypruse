@@ -653,3 +653,15 @@ def test_a_relative_switch_is_still_the_steps_own(wired, monkeypatch):
     steps = [{"op": "hypr", "action": "workspace", "workspace": "+1"},
              {"op": "keyboard", "action": "key", "keys": "enter"}]
     assert "all 2/2" in _head(srv.sequence(steps, then="none"))
+
+
+def test_a_noctalia_panel_opening_mid_sequence_stops_it(wired, monkeypatch):
+    # review of e44b442: on Hyprland the panel itself takes the keyboard
+    _stream(monkeypatch, [[("openlayer", {"namespace": "noctalia-panel"})]])
+    steps = [
+        {"op": "pointer", "action": "click", "x": 1, "y": 2},
+        {"op": "keyboard", "action": "type", "text": "hi"},
+    ]
+    out = srv.sequence(steps, then="none")
+    assert [s["op"] for s in wired] == ["pointer"]
+    assert "openlayer" in _head(out) and "stopped after 1/2" in _head(out)

@@ -752,19 +752,22 @@ LAYER_LEVELS = ("background", "bottom", "top", "overlay")
 # real lock is a session lock, which trust.session_locked() detects.
 #
 # The noctalia-* names are Noctalia 5.3's (src/shell, src/capture,
-# src/idle). A panel it opens and closes (launcher, control center, its
-# polkit prompt, a panel attached to the bar) comes with a click shield
-# over the rest of the screen, which takes the keyboard exclusively on
-# Hyprland, so the shield, the attached panel, the overview launcher, the
-# window switcher, the screenshot region and the annotation overlay are
-# launchers. A persistent panel, which stays open beside the apps, shares
-# the `noctalia-panel` name and takes the keyboard on demand, which
-# Hyprland also gives it when it maps: its own `panel` kind, which the
-# keyboard guard notes rather than refuses. Its polkit prompt is one of
-# those panels, so it reads as a launcher, never as `auth`: nothing in the
-# layer list tells it apart. Its bar, dock, notifications, OSD, screen and
-# hot corners, desktop widgets, backdrop and idle dimming take no
-# keyboard. Its lock is a session lock.
+# src/idle). A panel it opens and closes (the app launcher, the control
+# center, its polkit prompt) is a `noctalia-panel` layer that takes the
+# keyboard exclusively; on Hyprland it uses the compositor's focus-grab
+# protocol, not the `noctalia-panel-click-shield` it lays over the screen
+# elsewhere (PanelManager::activateClickShield returns early), so the panel
+# itself is the launcher, as are the shield, a panel attached to the bar,
+# the overview launcher, the window switcher, the screenshot region and the
+# annotation overlay. Two things the layer list cannot tell apart: its
+# polkit prompt is a `noctalia-panel` like the launcher, so it reads as a
+# launcher, never as `auth`; and a persistent panel (a plugin's
+# `persistent = true`), which stays open beside the apps and takes the
+# keyboard only on demand, shares that name and reads as a launcher too.
+# Its desktop-widget editors take the keyboard on demand (`panel`, noted).
+# Its bar, dock, notifications, OSD, screen and hot corners, desktop
+# widgets, backdrop and idle dimming take no keyboard. Its lock is a
+# session lock.
 _AUTH_MARK = "polkit"
 _LAYER_KINDS = (
     (
@@ -774,14 +777,12 @@ _LAYER_KINDS = (
             "omarchy-menu", "omarchy-clipboard", "omarchy-emojis",
             "omarchy-image-selector", "omarchy-keyboard-panel", "omarchy-reminders",
             "omarchy-network-qr", "omarchy-network-speedtest", "omarchy-disk-speedtest",
-            "noctalia-panel-click-shield", "noctalia-attached-panel",
+            "noctalia-panel", "noctalia-attached-panel",
             "noctalia-overview-launcher", "noctalia-window-switcher",
             "noctalia-screenshot-region", "noctalia-annotate",
         ),
     ),
-    # after "launcher": noctalia-panel-click-shield is one, noctalia-panel is not
-    ("panel", ("noctalia-panel", "noctalia-desktop-widgets-editor",
-               "noctalia-lockscreen-widgets-editor")),
+    ("panel", ("noctalia-desktop-widgets-editor", "noctalia-lockscreen-widgets-editor")),
     ("bar", ("waybar", "hyprpanel", "ags-", "bar", "omarchy-bar", "noctalia-bar",
              "noctalia-dock")),
     ("notifications", ("mako", "dunst", "swaync", "notification", "omarchy-notifications",

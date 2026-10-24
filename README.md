@@ -270,7 +270,7 @@ Read this section before installing. **hypruse hands an agent your mouse, your k
    - An app that is already running (a browser) opens its window from the running process, so `launch` takes the first window of the program's class that appears during its wait: one you open in those seconds may be the one moved to the agent's workspace. The result says such a window is not counted as the agent's.
    - On a Hyprland too old to report `stableId`, hypruse tells windows apart by address, pid and class, so a later window of the same app at a reused address passes as the earlier one.
    - GTK 4 password entries report the plain text role over the accessibility interface, so the password-field checks cannot see them; GTK 3 and Qt ones are seen.
-   - Noctalia's polkit prompt is one of its panels, which the layer list does not tell apart from its launcher, so typing with no `window=` while it is open is noted, not refused as an authentication prompt.
+   - Noctalia's panels share one layer name, `noctalia-panel`, which hypruse reads as a launcher: its polkit prompt is one too, so typing with no `window=` while it is open is noted, not refused as an authentication prompt, and a plugin's persistent panel (one that stays open beside your apps) refuses `keyboard` with `window=` while it is open, as a launcher would, although it takes the keyboard only when you click it.
 
 ### Optional confinement
 
