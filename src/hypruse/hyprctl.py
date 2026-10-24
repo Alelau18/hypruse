@@ -275,11 +275,12 @@ def _lua_movetoworkspacesilent(arg: str) -> str:
 _LUA_FULLSCREEN_MODES = {"0": "fullscreen", "1": "maximized"}
 
 
-def _lua_fullscreen(mode: str = "0") -> str:
+def _lua_fullscreen(mode: str = "0", window: str = "") -> str:
     name = _LUA_FULLSCREEN_MODES.get(mode)
     if name is None:
         raise HyprctlError(f"fullscreen {mode}: expected 0 (fullscreen) or 1 (maximized)")
-    return f'hl.dsp.window.fullscreen({{ mode = "{name}", action = "toggle" }})'
+    target = f", window = {lua_str(window)}" if window else ""
+    return f'hl.dsp.window.fullscreen({{ mode = "{name}", action = "toggle"{target} }})'
 
 
 def _lua_togglefloating(window: str = "") -> str:

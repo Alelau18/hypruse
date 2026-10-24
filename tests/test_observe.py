@@ -482,3 +482,67 @@ def test_fullscreen_of_a_target_needs_the_focus_to_have_landed(monkeypatch):
     with pytest.raises(srv.trust.TrustError, match="did not move to 0xabc"):
         srv.hypr("fullscreen", target="0xabc")
     assert ("fullscreen", "0") not in sent
+
+
+# V56: an action on "the active window" acted on whatever had the focus when
+# the dispatch landed, not the window the guards checked
+
+
+@pytest.fixture
+def focused(monkeypatch):
+    monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
+    state = {"active": {"address": "0xa", "stableId": "1", "class": "kitty"}, "sent": []}
+
+    def query(cmd):
+        if cmd == "clients":
+            return [{"address": "0xa", "stableId": "1", "class": "kitty"},
+                    {"address": "0xb", "stableId": "2", "class": "firefox"}]
+        return state["active"]
+
+    monkeypatch.setattr(srv.hyprctl, "query", query)
+    monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: state["sent"].append(a))
+    return state
+
+
+def test_targetless_floating_is_pinned_to_the_checked_window(focused):
+    out = srv.hypr("toggle_floating")
+    assert focused["sent"] == [("togglefloating", "address:0xa")]
+    assert "0xa (kitty, 0xa#1)" in out
+
+
+def test_targetless_fullscreen_on_lua_names_its_window(focused, monkeypatch):
+    monkeypatch.setattr(srv.hyprctl, "_provider", srv.hyprctl.LUA)
+    srv.hypr("fullscreen")
+    assert focused["sent"] == [("fullscreen", "0", "address:0xa")]
+    assert srv.hyprctl.lua_dispatch("fullscreen", ("0", "address:0xa")).endswith(
+        'window = "address:0xa" })')
+
+
+def test_targetless_fullscreen_on_hyprlang_refuses_a_focus_that_moved(focused, monkeypatch):
+    reads = iter([{"address": "0xa", "stableId": "1", "class": "kitty"},  # what the guards saw
+                  {"address": "0xb", "stableId": "2", "class": "firefox"}])  # right before
+    monkeypatch.setattr(srv, "_guarded_active_client", lambda: next(reads))
+    monkeypatch.setattr(srv.hyprctl, "query", lambda cmd: next(reads))
+    with pytest.raises(srv.trust.TrustError, match="focus moved from 0xa"):
+        srv.hypr("fullscreen")
+    assert focused["sent"] == []
+
+
+def test_a_bind_reads_the_seat_again_right_before_it_runs(monkeypatch):
+    monkeypatch.setattr(srv.safety, "touch", lambda *a: None)
+    checks = []
+
+    def seat():
+        checks.append(1)
+        if len(checks) > 1:
+            raise srv.trust.TrustError("the seat moved since hypruse last acted")
+
+    monkeypatch.setattr(srv.trust, "guard_seat", seat)
+    monkeypatch.setattr(srv.trust, "guard_use_bind", lambda *a, **k: None)
+    monkeypatch.setattr(srv.hyprctl, "find_bind",
+                        lambda combo: {"combo": "SUPER+Q", "action": "killactive", "arg": ""})
+    sent = []
+    monkeypatch.setattr(srv.hyprctl, "dispatch", lambda *a: sent.append(a))
+    with pytest.raises(srv.trust.TrustError, match="seat moved"):
+        srv.use_bind("SUPER+Q")
+    assert len(checks) == 2 and sent == []  # refused by the check next to the dispatch

@@ -274,6 +274,14 @@ All notable changes to this project are documented here. The format follows
   window under it. A digit workspace selector (`HYPRUSE_AGENT_WORKSPACES`,
   `HYPRUSE_CONFINE=workspace:3`) matches the workspace with that number
   only, as Hyprland resolves it, never one named "3"; `name:3` names it.
+- **Actions on "the active window" are pinned to the window checked.**
+  `hypr toggle_floating` and `fullscreen` with no target acted on
+  whatever had the focus when the dispatch landed. Floating (and
+  fullscreen under the Lua manager) now names the checked window;
+  hyprlang's fullscreen takes no window, so the focused window is read
+  again right before it and must be the same one. The result names the
+  window and its key. Under `HYPRUSE_STRICT`, `use_bind` checks the seat
+  again right before its dispatch.
 - **What the guards checked is what gets the input.** Foreground
   `keyboard(window=...)` and `hypr fullscreen` with a target now confirm
   the target holds the focus after the focus dispatch and send nothing

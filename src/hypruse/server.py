@@ -511,6 +511,24 @@ def _active_address() -> str | None:
     return None
 
 
+def _pinned(client: dict[str, Any]) -> str:
+    """How a result names the window an action was pinned to: its address,
+    class, and the key that tells it from a later window at that address."""
+    return (f"{client.get('address')} ({client.get('class', '')}, "
+            f"{hyprctl.window_key(client)})")
+
+
+def _still_focused(client: dict[str, Any], what: str) -> None:
+    """Refuse unless the window the guards checked still has the focus, by
+    its key, read now: for a dispatch that acts on the focused window."""
+    now = hyprctl.query("activewindow") or {}
+    if hyprctl.window_key(now) != hyprctl.window_key(client):
+        raise trust.TrustError(
+            f"the focus moved from {client.get('address')} to {now.get('address') or 'none'} "
+            f"since it was checked, so {what} would land on another window; nothing was sent"
+        )
+
+
 def _focus_landed(address: str, what: str) -> None:
     """Refuse unless `address` holds the focus now. Every guard ran on that
     window before the focus dispatch, and what follows (keys from the
@@ -2065,6 +2083,7 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
     # their window and skip it, to avoid false refusals.
     if action in ("workspace", "focus_window"):
         trust.guard_seat()
+    active = None
     if target and action != "workspace":
         trust.guard_window(target)
     elif not target and action in ("fullscreen", "toggle_floating"):
@@ -2098,12 +2117,28 @@ def hypr(action: str, target: str = "", workspace: str = "", then: str = "none")
             # fullscreen acts on the focused window: the one the guards
             # checked must be it
             _focus_landed(_addr(target).removeprefix("address:"), "the fullscreen")
-        hyprctl.dispatch("fullscreen", "0")
-        msg = "fullscreen toggled"
+            hyprctl.dispatch("fullscreen", "0")
+            msg = "fullscreen toggled"
+        elif active is not None and hyprctl.provider() == hyprctl.LUA:
+            # pinned to the window the guards checked, not whichever has the
+            # focus when the dispatch lands
+            hyprctl.dispatch("fullscreen", "0", f"address:{active['address']}")
+            msg = f"fullscreen toggled on {_pinned(active)}"
+        elif active is not None:
+            # hyprlang's fullscreen takes no window: the checked window must
+            # still be the focused one, read right before the dispatch
+            _still_focused(active, "the fullscreen")
+            hyprctl.dispatch("fullscreen", "0")
+            msg = f"fullscreen toggled on {_pinned(active)}"
+        else:
+            hyprctl.dispatch("fullscreen", "0")
+            msg = "fullscreen toggled"
     else:  # toggle_floating, the last of _HYPR_PLANS
-        args = (_addr(target),) if target else ()
+        pinned = target or (active["address"] if active is not None else "")
+        args = (_addr(pinned),) if pinned else ()
         hyprctl.dispatch("togglefloating", *args)
-        msg = "floating toggled"
+        msg = f"floating toggled on {_pinned(active)}" if not target and active else (
+            "floating toggled")
     trust.remember_seat()  # our own focus/workspace change re-baselines the seat
     return _acted(msg, then)
 
@@ -2545,6 +2580,9 @@ def use_bind(combo: str, then: str = "none") -> list[Any] | str:
     action, arg = bind["action"], bind.get("arg", "")
     if journal.dry_run():
         return _acted(f"{_DRY} run {bind['combo']}: {action} {arg}".rstrip(), then)
+    # under HYPRUSE_STRICT the seat is read again right before the dispatch:
+    # a bind acts on whatever is focused when it lands (V56)
+    trust.guard_seat()
     hyprctl.dispatch(action, *([arg] if arg else []))
     trust.remember_seat()  # the bind may have moved focus/workspace on our behalf
     return _acted(f"ran {bind['combo']}: {action} {arg}".rstrip(), then)
