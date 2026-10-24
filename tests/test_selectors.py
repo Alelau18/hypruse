@@ -202,3 +202,44 @@ def test_a_note_never_reaches_a_later_call(unseen_desk, monkeypatch):
         srv.hypr("close_window", target="class:streetfighter")  # set the note, then refused
     monkeypatch.setattr(srv.trust, "guard_window", lambda t: None)
     assert UNSEEN not in str(srv.hypr("workspace", workspace="2"))
+
+
+# review of bb1ad8c: with the real refresh, every call starts by marking the
+# open windows as seen, so the note must be judged against the windows the
+# agent knew BEFORE the call (a sequence refreshes before its steps resolve)
+
+
+@pytest.fixture
+def decoy(desk, monkeypatch):
+    from conftest import REAL_NOTE_CLIENTS
+
+    monkeypatch.setattr(srv, "_note_clients", REAL_NOTE_CLIENTS)
+    # the agent's previous call saw Street Fighter and the first kitty; the
+    # htop window and its "class" appeared since
+    monkeypatch.setattr(srv, "_known_clients", {srv.hyprctl.window_key(c) for c in (SF6, KITTY1)})
+    monkeypatch.setattr(srv.hinput, "type_text", lambda t: None)
+    monkeypatch.setattr(srv.trust, "guard_session_lock", lambda *a: "")
+    monkeypatch.setattr(srv.trust, "guard_keyboard_layer", lambda *a: "")
+    return desk
+
+
+def test_a_standalone_call_notes_a_new_window_once(decoy):
+    assert UNSEEN in str(srv.keyboard("type", text="hi", window="title:^htop$"))
+    assert UNSEEN not in str(srv.keyboard("type", text="hi", window="title:^htop$"))
+
+
+def test_a_sequence_notes_a_new_window_once(decoy):
+    steps = [{"op": "keyboard", "action": "type", "text": "hi", "window": "title:^htop$"},
+             {"op": "hypr", "action": "focus_window", "target": "title:^htop$"}]
+    first = str(srv.sequence(steps, stop_on_change=False, then="none"))
+    assert first.count(UNSEEN) == 2  # the keyboard step and the hypr step
+    second = str(srv.sequence(steps, stop_on_change=False, then="none"))
+    assert UNSEEN not in second
+
+
+def test_a_step_refused_after_its_selector_resolved_still_notes_it(decoy, monkeypatch):
+    monkeypatch.setattr(srv.trust, "guard_window", lambda t: (_ for _ in ()).throw(
+        srv.trust.TrustError("outside the scope")))
+    out = str(srv.sequence([{"op": "hypr", "action": "close_window", "target": "title:^htop$"}],
+                           stop_on_change=False, then="none"))
+    assert "ERROR" in out and UNSEEN in out

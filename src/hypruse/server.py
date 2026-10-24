@@ -515,11 +515,19 @@ def _select(window: str) -> str:
 _UNSEEN_NOTE = ("; note: {selector} matched {address} ({cls}), a window that was not there at "
                 "the agent's previous call: its class and title are the app's own claim")
 _unseen: contextvars.ContextVar[str] = contextvars.ContextVar("hypruse_unseen", default="")
+# the known windows as they were when a sequence started, before its own
+# refresh; _NO_BASELINE outside a sequence (each tool's _select runs before
+# its refresh, so _known_clients is still the previous call's)
+_NO_BASELINE: Any = object()
+_seen_baseline: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "hypruse_seen_baseline", default=_NO_BASELINE)
 
 
 def _note_if_unseen(selector: str, client: dict[str, Any]) -> None:
     key = hyprctl.window_key(client)
-    if _known_clients is None or key in _known_clients or key in trust.owned():
+    baseline = _seen_baseline.get()
+    known = _known_clients if baseline is _NO_BASELINE else baseline
+    if known is None or key in known or key in trust.owned():
         return
     _unseen.set(_UNSEEN_NOTE.format(selector=selector, address=client.get("address"),
                                     cls=client.get("class", "")))
@@ -3248,6 +3256,19 @@ def sequence(
     default, 'screenshot', 'ui', 'none'). `background` applies to every
     pointer, keyboard and click_ui step that does not set its own, and
     background=true refuses a hypr step that takes the human's view."""
+    # selectors in the steps are judged against the windows known BEFORE
+    # this call refreshes them (V44): the refresh would make a window that
+    # appeared since the agent's previous call look already seen
+    seen = _seen_baseline.set(None if _known_clients is None else frozenset(_known_clients))
+    try:
+        return _run_sequence(steps, stop_on_change, then, background)
+    finally:
+        _seen_baseline.reset(seen)
+
+
+def _run_sequence(
+    steps: list[dict[str, Any]], stop_on_change: bool, then: str, background: bool | None
+) -> list[Any] | str:
     safety.touch("sequence")
     _check_then(then)
     _note_clients()  # what wait_for(window_open) counts as already there
@@ -3346,7 +3367,9 @@ def sequence(
                         elif after_step != before_step:
                             pressed_here = after_step
             except Exception as exc:
-                results.append(f"[{i}] {step.get('op')}: ERROR {exc}")
+                # a step refused after its selector resolved still says so
+                results.append(f"[{i}] {step.get('op')}: ERROR {exc}{step_note or _unseen.get()}")
+                _unseen.set("")
                 stopped = f"step {i} raised: {exc}"
                 break
             label = step.get("action") or step.get("event") or ""
