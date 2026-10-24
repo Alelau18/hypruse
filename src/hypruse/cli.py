@@ -296,6 +296,7 @@ def stop() -> int:
     from hypruse import safety
 
     stopped = 0
+    _clear_pending_launches()
     held = _release_remembered_hold()
     if held:
         print(f"released the {held} button a `pointer down` left held")
@@ -343,6 +344,20 @@ def stop() -> int:
         return 1
     print(f"stopped hypruse (pid {pid})")
     return 0
+
+
+def _clear_pending_launches() -> None:
+    """After a stop, no window a timed-out launch opens late is adopted as
+    the agent's (the server's own record ends with the server)."""
+    from hypruse import cli_state, session, trust
+
+    with contextlib.suppress(Exception):
+        session.ensure_session_env()
+        if not (cli_state.load().get("trust") or {}).get("launches"):
+            return
+        cli_state.restore()
+        trust.clear_pending_launches()
+        cli_state.save()
 
 
 def _release_remembered_hold() -> str | None:

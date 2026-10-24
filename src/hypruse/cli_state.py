@@ -144,6 +144,10 @@ def _merge(current: dict[str, Any], mine: dict[str, Any]) -> dict[str, Any]:
         cur_trust.get("seat") or my_trust["seat"]
     )
     notify_ts = max(trust.clamp_notify_ts(cur_trust.get("notify_ts")), float(my_trust["notify_ts"]))
+    # this process's launches when it launched or stopped something, else
+    # the file's, as for the seat: a stop's clearing must not be undone
+    launches = my_trust["launches"] if my_trust["launches"] != old_trust.get("launches") else (
+        cur_trust.get("launches") or my_trust["launches"])
     marks = mine["marks"] if mine["marks"] != _restored.get("marks") else (
         current.get("marks") or mine["marks"]
     )
@@ -160,7 +164,8 @@ def _merge(current: dict[str, Any], mine: dict[str, Any]) -> dict[str, Any]:
             {a for a in flags["known_clients"] if hyprctl.is_window_key(a)} | set(known))
     flags.update(changed)
     return {
-        "trust": {"owned": sorted(owned), "seat": seat, "notify_ts": notify_ts},
+        "trust": {"owned": sorted(owned), "seat": seat, "notify_ts": notify_ts,
+                  "launches": launches},
         "marks": marks,
         "flags": flags,
     }

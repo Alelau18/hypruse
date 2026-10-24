@@ -289,8 +289,23 @@ def _note_clients(clients: Any = None) -> None:
             return
     if not isinstance(clients, list):
         return
+    if trust.any_launch_pending():
+        _adopt_late_launches(clients)
     # by window_key: a new window at an address a closed one held is new
     _known_clients = {k for c in clients if (k := hyprctl.window_key(c)) is not None}
+
+
+def _adopt_late_launches(clients: list[Any]) -> None:
+    """Record as the agent's a window a timed-out launch opened late: its
+    process carries that launch's token (the proof launch itself uses;
+    never its class or its timing)."""
+    owned = trust.owned()
+    for c in clients:
+        key = hyprctl.window_key(c) if isinstance(c, dict) else None
+        if key is None or key in owned:
+            continue
+        if trust.launch_pending(_launch_token_of(c.get("pid"))):
+            trust.note_launched(c, c.get("class", ""))
 
 
 def known_clients_state() -> list[str] | None:
@@ -2143,13 +2158,19 @@ def _with_token(command: str, token: str) -> str:
 
 def _carries_token(pid: Any, token: str) -> bool:
     """Whether a process's environment holds this launch's token."""
-    if not token:
-        return False
+    return bool(token) and _launch_token_of(pid) == token
+
+
+def _launch_token_of(pid: Any) -> str | None:
+    """The HYPRUSE_LAUNCH value in a process's environment, if any."""
     try:
         with open(f"/proc/{int(pid)}/environ", "rb") as f:
-            return f"{_LAUNCH_VAR}={token}".encode() in f.read().split(b"\0")
+            for item in f.read().split(b"\0"):
+                if item.startswith(f"{_LAUNCH_VAR}=".encode()):
+                    return item.split(b"=", 1)[1].decode(errors="replace")
     except (OSError, ValueError, TypeError):
-        return False
+        pass
+    return None
 
 
 def _on_workspace(workspace: str, ws: Any) -> bool:
@@ -2334,11 +2355,17 @@ def launch(
     win = _launch_and_wait(rule + _with_token(command, token), wait_s,
                            lambda w: match(w) is not None)
     if win is None:
+        # a window that maps late is recorded then, by its token (V68)
+        trust.note_launch(token, pending=True)
         return (
             f"launched, but no new window appeared within {wait_s:.0f}s, slow or "
             "single-instance apps may open late and on their own workspace; call "
-            "desktop() to find the window, then hypr move_window if needed"
+            "desktop() to find the window, then hypr move_window if needed. A window "
+            f"the command opens within {trust.LAUNCH_PENDING_S / 60:.0f} minutes is still "
+            "recorded as the agent's (HYPRUSE_CONFINE=launched, HYPRUSE_MARK) when hypruse "
+            "next looks"
         )
+    trust.note_launch(token)
     # owned-set for `launched` confinement; tag + notify when HYPRUSE_MARK.
     # Only a window proven to be this launch's: a class match is not proof
     proven = match(win) == "proven"

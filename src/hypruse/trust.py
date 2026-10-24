@@ -41,7 +41,9 @@ cannot be ruled out.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
+import re
 import sys
 import time
 from typing import Any
@@ -85,6 +87,77 @@ def owned() -> set[str]:
     return set(_owned)
 
 
+# --- launches ---------------------------------------------------------------
+#
+# Each launch exports a random HYPRUSE_LAUNCH token to its command, which
+# everything the command starts inherits. Only a digest of each token is
+# kept, here and in the CLI state, never the token: nothing token-shaped
+# reaches a result or the journal. A launch whose window did not appear
+# within its wait stays pending for a while, so a window that maps late is
+# still recorded as the agent's, on the token's proof alone.
+_LAUNCH_KEEP_S = 24 * 3600.0  # how long a launch is remembered (launched_by_agent)
+LAUNCH_PENDING_S = 120.0  # how long a late window is adopted
+_LAUNCH_MAX = 64
+_DIGEST = re.compile(r"[0-9a-f]{16}")
+_launches: dict[str, dict[str, float]] = {}  # digest -> {"at": issued, "pending_until": t}
+
+
+def launch_digest(token: str) -> str:
+    return hashlib.sha256(f"hypruse-launch:{token}".encode()).hexdigest()[:16]
+
+
+def note_launch(token: str, pending: bool = False) -> None:
+    """Remember a launch's token, by digest; `pending` while its window has
+    not appeared yet."""
+    now = time.time()
+    _launches[launch_digest(token)] = {
+        "at": now, "pending_until": now + LAUNCH_PENDING_S if pending else 0.0}
+    for old in sorted(_launches, key=lambda d: _launches[d]["at"])[:-_LAUNCH_MAX]:
+        del _launches[old]
+
+
+def launch_known(token: str | None) -> bool:
+    """Whether a token value found in a process's environment is one of this
+    agent's launches (a token another process merely claims is not)."""
+    return bool(token) and launch_digest(str(token)) in _launches
+
+
+def launch_pending(token: str | None) -> bool:
+    entry = _launches.get(launch_digest(str(token))) if token else None
+    return entry is not None and entry["pending_until"] >= time.time()
+
+
+def any_launch_pending() -> bool:
+    now = time.time()
+    return any(e["pending_until"] >= now for e in _launches.values())
+
+
+def clear_pending_launches() -> None:
+    """The emergency stop: no late window is adopted after it."""
+    for entry in _launches.values():
+        entry["pending_until"] = 0.0
+
+
+def _restored_launches(raw: Any) -> dict[str, dict[str, float]]:
+    """What export_state wrote, kept only where it can be true: a digest, an
+    issue time in the past and not too old, a pending time not further out
+    than a launch can make it."""
+    now, out = time.time(), {}
+    if not isinstance(raw, dict):
+        return out
+    for digest, entry in raw.items():
+        if not (isinstance(digest, str) and _DIGEST.fullmatch(digest) and isinstance(entry, dict)):
+            continue
+        at, until = entry.get("at"), entry.get("pending_until", 0.0)
+        if not all(isinstance(v, int | float) and not isinstance(v, bool) for v in (at, until)):
+            continue
+        if not now - _LAUNCH_KEEP_S <= at <= now:
+            continue
+        pending = float(until) if now <= until <= at + LAUNCH_PENDING_S else 0.0
+        out[digest] = {"at": float(at), "pending_until": pending}
+    return out
+
+
 # --- cross-process state ------------------------------------------------------
 #
 # The owned-set, the strict seat baseline and the capture-notice limiter live
@@ -100,6 +173,7 @@ def export_state() -> dict[str, Any]:
         "owned": sorted(_owned),
         "seat": {"cursor": _seat["cursor"], "active": _seat["active"]},
         "notify_ts": _last_notify["ts"],
+        "launches": {d: dict(e) for d, e in _launches.items()},
     }
 
 
@@ -125,6 +199,8 @@ def restore_state(state: Any) -> None:
     _seat["active"] = active if hyprctl.is_window_key(active) else None
     ts = state.get("notify_ts")
     _last_notify["ts"] = clamp_notify_ts(ts)
+    _launches.clear()
+    _launches.update(_restored_launches(state.get("launches")))
 
 
 def clamp_notify_ts(ts: Any) -> float:

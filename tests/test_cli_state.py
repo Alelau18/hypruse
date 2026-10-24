@@ -222,3 +222,18 @@ def test_a_closed_window_leaves_the_file_too(monkeypatch):
     cli_state.restore()
     cli_state.save()
     assert json.loads(cli_state.path().read_text())["trust"]["owned"] == [AAA]
+
+
+def test_a_stop_clears_the_pending_launches_in_the_file(monkeypatch):
+    # V68: no window a timed-out launch opens is adopted after the panic key
+    from hypruse import cli, session
+
+    monkeypatch.setattr(session, "ensure_session_env", lambda: None)
+    trust._launches.clear()
+    trust.note_launch("tok", pending=True)
+    cli_state.save()
+    trust._launches.clear()
+    cli._clear_pending_launches()
+    saved = json.loads(cli_state.path().read_text())["trust"]["launches"]
+    assert saved and all(e["pending_until"] == 0.0 for e in saved.values())
+    trust._launches.clear()

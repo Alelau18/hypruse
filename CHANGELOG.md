@@ -218,7 +218,10 @@ All notable changes to this project are documented here. The format follows
   command that hands off to another process (`xdg-open`, D-Bus
   activation, a systemd service) carries no token to its window. A single-instance app's window, which opens
   from the already-running process, is still found and moved, and the
-  result says it is not counted as the agent's.
+  result says it is not counted as the agent's. A window the command
+  opens after the wait timed out is still recorded as the agent's for two
+  minutes, by its token alone, when hypruse next looks (`hypruse stop`
+  ends that); only digests of the tokens are kept.
 - **Replay checks the window, not just its address.** The journal records
   which window each call acted on (`targets`: its address with Hyprland's
   `stableId`, and its class), and replay treats an address that now

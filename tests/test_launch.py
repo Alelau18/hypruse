@@ -7,6 +7,7 @@ entirely.
 """
 
 import itertools
+import json
 
 import pytest
 
@@ -312,3 +313,79 @@ def test_a_window_on_the_humans_own_workspace_is_not_proven_by_landing(monkeypat
     out = server.launch("sleep 30", workspace="1", wait_s=3)
     assert isinstance(out, str) and "no new window" in out
     assert owned() == set()
+
+
+# V68: a window a timed-out launch opens late is still the agent's, on the
+# token's proof alone
+
+
+from conftest import REAL_NOTE_CLIENTS  # noqa: E402  (conftest stubs the module attribute)
+
+
+@pytest.fixture
+def launches(monkeypatch):
+    from hypruse import trust
+
+    trust._launches.clear()
+    trust._owned.clear()
+    yield trust
+    trust._launches.clear()
+    trust._owned.clear()
+
+
+def _timed_out_launch(monkeypatch):
+    issued = []
+    real = server._with_token
+    monkeypatch.setattr(server, "_with_token", lambda c, t: issued.append(t) or real(c, t))
+    fake = FakeHyprctl([[EXISTING]])
+    _patch(monkeypatch, fake)
+    clock = itertools.count(start=0, step=1.0)
+    monkeypatch.setattr(server.time, "monotonic", lambda: next(clock))
+    out = server.launch("slowapp", background=False, wait_s=2)
+    return issued[0], out
+
+
+def test_a_late_window_carrying_the_token_is_adopted(monkeypatch, no_sleep, launches):
+    token, out = _timed_out_launch(monkeypatch)
+    assert token not in out and "still recorded as the agent's" in out
+    late = dict(OURS, pid=5151)
+    other = dict(HUMAN, pid=6161)
+    envs = {5151: token, 6161: "made-up"}
+    monkeypatch.setattr(server, "_launch_token_of", lambda pid: envs.get(pid))
+    REAL_NOTE_CLIENTS([EXISTING, late, other])
+    assert launches.owned() == {server.hyprctl.window_key(late)}
+
+
+def test_a_stop_ends_the_wait_for_a_late_window(monkeypatch, no_sleep, launches):
+    token, _ = _timed_out_launch(monkeypatch)
+    launches.clear_pending_launches()
+    monkeypatch.setattr(server, "_launch_token_of", lambda pid: token)
+    REAL_NOTE_CLIENTS([dict(OURS, pid=5151)])
+    assert launches.owned() == set()
+
+
+def test_a_late_window_after_the_pending_time_is_not_adopted(monkeypatch, no_sleep, launches):
+    token, _ = _timed_out_launch(monkeypatch)
+    for entry in launches._launches.values():
+        entry["pending_until"] = launches.time.time() - 1
+    monkeypatch.setattr(server, "_launch_token_of", lambda pid: token)
+    REAL_NOTE_CLIENTS([dict(OURS, pid=5151)])
+    assert launches.owned() == set()
+
+
+def test_the_record_keeps_digests_and_only_believable_ones(launches):
+    import time
+
+    launches.note_launch("secret-token", pending=True)
+    exported = launches.export_state()["launches"]
+    assert "secret-token" not in json.dumps(exported)
+    now = time.time()
+    launches.restore_state({"launches": {
+        **exported,
+        "0123456789abcdef": {"at": now + 999, "pending_until": 0},       # issued in the future
+        "fedcba9876543210": {"at": now, "pending_until": now + 9999},    # pending too long
+        "not-a-digest": {"at": now, "pending_until": 0},
+    }})
+    assert launches.launch_pending("secret-token")
+    assert set(launches._launches) == {*exported, "fedcba9876543210"}
+    assert launches._launches["fedcba9876543210"]["pending_until"] == 0.0
