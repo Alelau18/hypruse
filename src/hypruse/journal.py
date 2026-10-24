@@ -52,6 +52,7 @@ import contextlib
 import fcntl
 import functools
 import hashlib
+import hmac
 import inspect
 import json
 import os
@@ -270,15 +271,46 @@ def _emit(entry: dict[str, Any]) -> None:
 # --- redaction --------------------------------------------------------------
 
 
+_keys: dict[str, bytes] = {}
+
+
+def _digest_key() -> bytes:
+    """The journal's own random key, 0600 beside it (`<journal>.key`),
+    created on first use. An unsalted hash prefix next to the exact length
+    gave a four-digit PIN back to anyone who read the journal; keyed, a
+    digest still tells two entries that typed the same thing apart from
+    two that did not, but only to someone who also holds the key, which a
+    journal handed over for review does not carry. A key that cannot be
+    stored is this process's own, never none."""
+    target = path()
+    name = str(target) if target is not None else ""
+    if name in _keys:
+        return _keys[name]
+    key = os.urandom(32)
+    if target is not None:
+        key_path = target.with_name(target.name + ".key")
+        with contextlib.suppress(OSError):
+            target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+            try:
+                fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600)
+                with os.fdopen(fd, "wb") as f:
+                    f.write(key)
+            except FileExistsError:
+                with open(key_path, "rb") as f:
+                    stored = f.read(64)
+                if len(stored) == 32:
+                    key = stored
+    _keys[name] = key
+    return key
+
+
 def _digest(text: str) -> dict[str, Any]:
     """What a keystroke looks like in the record when text is not kept: a
-    length and a digest, enough to prove two entries typed the same thing
-    without the record itself becoming the password leak."""
-    return {
-        "redacted": True,
-        "chars": len(text),
-        "sha256": hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:12],
-    }
+    length and a keyed digest, enough to prove two entries typed the same
+    thing without the record itself becoming the password leak."""
+    mac = hmac.new(_digest_key(), text.encode("utf-8", "surrogatepass"), hashlib.sha256)
+    return {"redacted": True, "chars": len(text), "hmac": mac.hexdigest()[:16]}
 
 
 def redact(value: Any) -> Any:

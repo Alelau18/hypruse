@@ -133,7 +133,7 @@ def test_typed_text_is_a_digest_by_default(journal_file):
 def test_the_digest_is_stable_across_calls(journal_file):
     acted("type", text="same")
     acted("type", text="same")
-    a, b = (e["args"]["text"]["sha256"] for e in entries(journal_file))
+    a, b = (e["args"]["text"]["hmac"] for e in entries(journal_file))
     assert a == b
 
 
@@ -468,3 +468,21 @@ def test_a_shortcut_stays_readable_in_the_record(keys):
 def test_keys_in_a_sequence_step_are_digested_too():
     steps = journal.redact({"steps": [{"op": "keyboard", "action": "key", "keys": "x"}]})
     assert journal.redacted_text(steps["steps"][0]["keys"])
+
+
+def test_the_digest_is_keyed_so_a_short_secret_is_not_recoverable(journal_file, monkeypatch):
+    # F54/F7: sha256("1234")[:12] beside chars=4 gave a PIN back to a reader
+    import hashlib
+
+    monkeypatch.setattr(journal, "_keys", {})
+    acted("type", text="1234")
+    recorded = entries(journal_file)[0]["args"]["text"]
+    assert "sha256" not in recorded
+    plain = hashlib.sha256(b"1234").hexdigest()
+    assert not plain.startswith(recorded["hmac"][:12])
+    key = journal_file.with_name(journal_file.name + ".key")
+    assert key.stat().st_mode & 0o077 == 0 and len(key.read_bytes()) == 32
+    # the same key next time, so one journal's digests still compare
+    monkeypatch.setattr(journal, "_keys", {})
+    acted("type", text="1234")
+    assert entries(journal_file)[1]["args"]["text"]["hmac"] == recorded["hmac"]

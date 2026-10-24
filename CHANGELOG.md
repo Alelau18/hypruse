@@ -246,6 +246,10 @@ All notable changes to this project are documented here. The format follows
   window's process, so background typing went into that process's field
   instead of the terminal. A root on another process whose connection
   descends from the window's process is no longer the window's.
+- **The journal's text digest is keyed.** It was an unsalted SHA-256
+  prefix beside the exact length, so a four-digit PIN came straight back
+  from it. It is now an HMAC-SHA256 prefix (`hmac`, not `sha256`) under a
+  random key stored 0600 beside the journal.
 - **`HYPRUSE_STRICT` guards every action that takes the human's view:**
   `hypr workspace` (relative switches depend on the seat), `hypr
   focus_window`, and a `launch` that opens on the human's workspace. A
