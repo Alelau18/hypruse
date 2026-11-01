@@ -153,17 +153,18 @@ def test_ui_roundtrip_reads_a11y_tree():
                 break
         assert win, "yad did not launch"
         # the window maps before the app registers in the AT-SPI tree, so
-        # retry until ui returns elements (a list serializes to JSON objects;
-        # the not-yet-registered fallback is a single non-JSON string)
+        # retry until ui returns elements (the elements arrive as one JSON
+        # array; the not-yet-registered fallback is a single non-JSON string)
         elements = []
         for _ in range(20):
             result = call("ui", {"window": win["address"]}, "file")
             assert not result.isError, result.content
             texts = [c.text for c in result.content if isinstance(c, TextContent)]
             try:
-                elements = [json.loads(t) for t in texts]
+                parsed = [json.loads(t) for t in texts]
             except json.JSONDecodeError:
-                elements = []  # fallback string, app not registered yet
+                parsed = []  # fallback string, app not registered yet
+            elements = [e for p in parsed for e in (p if isinstance(p, list) else [p])]
             if elements:
                 break
             time.sleep(0.3)

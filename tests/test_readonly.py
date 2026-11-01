@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import json
 import re
 
 import pytest
@@ -146,6 +147,53 @@ def test_no_tool_sends_its_result_twice(reloaded, monkeypatch):
     monkeypatch.setenv("HYPRUSE_CLIPBOARD", "1")
     for t in asyncio.run(reloaded(None).mcp.list_tools()):
         assert t.outputSchema is None, t.name
+
+
+def test_object_results_come_back_as_one_compact_json_text(reloaded, monkeypatch):
+    # with no structured copy, FastMCP renders a dict as JSON indented by 2
+    # and a list of dicts as one indented text block per item: the desktop
+    # snapshot came back 1.7x its compact size, and binds one block per bind
+    from mcp.types import ImageContent
+
+    module = reloaded(None)
+    snap = {"windows": [{"title": "✳ x", "at": [1, 2]}]}
+    binds = [{"keys": "SUPER+Q", "dispatcher": "killactive"}, {"keys": "SUPER+E"}]
+    img = ImageContent(type="image", data="AAAA", mimeType="image/png")
+
+    def desktop():
+        return snap
+
+    def binds_():
+        return binds
+
+    def zoom():
+        return [img, {"scale": 1.0}]
+
+    def ui():
+        return []  # an empty list of objects (binds with none) went out as no content
+
+    def marks():
+        return "no window matches"
+
+    binds_.__name__ = "binds"
+    monkeypatch.setattr(module, "_OBSERVE_TOOLS", (desktop, binds_, zoom, ui, marks))
+    monkeypatch.setattr(module, "READONLY", True)
+    app = module.build_app()
+
+    def call(name):
+        out = asyncio.run(app.call_tool(name, {}))
+        assert isinstance(out, list), "a (content, structuredContent) pair: sent twice"
+        return out
+
+    out = call("desktop")
+    assert [b.type for b in out] == ["text"]
+    assert out[0].text == '{"windows":[{"title":"✳ x","at":[1,2]}]}'
+    out = call("binds")
+    assert [b.type for b in out] == ["text"] and json.loads(out[0].text) == binds
+    out = call("zoom")
+    assert [b.type for b in out] == ["image", "text"] and out[1].text == '{"scale":1.0}'
+    assert [(b.type, b.text) for b in call("ui")] == [("text", "[]")]
+    assert [(b.type, b.text) for b in call("marks")] == [("text", "no window matches")]
 
 
 def test_the_acting_tools_explain_background_mode(reloaded, monkeypatch):

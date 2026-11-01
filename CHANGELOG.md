@@ -50,7 +50,14 @@ All notable changes to this project are documented here. The format follows
   and again serialized into `structuredContent`, so a screenshot carried
   its base64 image a second time as text, and a 1920x120 strip went past a
   client's 25k-token result cap. The tools are registered with
-  `structured_output=False`; nothing read the structured copy.
+  `structured_output=False`; nothing read the structured copy. Object
+  results (`desktop`, `launch`, `wait_for`, a dict inside a list) go out as
+  compact JSON text, and a list of objects (`ui`'s elements, `binds`) as
+  one JSON array block, `[]` when empty: FastMCP's own rendering indents by
+  2 (the desktop snapshot at 1.7x its compact size), gives each object in a
+  list a block of its own, and sends an empty list as no content at all.
+  Observations appended with `then=`, screenshot metadata, the `marks`
+  legend and `click_ui`'s candidates use the same compact JSON.
 - **CLI state per compositor instance.** The shell verbs kept one
   `cli-state.json` per user, which a verb under another Hyprland instance
   (a nested test compositor) overwrote, discarding the other's marks,

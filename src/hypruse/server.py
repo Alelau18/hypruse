@@ -240,6 +240,13 @@ def use_plain_blocks() -> None:
     _plain_blocks = True
 
 
+def _dump(obj: Any) -> str:
+    """JSON as tools send it to the agent: compact, and non-ASCII kept as
+    itself (a window title, a label) rather than escaped. One format for a
+    tool's own object result and for observations appended to one."""
+    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
 def _text(text: str) -> Any:
     if _plain_blocks:
         return Block("text", text=text)
@@ -397,7 +404,7 @@ def _package(data: bytes, meta: dict[str, Any]) -> list[Any]:
         image_block = _image(data=base64.b64encode(data).decode(),
             mimeType=f"image/{meta['format']}",
         )
-        return [image_block, _text(json.dumps(meta))]
+        return [image_block, _text(_dump(meta))]
     d = _runtime_dir()
     path = d / f"shot-{int(time.time() * 1000)}.{meta['format']}"
     path.write_bytes(data)
@@ -406,7 +413,7 @@ def _package(data: bytes, meta: dict[str, Any]) -> list[Any]:
     return [
         _text(f"screenshot saved, read this file to view the screen: {path}"
         ),
-        _text(json.dumps(meta)),
+        _text(_dump(meta)),
     ]
 
 
@@ -987,7 +994,7 @@ def marks(window: str = "", name: str = "") -> list[Any] | str:
         if READONLY  # click_ui does not exist in read-only mode
         else "click_ui(mark=N) clicks a numbered mark"
     )
-    legend_text = _text(json.dumps({"legend": legend, "hint": hint}),
+    legend_text = _text(_dump({"legend": legend, "hint": hint}),
     )
     marked = _draw_marks(data, meta["format"], points)
     if marked is None:
@@ -1034,7 +1041,7 @@ def _acted(msg: str, then: str, window: str = "", fallback: bool = True) -> list
     # note on the result, never an error that reads as the action failing
     if then == "desktop":
         try:
-            return [head, _text(json.dumps(hyprctl.snapshot()))]
+            return [head, _text(_dump(hyprctl.snapshot()))]
         except Exception as exc:
             return _observe_failed(msg, then, exc)
     if then == "screenshot":
@@ -1074,7 +1081,7 @@ def _acted(msg: str, then: str, window: str = "", fallback: bool = True) -> list
                 # the parent), which is what the agent actually wants to see.
                 with contextlib.suppress(Exception):
                     view = _ui_read()
-        payload = view if isinstance(view, str) else json.dumps(view)
+        payload = view if isinstance(view, str) else _dump(view)
         return [head, _text(payload)]
     raise ValueError(f"unknown then {then!r}: {'|'.join(_OBSERVE_MODES)}")
 
@@ -1664,7 +1671,7 @@ def click_ui(
                 _text(f"{name!r} is ambiguous ({len(pool)} candidates){_take_unseen()}; call "
                     "again with index=N (0-based) or a more specific name:",
                 ),
-                _text(json.dumps(public)),
+                _text(_dump(public)),
             ]
         e = pool[0]
         x, y = e["x"], e["y"]
@@ -3747,6 +3754,32 @@ _TITLES = {
 }
 
 
+def _compact(result: Any) -> Any:
+    """A tool's result as a client should receive it. With no structured
+    copy, FastMCP renders a dict as JSON indented by 2 and a list of dicts as
+    one indented text block per item (the desktop snapshot at 1.7x its
+    compact size, `binds` and `ui` as one block per entry), and an empty list
+    as no content at all; objects go out as compact JSON text instead, a list
+    of them (empty included) as one block."""
+    if isinstance(result, dict):
+        return _dump(result)
+    if isinstance(result, list):
+        if all(isinstance(item, dict) for item in result):
+            return _dump(result)
+        return [_dump(item) if isinstance(item, dict) else item for item in result]
+    return result
+
+
+def _compact_results(fn: Callable[..., Any]) -> Callable[..., Any]:
+    # functools.wraps keeps the name, docstring and signature FastMCP builds
+    # the tool's description and input schema from
+    @functools.wraps(fn)
+    def tool(*args: Any, **kwargs: Any) -> Any:
+        return _compact(fn(*args, **kwargs))
+
+    return tool
+
+
 def build_app() -> Any:
     """The FastMCP application with the tools registered for this mode.
     Observation tools are annotated read-only and closed-world (they read
@@ -3766,7 +3799,7 @@ def build_app() -> Any:
         name = observe_tool.__name__
         app_.tool(annotations=ToolAnnotations(
             title=_TITLES[name], readOnlyHint=True, openWorldHint=False
-        ), structured_output=False)(observe_tool)
+        ), structured_output=False)(_compact_results(observe_tool))
     if not READONLY:
         acting = [pointer, keyboard, click_ui, hypr, launch, use_bind, sequence]
         if CLIPBOARD:
@@ -3775,7 +3808,7 @@ def build_app() -> Any:
             name = acting_tool.__name__
             app_.tool(annotations=ToolAnnotations(
                 title=_TITLES[name], readOnlyHint=False, destructiveHint=True
-            ), structured_output=False)(acting_tool)
+            ), structured_output=False)(_compact_results(acting_tool))
     return app_
 
 
