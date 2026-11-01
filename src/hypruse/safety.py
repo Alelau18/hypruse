@@ -55,6 +55,10 @@ def _write(payload: dict) -> None:
         return
     with _write_lock:
         tmp = _state_path.with_suffix(".tmp")
+        # made at init, but not necessarily still there: a nested session's
+        # runtime directory can be emptied under a live server
+        # (hypruse-sandbox's `down`), which failed every later call
+        tmp.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(json.dumps(payload))
         tmp.replace(_state_path)
 

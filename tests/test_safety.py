@@ -21,6 +21,22 @@ def test_beacon_lifecycle(tmp_path, monkeypatch):
     assert not path.exists()
 
 
+def test_touch_recreates_a_beacon_directory_removed_under_the_server(tmp_path, monkeypatch):
+    # the directory is made once, at init; hypruse-sandbox's `down` (run by a
+    # human while an agent's MCP server still serves that sandbox) removes it,
+    # and every call that touched the beacon then failed with ENOENT on
+    # state.tmp for the rest of the server's life
+    import shutil
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    safety.init()
+    shutil.rmtree(tmp_path / "hypruse")
+    safety.touch("launch")
+    state = json.loads((tmp_path / "hypruse" / "state.json").read_text())
+    assert state["pid"] == os.getpid() and state["last_action"] == "launch"
+    safety.shutdown()
+
+
 def test_touch_without_init_is_noop(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     safety.shutdown()  # ensure clean module state

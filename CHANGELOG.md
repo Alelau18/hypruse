@@ -58,6 +58,12 @@ All notable changes to this project are documented here. The format follows
   list a block of its own, and sends an empty list as no content at all.
   Observations appended with `then=`, screenshot metadata, the `marks`
   legend and `click_ui`'s candidates use the same compact JSON.
+- **The beacon survives its directory being removed.**
+  `$XDG_RUNTIME_DIR/hypruse` was made once, at startup; when it was removed under a live
+  server (hypruse-sandbox's `down` while an agent's MCP server still served
+  that sandbox), every call that writes the beacon, all but `desktop` and
+  `binds`, failed with ENOENT on `state.tmp` until the server restarted.
+  Writing the beacon now recreates the directory.
 - **CLI state per compositor instance.** The shell verbs kept one
   `cli-state.json` per user, which a verb under another Hyprland instance
   (a nested test compositor) overwrote, discarding the other's marks,
