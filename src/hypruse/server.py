@@ -3752,7 +3752,12 @@ def build_app() -> Any:
     Observation tools are annotated read-only and closed-world (they read
     the local desktop and change nothing); acting tools are annotated
     destructive, since a click or a keypress can do anything the user
-    could."""
+    could.
+
+    structured_output=False: FastMCP otherwise derives an output schema
+    from each return annotation and sends every result a second time as
+    structuredContent, which for a screenshot is the whole base64 image
+    again, as text."""
     from mcp.server.fastmcp import FastMCP
     from mcp.types import ToolAnnotations
 
@@ -3761,7 +3766,7 @@ def build_app() -> Any:
         name = observe_tool.__name__
         app_.tool(annotations=ToolAnnotations(
             title=_TITLES[name], readOnlyHint=True, openWorldHint=False
-        ))(observe_tool)
+        ), structured_output=False)(observe_tool)
     if not READONLY:
         acting = [pointer, keyboard, click_ui, hypr, launch, use_bind, sequence]
         if CLIPBOARD:
@@ -3770,7 +3775,7 @@ def build_app() -> Any:
             name = acting_tool.__name__
             app_.tool(annotations=ToolAnnotations(
                 title=_TITLES[name], readOnlyHint=False, destructiveHint=True
-            ))(acting_tool)
+            ), structured_output=False)(acting_tool)
     return app_
 
 

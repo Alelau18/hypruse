@@ -137,6 +137,17 @@ def test_every_tool_declares_a_title_and_whether_it_acts(reloaded, monkeypatch):
             assert a.readOnlyHint is False and a.destructiveHint is True, t.name
 
 
+def test_no_tool_sends_its_result_twice(reloaded, monkeypatch):
+    # FastMCP turns a return annotation (`list[Any]`, `str`) into an output
+    # schema, and a tool with one sends every result twice: as content, and
+    # again serialized into structuredContent, base64 image data included.
+    # A 1920x120 screenshot strip came back past a client's 25k-token result
+    # cap that way. Nothing reads the structured copy; the content is the result.
+    monkeypatch.setenv("HYPRUSE_CLIPBOARD", "1")
+    for t in asyncio.run(reloaded(None).mcp.list_tools()):
+        assert t.outputSchema is None, t.name
+
+
 def test_the_acting_tools_explain_background_mode(reloaded, monkeypatch):
     monkeypatch.delenv("HYPRUSE_BACKGROUND", raising=False)
     module = reloaded(None)

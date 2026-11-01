@@ -45,6 +45,12 @@ All notable changes to this project are documented here. The format follows
   releases it.
 
 ### Fixed
+- **Each result is sent once.** FastMCP derived an output schema from
+  every tool's return annotation and sent each result twice: as content,
+  and again serialized into `structuredContent`, so a screenshot carried
+  its base64 image a second time as text, and a 1920x120 strip went past a
+  client's 25k-token result cap. The tools are registered with
+  `structured_output=False`; nothing read the structured copy.
 - **CLI state per compositor instance.** The shell verbs kept one
   `cli-state.json` per user, which a verb under another Hyprland instance
   (a nested test compositor) overwrote, discarding the other's marks,
