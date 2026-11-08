@@ -3795,6 +3795,35 @@ def _one_at_a_time(fn: Callable[..., Any]) -> Callable[..., Any]:
     return call
 
 
+def _explained(fn: Callable[..., Any], tool_error: type[Exception]) -> Callable[..., Any]:
+    """A tool whose failures reach the agent with their reason. mcp 1 put
+    any exception's text in the error result; mcp 2 does that only for its
+    own ToolError and answers anything else with a bare "Error executing
+    tool X", keeping the text in the server's log. Every hypruse refusal
+    says why and what to do instead (a trust layer, a missing bind, a
+    background limit), so each one is raised again as the SDK's ToolError
+    with the same text: what mcp 1 sent."""
+
+    @functools.wraps(fn)
+    def call(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except tool_error:
+            raise
+        except Exception as exc:
+            raise tool_error(str(exc) or type(exc).__name__) from exc
+
+    return call
+
+
+def _sdk_tool_error() -> type[Exception]:
+    try:
+        from mcp.server.mcpserver.exceptions import ToolError
+    except ImportError:
+        from mcp.server.fastmcp.exceptions import ToolError
+    return ToolError
+
+
 def _server(**kwargs: Any) -> Any:
     """The SDK's server class: MCPServer in mcp 2, FastMCP in mcp 1 (where
     the server reports the SDK's version, as it takes no version of its own)."""
@@ -3817,15 +3846,20 @@ def build_app() -> Any:
     from each return annotation and sends every result a second time as
     structuredContent, which for a screenshot is the whole base64 image
     again, as text. The lock is outermost, so a call's result is compacted
-    while it still holds it."""
+    and its failure explained while it still holds it."""
     from mcp.types import ToolAnnotations
 
     app_ = _server(instructions=_instructions)
+    tool_error = _sdk_tool_error()
+
+    def wrapped(fn: Callable[..., Any]) -> Callable[..., Any]:
+        return _one_at_a_time(_explained(_compact_results(fn), tool_error))
+
     for observe_tool in _OBSERVE_TOOLS:
         name = observe_tool.__name__
         app_.tool(annotations=ToolAnnotations(
             title=_TITLES[name], readOnlyHint=True, openWorldHint=False
-        ), structured_output=False)(_one_at_a_time(_compact_results(observe_tool)))
+        ), structured_output=False)(wrapped(observe_tool))
     if not READONLY:
         acting = [pointer, keyboard, click_ui, hypr, launch, use_bind, sequence]
         if CLIPBOARD:
@@ -3834,7 +3868,7 @@ def build_app() -> Any:
             name = acting_tool.__name__
             app_.tool(annotations=ToolAnnotations(
                 title=_TITLES[name], readOnlyHint=False, destructiveHint=True
-            ), structured_output=False)(_one_at_a_time(_compact_results(acting_tool)))
+            ), structured_output=False)(wrapped(acting_tool))
     return app_
 
 

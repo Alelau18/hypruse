@@ -207,6 +207,32 @@ def test_object_results_come_back_as_one_compact_json_text(reloaded, monkeypatch
     assert [(b.type, b.text) for b in call("marks")] == [("text", "no window matches")]
 
 
+def test_a_failing_tool_says_why_on_either_sdk(reloaded, monkeypatch):
+    # mcp 2 answers an exception other than its own ToolError with a bare
+    # "Error executing tool X", which hid every refusal's reason and the way
+    # out it names; mcp 1 sent the text
+    module = reloaded(None)
+
+    def desktop():
+        raise ValueError("no keybind 'SUPER+X'; call binds() for the exact combos")
+
+    def binds():
+        raise module.trust.TrustError("refused: the confinement scope")
+
+    monkeypatch.setattr(module, "_OBSERVE_TOOLS", (desktop, binds))
+    monkeypatch.setattr(module, "READONLY", True)
+    app = module.build_app()
+    for name, why in (("desktop", "call binds() for the exact combos"),
+                      ("binds", "the confinement scope")):
+        try:
+            out = asyncio.run(app.call_tool(name, {}))
+        except Exception as exc:  # the SDK raises; its request handler sends the text
+            text = str(exc)
+        else:
+            text = " ".join(c.text for c in out.content)
+        assert why in text, (name, text)
+
+
 def test_the_acting_tools_explain_background_mode(reloaded, monkeypatch):
     monkeypatch.delenv("HYPRUSE_BACKGROUND", raising=False)
     module = reloaded(None)
