@@ -1269,8 +1269,10 @@ def init_marking(watch_reloads: bool = False) -> None:
     set). Left in place on exit: it only colors windows carrying hypruse's
     own tag. A config reload clears it with every other runtime rule
     (Hyprland keeps only exec rules), so with `watch_reloads` a daemon
-    thread installs it again on every `configreloaded` event: the MCP
-    server's case, which lives across reloads.
+    thread installs it again on every `configreloaded` event, and whenever
+    it reaches the compositor after the install failed or the compositor
+    went away: the MCP server's case, which lives across reloads, and under
+    hypruse-sandbox starts before its compositor and outlives restarts of it.
 
     A failure here does not stop the server: marking makes the agent's
     presence legible, it is not a containment boundary the way confinement
@@ -1281,15 +1283,23 @@ def init_marking(watch_reloads: bool = False) -> None:
     never asked for."""
     if not marking_on():
         return
-    _install_border_rule()
+    # a watcher tries again as soon as the compositor answers, and says so
+    # then if it still fails: a server can start before its compositor
+    installed = _install_border_rule(quiet=watch_reloads)
     if watch_reloads:
-        threading.Thread(target=_reinstall_on_reload, name="hypruse-mark", daemon=True).start()
+        threading.Thread(
+            target=_reinstall_on_reload, kwargs={"installed": installed},
+            name="hypruse-mark", daemon=True,
+        ).start()
 
 
-def _install_border_rule() -> None:
+def _install_border_rule(quiet: bool = False) -> bool:
     try:
         hyprctl.border_rule(_OWNED_TAG, _MARK_COLOR)
+        return True
     except hyprctl.HyprctlError as exc:
+        if quiet:
+            return False
         with contextlib.suppress(OSError, ValueError):  # a client may have closed stderr
             print(
                 f"hypruse: HYPRUSE_MARK is set but the border rule did not install ({exc}); "
@@ -1297,35 +1307,44 @@ def _install_border_rule() -> None:
                 "Hyprland config will still color them",
                 file=sys.stderr,
             )
+        return False
 
 
 def _reinstall_on_reload(
-    stream_factory: Any = None, retry_s: float = 2.0, rounds: int = -1
+    stream_factory: Any = None, retry_s: float = 2.0, rounds: int = -1,
+    installed: bool = True,
 ) -> None:
-    """Put the border rule back after every config reload, for the life of
-    the process. The event comes after the reload cleared the rules, in
-    both config managers. A reload can also switch the manager
+    """Keep the border rule installed for the life of the process. A config
+    reload clears it, and the event comes after the reload cleared the
+    rules, in both config managers; a reload can also switch the manager
     (`reload full-reset`), so the provider is probed again first. The event
     socket closes when the compositor goes away; this waits and reconnects
-    rather than dying, since it is all that keeps the outline up.
-    `stream_factory` and `rounds` are for tests: each reload handled and
-    each lost connection is a round (-1: forever)."""
+    rather than dying, since it is all that keeps the outline up, and
+    installs the rule on connecting unless it is known to be in: the
+    compositor may be a new one (a restarted hypruse-sandbox, which keeps
+    the same signature), or one that was not up yet when `installed` was
+    tried. `stream_factory` and `rounds` are for tests: each reload handled
+    and each lost connection is a round (-1: forever)."""
     from hypruse import events
 
     factory = stream_factory or events.EventStream
     while rounds != 0:
         try:
             with factory() as stream:
+                if not installed:
+                    hyprctl.forget_provider()
+                    installed = _install_border_rule()
                 while rounds != 0:
                     if stream.wait_for({"configreloaded"}, None, timeout=3600) is None:
                         continue
                     rounds -= 1
                     hyprctl.forget_provider()
-                    _install_border_rule()
+                    installed = _install_border_rule()
         except Exception:  # this thread is all that keeps the outline up
             # a lost event socket, or anything unforeseen: wait and start over
             # rather than end the thread and the outline with it, silently
             rounds -= 1
+            installed = False
             time.sleep(retry_s)
 
 

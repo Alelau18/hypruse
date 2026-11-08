@@ -319,7 +319,12 @@ def test_the_border_rule_comes_back_after_every_reload(monkeypatch):
 
     # 2 reloads on one connection, the socket dies, 1 more after the reconnect
     trust._reinstall_on_reload(connect, retry_s=0, rounds=4)
-    assert log == ["reload", "probe", "rule", "reload", "probe", "rule", "reload", "probe", "rule"]
+    assert log == [
+        "reload", "probe", "rule", "reload", "probe", "rule",
+        # back on a compositor that may be a new one (a restarted sandbox
+        # keeps its signature): installed on connecting, then on the reload
+        "probe", "rule", "reload", "probe", "rule",
+    ]
     assert len(opened) == 2  # one connection carries every reload
 
 
@@ -353,7 +358,52 @@ def test_an_unforeseen_failure_does_not_end_the_watcher(monkeypatch):
     monkeypatch.setattr(trust.hyprctl, "forget_provider", lambda: None)
     reloads = []
     trust._reinstall_on_reload(lambda: _Reloads(5, reloads), retry_s=0, rounds=3)
-    assert log == ["rule", "rule"]  # the failed round, then the next reload's install
+    # the reload whose install raised, the reconnect's install, the next reload's
+    assert log == ["rule", "rule", "rule"]
+
+
+def test_a_server_that_starts_before_its_compositor_still_gets_the_rule(monkeypatch, capsys):
+    # hypruse-sandbox starts hypruse first and the sandbox on the first
+    # call: the startup install cannot reach anything, so the watcher
+    # installs the rule once it connects, and only a failure THEN is told
+    from hypruse import events
+
+    monkeypatch.setenv("HYPRUSE_MARK", "1")
+    up = {"yes": False}
+
+    def border_rule(tag, color):
+        if not up["yes"]:
+            raise trust.hyprctl.HyprctlError("cannot reach Hyprland")
+        log.append("rule")
+
+    log = []
+    monkeypatch.setattr(trust.hyprctl, "border_rule", border_rule)
+    monkeypatch.setattr(trust.hyprctl, "forget_provider", lambda: None)
+    kept = {}
+
+    class FakeThread:
+        def __init__(self, target, kwargs, name, daemon):
+            kept.update(kwargs)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(trust.threading, "Thread", FakeThread)
+    trust.init_marking(watch_reloads=True)
+    assert kept == {"installed": False}
+    assert capsys.readouterr().err == ""  # not yet: the watcher tries again
+
+    tries = []
+
+    def connect():
+        tries.append(1)
+        if len(tries) < 3:
+            raise events.EventError("no socket yet")
+        up["yes"] = True
+        return _Reloads(0, [])  # connects, then the socket closes
+
+    trust._reinstall_on_reload(connect, retry_s=0, rounds=3, installed=False)
+    assert log == ["rule"]
 
 
 def test_only_the_server_watches_for_reloads(monkeypatch):
@@ -362,8 +412,9 @@ def test_only_the_server_watches_for_reloads(monkeypatch):
     started = []
 
     class FakeThread:
-        def __init__(self, target, name, daemon):
+        def __init__(self, target, kwargs, name, daemon):
             assert target is trust._reinstall_on_reload and daemon
+            assert kwargs == {"installed": True}
             started.append(name)
 
         def start(self):
