@@ -184,13 +184,15 @@ class FakeSocket:
         if args[0] == "--batch":
             return f"{self.batch_reply}\n\n\n" + json.dumps(self.raw, indent=4)
         assert args[0] == "eval"
+        if args[1].endswith(" = nil"):  # dropping the probe after a refusal
+            return "ok"
         if self.eval_reply.startswith("error:"):
             raise hyprctl.HyprctlError(f"hyprctl {' '.join(args)}: {self.eval_reply}")
         return self.eval_reply
 
 
-def _probe_token(batch_spec):
-    m = re.fullmatch(r'eval __hypruse_bind_probe = "([0-9a-f]{16})" ; j/binds', batch_spec)
+def _probe(batch_spec):
+    m = re.fullmatch(r"eval (__hypruse_bind_probe_[0-9a-f]{16}) = true ; j/binds", batch_spec)
     assert m, batch_spec
     return m.group(1)
 
@@ -198,15 +200,16 @@ def _probe_token(batch_spec):
 def test_run_lua_bind_reads_the_index_with_a_token_and_checks_it(monkeypatch):
     fake = FakeSocket(LUA57_RAW)
     monkeypatch.setattr(hyprctl, "_run", fake)
-    assert hyprctl.run_lua_bind("super + l") == "HL.Dispatcher(close)"
+    assert hyprctl.run_lua_bind("super + l") == ("HL.Dispatcher(close)", "")
     (batch, spec), (verb, code) = fake.calls
-    token = _probe_token(spec)
+    probe = _probe(spec)
     # the token is checked before anything runs, then cleared
-    assert code.startswith(f'if __hypruse_bind_probe ~= "{token}" then error(')
-    assert "__hypruse_bind_probe = nil" in code
+    assert code.startswith(f"if {probe} ~= true then error(")
+    assert f"{probe} = nil" in code
     assert "local f = debug.getregistry()[10]" in code
-    assert code.endswith(
-        "local ok, err = pcall(hl.dispatch, f) if not ok then error(tostring(err), 0) end")
+    assert "local ok, r = pcall(hl.dispatch, f) if not ok then error(tostring(r), 0) end" in code
+    # a function's own { ok = false } is a failure, as a key press reads it
+    assert 'rawget(r, "ok") == false' in code
     # a dispatcher's function prints as no address `binds` showed: type only
     assert "tostring(f)" not in code
     assert ";" not in spec.split(" ; ")[0]  # a batch splits on it
@@ -238,7 +241,8 @@ def test_run_lua_bind_refuses_what_it_cannot_resolve(monkeypatch, raw, combo, ma
     monkeypatch.setattr(hyprctl, "_run", fake)
     with pytest.raises(hyprctl.HyprctlError, match=match):
         hyprctl.run_lua_bind(combo)
-    assert [c[0] for c in fake.calls] == ["--batch"]  # nothing evaluated
+    # nothing ran: the one eval after the read only drops this call's probe
+    assert fake.calls[1:] == [("eval", f"{_probe(fake.calls[0][1])} = nil")]
 
 
 def test_run_lua_bind_on_a_hyprlang_session(monkeypatch):
@@ -269,6 +273,37 @@ def test_run_lua_bind_tells_a_moved_bind_from_a_failing_one(monkeypatch, reply, 
     with pytest.raises(hyprctl.HyprctlError) as exc:
         hyprctl.run_lua_bind("SUPER+J")
     assert isinstance(exc.value, hyprctl.LuaBindMoved) is moved
+
+
+def test_two_callers_never_share_a_probe(monkeypatch):
+    fake = FakeSocket(LUA57_RAW)
+    monkeypatch.setattr(hyprctl, "_run", fake)
+    hyprctl.run_lua_bind("SUPER+L")
+    hyprctl.run_lua_bind("SUPER+L")
+    assert _probe(fake.calls[0][1]) != _probe(fake.calls[2][1])
+
+
+def test_a_bind_of_another_kind_on_the_combo_refuses(monkeypatch):
+    # binds() read close; a reload since then put a function bind there
+    fake = FakeSocket(LUA57_RAW)
+    monkeypatch.setattr(hyprctl, "_run", fake)
+    with pytest.raises(hyprctl.LuaBindMoved):
+        hyprctl.run_lua_bind("SUPER+L", expect="exec_cmd")
+    probe = _probe(fake.calls[0][1])
+    assert fake.calls[1:] == [("eval", f"{probe} = nil")]  # nothing ran; probe dropped
+    assert hyprctl.run_lua_bind("SUPER+J", expect="")[0].startswith("function: ")
+
+
+def test_a_warning_from_the_bind_s_dispatcher_is_not_a_failure(monkeypatch):
+    # eval answers `ok` only with no issue at all; a dispatcher that warned
+    # (a window not found) still ran, and a retry would run the bind again
+    fake = FakeSocket(LUA57_RAW, eval_reply="warning: =[C]:-1: hl.focus: window not found")
+    monkeypatch.setattr(hyprctl, "_run", fake)
+    assert hyprctl.run_lua_bind("SUPER+J") == (
+        "function: 0x558a32c398b0", "warning: hl.focus: window not found")
+    fake.eval_reply = "warning: a\nsomething else"
+    with pytest.raises(hyprctl.HyprctlError, match="something else"):
+        hyprctl.run_lua_bind("SUPER+J")
 
 
 def test_run_lua_bind_is_a_dry_run_barrier(monkeypatch):

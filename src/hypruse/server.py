@@ -2895,12 +2895,14 @@ def use_bind(combo: str, then: str = "none") -> list[Any] | str:
 def _use_lua_bind(bind: dict[str, Any], then: str) -> list[Any] | str:
     """A bind in a Lua config: a function or an hl.dsp dispatcher that only
     the compositor's interpreter holds, run there by hyprctl.run_lua_bind."""
-    what = f"lua {bind['dispatcher']}" if bind.get("dispatcher") else "lua function"
+    def what(name: str) -> str:
+        return f"lua {name}" if name else "lua function"
+
     if journal.dry_run():
-        return _acted(f"{_DRY} run {bind['combo']}: {what}", then)
+        return _acted(f"{_DRY} run {bind['combo']}: {what(bind.get('dispatcher', ''))}", then)
     trust.guard_seat()  # as for any bind: it acts on whatever is focused when it lands
     try:
-        hyprctl.run_lua_bind(bind["combo"])
+        handler, warned = hyprctl.run_lua_bind(bind["combo"], bind.get("dispatcher", ""))
     except hyprctl.LuaBindMoved:
         raise ValueError(
             f"{bind['combo']} was not run: the owner's Lua config was reloaded or the "
@@ -2908,7 +2910,10 @@ def _use_lua_bind(bind: dict[str, Any], then: str) -> list[Any] | str:
             "use_bind again."
         ) from None
     trust.remember_seat()
-    return _acted(f"ran {bind['combo']}: {what}", then)
+    ran = f"ran {bind['combo']}: {what(hyprctl.lua_bind_kind(handler)[1])}"
+    if warned:  # it ran: a retry would run it again
+        ran += f" (Hyprland warned: {warned})"
+    return _acted(ran, then)
 
 
 _WAIT_EVENTS = {

@@ -1290,12 +1290,13 @@ def _install_border_rule() -> None:
     try:
         hyprctl.border_rule(_OWNED_TAG, _MARK_COLOR)
     except hyprctl.HyprctlError as exc:
-        print(
-            f"hypruse: HYPRUSE_MARK is set but the border rule did not install ({exc}); "
-            f"agent windows are still tagged {_OWNED_TAG}, so a rule in your own "
-            "Hyprland config will still color them",
-            file=sys.stderr,
-        )
+        with contextlib.suppress(OSError, ValueError):  # a client may have closed stderr
+            print(
+                f"hypruse: HYPRUSE_MARK is set but the border rule did not install ({exc}); "
+                f"agent windows are still tagged {_OWNED_TAG}, so a rule in your own "
+                "Hyprland config will still color them",
+                file=sys.stderr,
+            )
 
 
 def _reinstall_on_reload(
@@ -1321,7 +1322,9 @@ def _reinstall_on_reload(
                     rounds -= 1
                     hyprctl.forget_provider()
                     _install_border_rule()
-        except events.EventError:
+        except Exception:  # this thread is all that keeps the outline up
+            # a lost event socket, or anything unforeseen: wait and start over
+            # rather than end the thread and the outline with it, silently
             rounds -= 1
             time.sleep(retry_s)
 

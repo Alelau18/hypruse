@@ -338,6 +338,24 @@ def test_a_dead_event_socket_is_retried_not_fatal(monkeypatch):
     assert len(tries) == 3
 
 
+def test_an_unforeseen_failure_does_not_end_the_watcher(monkeypatch):
+    # the thread is all that keeps the outline up: anything it did not
+    # foresee (a closed stderr, a bad reply) restarts it, never ends it
+    monkeypatch.setenv("HYPRUSE_MARK", "1")
+    log = []
+
+    def border_rule(tag, color):
+        log.append("rule")
+        if len(log) == 1:
+            raise RuntimeError("unforeseen")
+
+    monkeypatch.setattr(trust.hyprctl, "border_rule", border_rule)
+    monkeypatch.setattr(trust.hyprctl, "forget_provider", lambda: None)
+    reloads = []
+    trust._reinstall_on_reload(lambda: _Reloads(5, reloads), retry_s=0, rounds=3)
+    assert log == ["rule", "rule"]  # the failed round, then the next reload's install
+
+
 def test_only_the_server_watches_for_reloads(monkeypatch):
     monkeypatch.setenv("HYPRUSE_MARK", "1")
     monkeypatch.setattr(trust.hyprctl, "border_rule", lambda *a: None)

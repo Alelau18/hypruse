@@ -1008,12 +1008,15 @@ def binds() -> list[dict[str, Any]]:
 
 # run_lua_bind's guard against a reload. A reload builds a fresh Lua state
 # (reinitLuaState, in 0.56 and 0.57 alike), which renumbers every bind's
-# registry index and drops every global, so a token set as a global in the
-# same request that reads the binds still being there proves the index read
-# is the one about to be called. Lua code holds no `;`, which a batch splits on.
-_LUA_PROBE = "__hypruse_bind_probe"
+# registry index and drops every global, so a token global set in the same
+# request that reads the binds still being there proves the index read is
+# the one about to be called. The token is in the global's NAME, so two
+# callers at once (the MCP server and a shell verb) never clear each other's.
+# Lua code holds no `;`, which a batch splits on.
+_LUA_PROBE = "__hypruse_bind_probe_"
 _LUA_BIND_STALE = "hypruse: the Lua config was reloaded while use_bind ran"
 _LUA_BIND_CHANGED = "hypruse: the bind changed while use_bind ran"
+_LUA_BIND_FAILED = "the bind reported a failure"
 
 
 class LuaBindMoved(HyprctlError):
@@ -1022,7 +1025,7 @@ class LuaBindMoved(HyprctlError):
     Nothing ran."""
 
 
-def run_lua_bind(combo: str) -> str:
+def run_lua_bind(combo: str, expect: str | None = None) -> tuple[str, str]:
     """Run the Lua bind on `combo`, as pressing it would: `hl.dispatch` on
     the value the bind holds, read from the registry index `binds` reports.
 
@@ -1033,41 +1036,65 @@ def run_lua_bind(combo: str) -> str:
     reload in between, which would put another bind's function at that
     index, refuses instead. A 0.57 function bind is also checked by
     identity, its printed address against the one `binds` reported.
-    Returns the bind's handler as `binds` reported it."""
+    `expect` is the hl.dsp dispatcher name the caller read earlier ('' for a
+    function bind): a bind of another kind on the combo now refuses too.
+
+    What this cannot catch: a dispatcher bind (and every 0.56 bind) is
+    checked by type only, so if Lua code unbinds it and refs another
+    function in the milliseconds between the two requests, without a
+    reload, the registry reuses the slot and that function runs. Hyprland
+    exposes no identity for a dispatcher's function to check against.
+
+    Returns (the handler as `binds` reported it, warnings the compositor
+    printed: a bind whose dispatcher warned, e.g. a window not found, still
+    ran, so it is not a failure to retry)."""
     journal.refuse_if_dry(f"use_bind {combo}")
-    token = secrets.token_hex(8)
+    probe = _LUA_PROBE + secrets.token_hex(8)
     try:
-        out = _run("--batch", f"eval {_LUA_PROBE} = {lua_str(token)} ; j/binds")
+        out = _run("--batch", f"eval {probe} = true ; j/binds")
     except HyprctlError as exc:
         raise HyprctlError(f"use_bind {combo}: {_reply_error(exc)}") from None
     reply, _, rest = out.partition("\n")
     if reply.strip() != "ok":
         raise HyprctlError(f"use_bind {combo}: hyprctl eval: {reply.strip()}")
     try:
-        raw = json.JSONDecoder().raw_decode(rest.lstrip())[0]
-    except json.JSONDecodeError as exc:
-        raise HyprctlError(f"use_bind {combo}: unparseable binds reply {rest[:120]!r}") from exc
-    target = _norm_combo(combo)
-    record = next(
-        (b for b in raw if isinstance(b, dict) and _norm_combo(_bind_combo(b) or "") == target),
-        None,
-    )
-    if record is None:
-        raise HyprctlError(f"use_bind {combo}: the bind is gone")
-    handler, ref = str(record.get("dispatcher", "")), str(record.get("arg", ""))
-    if not lua_bind_kind(handler)[0] or not ref.isdigit():
-        raise HyprctlError(f"use_bind {combo}: not a Lua bind any more ({handler} {ref})")
+        try:
+            raw = json.JSONDecoder().raw_decode(rest.lstrip())[0]
+        except json.JSONDecodeError as exc:
+            raise HyprctlError(
+                f"use_bind {combo}: unparseable binds reply {rest[:120]!r}") from exc
+        target = _norm_combo(combo)
+        record = next(
+            (b for b in raw if isinstance(b, dict) and _norm_combo(_bind_combo(b) or "") == target),
+            None,
+        )
+        if record is None:
+            raise HyprctlError(f"use_bind {combo}: the bind is gone")
+        handler, ref = str(record.get("dispatcher", "")), str(record.get("arg", ""))
+        is_lua, name = lua_bind_kind(handler)
+        if not is_lua or not ref.isdigit():
+            raise HyprctlError(f"use_bind {combo}: not a Lua bind any more ({handler} {ref})")
+        if expect is not None and name != expect:
+            raise LuaBindMoved(f"use_bind {combo}: {_LUA_BIND_CHANGED}")
+    except HyprctlError:
+        with contextlib.suppress(HyprctlError):
+            _run("eval", f"{probe} = nil")
+        raise
     same = f" or tostring(f) ~= {lua_str(handler)}" if _LUA_FUNCTION.fullmatch(handler) else ""
     # error(..., 0) and the pcall keep position prefixes off the messages:
     # Lua names an eval's chunk by its source, so a prefix would carry this
-    # whole snippet, guard messages included, into every failure
+    # whole snippet, guard messages included, into every failure. A bind
+    # function's own `{ ok = false, error = ... }`, which a key press would
+    # read as a failure, fails here too.
     code = (
-        f"if {_LUA_PROBE} ~= {lua_str(token)} then error({lua_str(_LUA_BIND_STALE)}, 0) end "
-        f"{_LUA_PROBE} = nil "
+        f"if {probe} ~= true then error({lua_str(_LUA_BIND_STALE)}, 0) end "
+        f"{probe} = nil "
         f"local f = debug.getregistry()[{int(ref)}] "
         f'if type(f) ~= "function"{same} then error({lua_str(_LUA_BIND_CHANGED)}, 0) end '
-        "local ok, err = pcall(hl.dispatch, f) "
-        "if not ok then error(tostring(err), 0) end"
+        "local ok, r = pcall(hl.dispatch, f) "
+        "if not ok then error(tostring(r), 0) end "
+        'if type(r) == "table" and rawget(r, "ok") == false then '
+        f"error(tostring(rawget(r, \"error\") or {lua_str(_LUA_BIND_FAILED)}), 0) end"
     )
     try:
         out = _run("eval", code)
@@ -1077,9 +1104,14 @@ def run_lua_bind(combo: str) -> str:
         if detail.startswith((_LUA_BIND_STALE, _LUA_BIND_CHANGED)):
             raise LuaBindMoved(f"use_bind {combo}: {detail}") from None
         raise HyprctlError(f"use_bind {combo}: {detail}") from None
-    if out != "ok":
-        raise HyprctlError(f"use_bind {combo}: {out}")
-    return handler
+    if out == "ok":
+        return handler, ""
+    # eval answers `ok` only with no issue at all; a dispatcher's warning
+    # (WARNING/INFO level) comes back instead, and the bind did run
+    lines = [ln.strip().replace("=[C]:-1: ", "") for ln in out.splitlines() if ln.strip()]
+    if lines and all(ln.startswith(("warning:", "info:")) for ln in lines):
+        return handler, "; ".join(lines)
+    raise HyprctlError(f"use_bind {combo}: {out}")
 
 
 def _reply_error(exc: HyprctlError) -> str:

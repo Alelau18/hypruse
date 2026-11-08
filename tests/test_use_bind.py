@@ -121,7 +121,13 @@ def fake_lua_binds(monkeypatch):
     monkeypatch.setattr(hyprctl, "binds", lambda: LUA_BINDS)
     ran, dispatched = [], []
     monkeypatch.setattr(hyprctl, "dispatch", lambda *a: dispatched.append(a))
-    monkeypatch.setattr(hyprctl, "run_lua_bind", lambda combo: ran.append(combo) or "function: 0x1")
+    handlers = {"SUPER+L": "HL.Dispatcher(close)", "SUPER+F": "function: 0x1"}
+
+    def run(combo, expect=None):
+        ran.append(combo)
+        return handlers[combo], ""
+
+    monkeypatch.setattr(hyprctl, "run_lua_bind", run)
     return ran, dispatched
 
 
@@ -139,8 +145,21 @@ def test_a_lua_bind_rehearses_under_dry_run(fake_lua_binds, monkeypatch):
     assert "run SUPER+L: lua close" in out and ran == []
 
 
+def test_use_bind_passes_what_it_read_and_reports_what_ran(fake_lua_binds, monkeypatch):
+    seen = []
+
+    def run(combo, expect=None):
+        seen.append(expect)
+        return "HL.Dispatcher(close)", "warning: hl.window.close: no target"
+
+    monkeypatch.setattr(hyprctl, "run_lua_bind", run)
+    out = str(server.use_bind("super+l"))
+    assert seen == ["close"]
+    assert "ran SUPER+L: lua close (Hyprland warned: warning: hl.window.close: no target)" in out
+
+
 def test_a_lua_bind_that_moved_under_the_call_says_to_retry(fake_lua_binds, monkeypatch):
-    def stale(combo):
+    def stale(combo, expect=None):
         raise hyprctl.LuaBindMoved(f"use_bind {combo}: reloaded")
 
     monkeypatch.setattr(hyprctl, "run_lua_bind", stale)
@@ -149,7 +168,7 @@ def test_a_lua_bind_that_moved_under_the_call_says_to_retry(fake_lua_binds, monk
 
 
 def test_a_lua_bind_s_own_failure_is_reported_as_it_is(fake_lua_binds, monkeypatch):
-    def boom(combo):
+    def boom(combo, expect=None):
         raise hyprctl.HyprctlError(f"use_bind {combo}: hl.dispatch: boom")
 
     monkeypatch.setattr(hyprctl, "run_lua_bind", boom)
