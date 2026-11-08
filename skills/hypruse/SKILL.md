@@ -17,7 +17,7 @@ compatibility: Linux with a running Hyprland session and the hypruse CLI on PATH
 allowed-tools: Bash(hypruse doctor:*) Bash(hypruse desktop:*) Bash(hypruse screenshot:*) Bash(hypruse zoom:*) Bash(hypruse ui:*) Bash(hypruse marks:*) Bash(hypruse binds:*) Bash(hypruse wait_for:*) Bash(hypruse wait-for:*) Bash(hypruse --help) Read
 metadata:
   author: IlyasKhallouki
-  version: "0.13.0"
+  version: "0.13.1"
   homepage: https://github.com/IlyasKhallouki/hypruse
 ---
 
@@ -194,6 +194,12 @@ one compact `{"ok":true,"tool":...,"result":...}` line.
 apps and Electron/Chrome started without `--force-renderer-accessibility`.
 Fall back to screenshot, zoom, pointer. For web pages prefer a browser tool
 if one is installed; hypruse is for the desktop around the browser.
+
+For Chromium, Chrome, their web apps and Obsidian, tell the user the fix
+rather than editing it yourself: add `--force-renderer-accessibility` on its
+own line to `~/.config/chromium-flags.conf` (or `chrome-flags.conf`,
+`brave-flags.conf`, `~/.config/obsidian/user-flags.conf`) and restart the
+app. `hypruse doctor` names the open windows that still have no tree.
 
 ## References
 

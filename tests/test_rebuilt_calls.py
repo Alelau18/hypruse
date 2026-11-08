@@ -219,7 +219,10 @@ def test_the_journal_views_flags_are_the_tools_boolean_arguments():
 def test_a_step_is_coerced_exactly_as_a_direct_mcp_call(tool, args):
     # the review found a step coerced a number to text where a direct call
     # refused it: the two validators must agree
-    from mcp.server.fastmcp.utilities.func_metadata import func_metadata
+    try:  # mcp 2
+        from mcp.server.mcpserver.utilities.func_metadata import func_metadata
+    except ImportError:  # mcp 1
+        from mcp.server.fastmcp.utilities.func_metadata import func_metadata
 
     fn = srv.TOOLS[tool]
     try:

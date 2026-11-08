@@ -11,6 +11,12 @@ OBSERVE = {"desktop", "screenshot", "zoom", "ui", "marks", "binds", "wait_for"}
 ACT = {"pointer", "keyboard", "click_ui", "hypr", "launch", "use_bind", "sequence"}
 
 
+def wire(obj, field: str):
+    """A field by its wire name: mcp 1 spells the attribute that way, mcp 2
+    in snake case."""
+    return obj.model_dump(by_alias=True)[field]
+
+
 def _tool_names(module):
     return {t.name for t in asyncio.run(module.mcp.list_tools())}
 
@@ -130,27 +136,28 @@ def test_every_tool_declares_a_title_and_whether_it_acts(reloaded, monkeypatch):
     tools = asyncio.run(reloaded(None).mcp.list_tools())
     assert {t.name for t in tools} == OBSERVE | ACT | {"clipboard"}
     for t in tools:
-        a = t.annotations
-        assert a is not None and a.title, t.name
+        assert t.annotations is not None, t.name
+        a = t.annotations.model_dump(by_alias=True)  # the wire names, in mcp 1 and 2
+        assert a["title"], t.name
         if t.name in OBSERVE:
-            assert a.readOnlyHint is True and a.openWorldHint is False, t.name
+            assert a["readOnlyHint"] is True and a["openWorldHint"] is False, t.name
         else:
-            assert a.readOnlyHint is False and a.destructiveHint is True, t.name
+            assert a["readOnlyHint"] is False and a["destructiveHint"] is True, t.name
 
 
 def test_no_tool_sends_its_result_twice(reloaded, monkeypatch):
-    # FastMCP turns a return annotation (`list[Any]`, `str`) into an output
+    # The SDK turns a return annotation (`list[Any]`, `str`) into an output
     # schema, and a tool with one sends every result twice: as content, and
     # again serialized into structuredContent, base64 image data included.
     # A 1920x120 screenshot strip came back past a client's 25k-token result
     # cap that way. Nothing reads the structured copy; the content is the result.
     monkeypatch.setenv("HYPRUSE_CLIPBOARD", "1")
     for t in asyncio.run(reloaded(None).mcp.list_tools()):
-        assert t.outputSchema is None, t.name
+        assert wire(t, "outputSchema") is None, t.name
 
 
 def test_object_results_come_back_as_one_compact_json_text(reloaded, monkeypatch):
-    # with no structured copy, FastMCP renders a dict as JSON indented by 2
+    # with no structured copy, the SDK renders a dict as JSON indented by 2
     # and a list of dicts as one indented text block per item: the desktop
     # snapshot came back 1.7x its compact size, and binds one block per bind
     from mcp.types import ImageContent
@@ -182,8 +189,12 @@ def test_object_results_come_back_as_one_compact_json_text(reloaded, monkeypatch
 
     def call(name):
         out = asyncio.run(app.call_tool(name, {}))
-        assert isinstance(out, list), "a (content, structuredContent) pair: sent twice"
-        return out
+        if isinstance(out, list):  # mcp 1: the content alone, or a pair when sent twice
+            return out
+        # mcp 2: a whole CallToolResult
+        assert wire(out, "structuredContent") is None, "sent twice"
+        assert not wire(out, "isError"), out
+        return out.content
 
     out = call("desktop")
     assert [b.type for b in out] == ["text"]
@@ -212,3 +223,31 @@ def test_the_instructions_follow_the_background_setting(reloaded, monkeypatch):
     assert "off for this session" in reloaded(None).mcp.instructions
     monkeypatch.setenv("HYPRUSE_BACKGROUND", "1")
     assert "GUARANTEED" not in reloaded("1").mcp.instructions  # read-only acts on nothing
+
+
+def test_tool_calls_run_one_at_a_time(reloaded):
+    # mcp 2 runs each plain tool call on its own worker thread; hypruse's
+    # tools share held keys, the seat baseline and the journal, so the
+    # registered tools must not overlap even when calls arrive together
+    import inspect
+    import threading
+    import time
+
+    module = reloaded(None)
+    inside, overlaps = [0], []
+
+    def tool(x: int = 0) -> int:
+        inside[0] += 1
+        overlaps.append(inside[0])
+        time.sleep(0.02)
+        inside[0] -= 1
+        return x
+
+    wrapped = module._one_at_a_time(tool)
+    assert inspect.signature(wrapped) == inspect.signature(tool)  # the schema source
+    threads = [threading.Thread(target=wrapped, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert max(overlaps) == 1

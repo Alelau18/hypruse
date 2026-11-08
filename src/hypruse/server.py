@@ -22,6 +22,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -3300,8 +3301,8 @@ def _sleep_ms(step: dict[str, Any]) -> float:
 @functools.cache
 def _arg_model(tool: Callable[..., Any]) -> Any:
     """The pydantic model of a tool's arguments, built from its signature
-    the way FastMCP builds the one it checks a direct call against, without
-    importing FastMCP: a shell verb must not pay for it."""
+    the way the SDK builds the one it checks a direct call against, without
+    importing the SDK: a shell verb must not pay for it."""
     import pydantic
 
     fn = inspect.unwrap(tool)
@@ -3756,7 +3757,7 @@ _TITLES = {
 
 def _compact(result: Any) -> Any:
     """A tool's result as a client should receive it. With no structured
-    copy, FastMCP renders a dict as JSON indented by 2 and a list of dicts as
+    copy, the SDK renders a dict as JSON indented by 2 and a list of dicts as
     one indented text block per item (the desktop snapshot at 1.7x its
     compact size, `binds` and `ui` as one block per entry), and an empty list
     as no content at all; objects go out as compact JSON text instead, a list
@@ -3771,7 +3772,7 @@ def _compact(result: Any) -> Any:
 
 
 def _compact_results(fn: Callable[..., Any]) -> Callable[..., Any]:
-    # functools.wraps keeps the name, docstring and signature FastMCP builds
+    # functools.wraps keeps the name, docstring and signature the SDK builds
     # the tool's description and input schema from
     @functools.wraps(fn)
     def tool(*args: Any, **kwargs: Any) -> Any:
@@ -3780,26 +3781,51 @@ def _compact_results(fn: Callable[..., Any]) -> Callable[..., Any]:
     return tool
 
 
+# One tool call at a time. mcp 1 ran a plain function tool on the event loop,
+# so calls never overlapped; mcp 2 runs each on a worker thread, and two at
+# once would share the held keys, the seat baseline and the journal.
+_TOOL_LOCK = threading.Lock()
+
+
+def _one_at_a_time(fn: Callable[..., Any]) -> Callable[..., Any]:
+    @functools.wraps(fn)  # the SDK reads the signature and docstring through this
+    def call(*args: Any, **kwargs: Any) -> Any:
+        with _TOOL_LOCK:
+            return fn(*args, **kwargs)
+    return call
+
+
+def _server(**kwargs: Any) -> Any:
+    """The SDK's server class: MCPServer in mcp 2, FastMCP in mcp 1 (where
+    the server reports the SDK's version, as it takes no version of its own)."""
+    try:
+        from mcp.server.mcpserver import MCPServer
+    except ImportError:
+        from mcp.server.fastmcp import FastMCP
+        return FastMCP("hypruse", **kwargs)
+    return MCPServer("hypruse", version=__version__, **kwargs)
+
+
 def build_app() -> Any:
-    """The FastMCP application with the tools registered for this mode.
+    """The MCP application with the tools registered for this mode.
     Observation tools are annotated read-only and closed-world (they read
     the local desktop and change nothing); acting tools are annotated
     destructive, since a click or a keypress can do anything the user
     could.
 
-    structured_output=False: FastMCP otherwise derives an output schema
+    structured_output=False: the SDK otherwise derives an output schema
     from each return annotation and sends every result a second time as
     structuredContent, which for a screenshot is the whole base64 image
-    again, as text."""
-    from mcp.server.fastmcp import FastMCP
+    again, as text. The lock is outermost, so a call's result is compacted
+    while it still holds it."""
     from mcp.types import ToolAnnotations
 
-    app_ = FastMCP("hypruse", instructions=_instructions)
+    app_ = _server(instructions=_instructions)
     for observe_tool in _OBSERVE_TOOLS:
         name = observe_tool.__name__
         app_.tool(annotations=ToolAnnotations(
             title=_TITLES[name], readOnlyHint=True, openWorldHint=False
-        ), structured_output=False)(_compact_results(observe_tool))
+        ), structured_output=False)(_one_at_a_time(_compact_results(observe_tool)))
     if not READONLY:
         acting = [pointer, keyboard, click_ui, hypr, launch, use_bind, sequence]
         if CLIPBOARD:
@@ -3808,7 +3834,7 @@ def build_app() -> Any:
             name = acting_tool.__name__
             app_.tool(annotations=ToolAnnotations(
                 title=_TITLES[name], readOnlyHint=False, destructiveHint=True
-            ), structured_output=False)(_compact_results(acting_tool))
+            ), structured_output=False)(_one_at_a_time(_compact_results(acting_tool)))
     return app_
 
 
@@ -3817,7 +3843,7 @@ _app: Any = None  # assigned here so a reload (the read-only tests) starts over
 
 def app() -> Any:
     """The application, built on first use rather than at import: importing
-    FastMCP costs about a second, which the MCP server pays once and a
+    the SDK costs about a second, which the MCP server pays once and a
     shell verb, which never serves anything, must not pay at all. Reachable
     as `server.mcp` too, through the module __getattr__ below."""
     global _app
