@@ -45,6 +45,7 @@ import hashlib
 import os
 import re
 import sys
+import threading
 import time
 from collections.abc import Iterable
 from typing import Any
@@ -1263,10 +1264,13 @@ def marking_on() -> bool:
 _MARK_COLOR = "rgb(ff5555)"
 
 
-def init_marking() -> None:
-    """Install the agent-owned border rule once at startup (no-op unless
-    HYPRUSE_MARK is set). Left in place on exit: it only colors windows
-    carrying hypruse's own tag, and a config reload clears it.
+def init_marking(watch_reloads: bool = False) -> None:
+    """Install the agent-owned border rule (no-op unless HYPRUSE_MARK is
+    set). Left in place on exit: it only colors windows carrying hypruse's
+    own tag. A config reload clears it with every other runtime rule
+    (Hyprland keeps only exec rules), so with `watch_reloads` a daemon
+    thread installs it again on every `configreloaded` event: the MCP
+    server's case, which lives across reloads.
 
     A failure here does not stop the server: marking makes the agent's
     presence legible, it is not a containment boundary the way confinement
@@ -1277,6 +1281,12 @@ def init_marking() -> None:
     never asked for."""
     if not marking_on():
         return
+    _install_border_rule()
+    if watch_reloads:
+        threading.Thread(target=_reinstall_on_reload, name="hypruse-mark", daemon=True).start()
+
+
+def _install_border_rule() -> None:
     try:
         hyprctl.border_rule(_OWNED_TAG, _MARK_COLOR)
     except hyprctl.HyprctlError as exc:
@@ -1286,6 +1296,34 @@ def init_marking() -> None:
             "Hyprland config will still color them",
             file=sys.stderr,
         )
+
+
+def _reinstall_on_reload(
+    stream_factory: Any = None, retry_s: float = 2.0, rounds: int = -1
+) -> None:
+    """Put the border rule back after every config reload, for the life of
+    the process. The event comes after the reload cleared the rules, in
+    both config managers. A reload can also switch the manager
+    (`reload full-reset`), so the provider is probed again first. The event
+    socket closes when the compositor goes away; this waits and reconnects
+    rather than dying, since it is all that keeps the outline up.
+    `stream_factory` and `rounds` are for tests: each reload handled and
+    each lost connection is a round (-1: forever)."""
+    from hypruse import events
+
+    factory = stream_factory or events.EventStream
+    while rounds != 0:
+        try:
+            with factory() as stream:
+                while rounds != 0:
+                    if stream.wait_for({"configreloaded"}, None, timeout=3600) is None:
+                        continue
+                    rounds -= 1
+                    hyprctl.forget_provider()
+                    _install_border_rule()
+        except events.EventError:
+            rounds -= 1
+            time.sleep(retry_s)
 
 
 _last_notify: dict[str, float] = {"ts": 0.0}

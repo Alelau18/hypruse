@@ -234,9 +234,11 @@ def _refuse_if_asleep(monitors: list[dict[str, Any]], rect: tuple[int, int, int,
     action with then='screenshot', as the action failing)."""
     for m in monitors:
         if m.get("dpmsStatus") is False and _rect_intersects(hyprctl.logical_rect(m), rect):
+            wake = ("hyprctl dispatch 'hl.dsp.dpms({ action = \"on\" })'"
+                    if hyprctl.provider() == hyprctl.LUA else "hyprctl dispatch dpms on")
             raise CaptureRefused(
                 f"monitor {m.get('name')} is asleep (DPMS off), so it draws no frame to "
-                "capture. Ask the human to wake it (input, or `hyprctl dispatch dpms on`), "
+                f"capture. Ask the human to wake it (input, or `{wake}`), "
                 "then capture again"
             )
 
@@ -263,10 +265,23 @@ def _hidden_reason(
     ref = hyprctl.workspace_ref(ws)
     if ref not in hyprctl.visible_workspaces(monitors):
         return f"no monitor is showing its workspace {ws.get('name') or ws.get('id')}"
-    # an inactive tab in a group: Hyprland 0.56 reports visible false,
-    # older releases hidden true
+    under_fullscreen = not c.get("fullscreen") and any(
+        o.get("address") != c.get("address")
+        and o.get("fullscreen")
+        and hyprctl.workspace_ref(o.get("workspace")) == ref
+        for o in clients or []
+    )
+    # Not drawn by the layout: an inactive tab in a group (Hyprland 0.56
+    # reports visible false, older releases hidden true), and since 0.57
+    # also a window under a fullscreen one or an inactive window of a
+    # monocle layout (hyprwm/Hyprland#15779)
     if c.get("hidden") is True or c.get("visible") is False:
-        return "it is an inactive tab in a group"
+        if under_fullscreen:
+            return "a fullscreen window on its workspace hides it"
+        if c.get("grouped") or c.get("hidden") is True:
+            return "it is an inactive tab in a group"
+        return ("its workspace's layout does not draw it "
+                "(an inactive window of a monocle layout, say)")
     at, size = c.get("at"), c.get("size")
     if at and size and monitors and all("width" in m for m in monitors):
         rect = (at[0], at[1], size[0], size[1])
@@ -279,12 +294,7 @@ def _hidden_reason(
             if tiled:
                 return "it is scrolled out of view of its monitor"
             return "it sits off every monitor, and focusing does not move it"
-    if c.get("acceptsInput") is False and not c.get("fullscreen") and any(
-        o.get("address") != c.get("address")
-        and o.get("fullscreen")
-        and hyprctl.workspace_ref(o.get("workspace")) == ref
-        for o in clients or []
-    ):
+    if c.get("acceptsInput") is False and under_fullscreen:
         return "a fullscreen window on its workspace hides it"
     return None
 

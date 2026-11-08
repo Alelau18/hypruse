@@ -41,6 +41,12 @@ For a keyboard-only kill switch, add to `hyprland.conf` (or
 bind = SUPER SHIFT, BackSpace, exec, pkill -f hypruse
 ```
 
+or, with a Lua config (`hyprland.lua`, the only kind Hyprland 0.57 reads):
+
+```lua
+hl.bind("SUPER + SHIFT + BackSpace", hl.dsp.exec_cmd("pkill -f hypruse"))
+```
+
 `pkill -f hypruse` is safe mid-action: button press/release pairs are sent
 within a single tool call, so the agent can never die holding a mouse
 button down.

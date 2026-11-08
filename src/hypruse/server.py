@@ -52,7 +52,7 @@ or workspace-shaped; use `screenshot` + `pointer`/`keyboard` only to see
 and operate inside application windows. Launchers, bars, notification
 popups, and on-screen keyboards are not windows: `desktop` reports them
 under `layers`. A listed layer is one the compositor tracks, not one you
-can see: it may be transparent or dormant, so `screenshot` when visibility
+can see: it may be transparent or, before Hyprland 0.57, unmapped, so `screenshot` when visibility
 matters. To CLICK a named control inside an app, call `click_ui` FIRST:
 for GTK/Qt apps it resolves the control in the accessibility tree and
 clicks it in ONE call, no image and no pixel estimation (`ui` lists the
@@ -172,7 +172,7 @@ workspaces, windows (address, class, title, `at` + `size` in global
 coords), the active window, cursor, and `layers` (launchers, bars,
 notification popups, and on-screen keyboards are not windows and
 appear only there). A listed layer is one the compositor tracks, not one
-you can see: it may be transparent or dormant, so confirm with a
+you can see: it may be transparent or, before Hyprland 0.57, unmapped, so confirm with a
 `screenshot` rather than inferring visibility from presence. To read what
 an app shows, prefer `ui` (its accessibility tree: control names with
 CURRENT values, a few hundred exact tokens and no image) when the app
@@ -359,7 +359,7 @@ def desktop() -> dict[str, Any]:
     on-screen keyboards are NOT windows and appear only there, with a
     best-effort `kind` and global geometry you can screenshot by region or
     click into. A listed layer is one the compositor tracks, not one you
-    can see: it may be transparent or dormant, so screenshot when
+    can see: it may be transparent or, before Hyprland 0.57, unmapped, so screenshot when
     visibility matters. Call first; act on the addresses it returns."""
     snap = hyprctl.snapshot()
     # every window it lists is one the agent has now seen: a later
@@ -2821,12 +2821,12 @@ def binds() -> list[dict[str, Any]]:
     """The user's own Hyprland keybinds: combo, action, arg, and a
     description when the config provides one. This is how the desktop's
     owner drives it: to perform one of these workflows, call `use_bind`
-    with the combo (it runs the bound action). An action of `lua` means the
-    bind is a closure in a Lua Hyprland config, which nothing can run from
-    outside: read its description and do the same thing with `hypr` or
-    `launch`. NOTE: the `keyboard` tool canNOT trigger these compositor
-    binds (synthetic keys reach apps, not Hyprland's bind matcher), so do
-    not try to press them."""
+    with the combo (it runs the bound action). An action of `lua` is a bind
+    in a Lua Hyprland config: `dispatcher` names the hl.dsp dispatcher it
+    runs, and a bind without one runs a Lua function, which only its
+    description explains; `use_bind` runs both. NOTE: the `keyboard` tool
+    canNOT trigger these compositor binds (synthetic keys reach apps, not
+    Hyprland's bind matcher), so do not try to press them."""
     return hyprctl.binds()
 
 
@@ -2864,8 +2864,10 @@ def use_bind(combo: str, then: str = "none") -> list[Any] | str:
     `binds` tool), e.g. 'SUPER+F'. This executes the bound action directly
     (the only reliable way: synthetic keypresses do not trigger compositor
     binds). Use it to drive the owner's configured workflows: launchers,
-    layout shortcuts, scratchpads. `then` ('desktop'|'screenshot'|'ui'|'none')
-    appends the result to this call (handy after a launcher bind). Refused
+    layout shortcuts, scratchpads. A `lua` bind (a Lua Hyprland config)
+    runs too, the way pressing it would. `then`
+    ('desktop'|'screenshot'|'ui'|'none') appends the result to this call
+    (handy after a launcher bind). Refused
     while HYPRUSE_CONFINE is set or the background guarantee is on
     (HYPRUSE_BACKGROUND=1): a bind runs an arbitrary compositor action
     that cannot be scoped to a window."""
@@ -2877,18 +2879,8 @@ def use_bind(combo: str, then: str = "none") -> list[Any] | str:
     bind = hyprctl.find_bind(combo)
     if bind is None:
         raise ValueError(f"no keybind {combo!r}; call binds() for the exact combos")
-    # Refused before the dry run, not after: a rehearsal that reported a
-    # plan for this would be describing something that can never happen.
     if bind["action"] == hyprctl.LUA_BIND:
-        described = f" It is described as {bind['description']!r}." if bind.get(
-            "description"
-        ) else ""
-        raise ValueError(
-            f"{bind['combo']} is bound in a Lua Hyprland config, where a bind is an "
-            "anonymous closure the compositor exposes no way to call. No tool can run "
-            f"it and retrying will not help.{described} Do the action directly instead: "
-            "`hypr` for window and workspace ops, `launch` for apps."
-        )
+        return _use_lua_bind(bind, then)
     action, arg = bind["action"], bind.get("arg", "")
     if journal.dry_run():
         return _acted(f"{_DRY} run {bind['combo']}: {action} {arg}".rstrip(), then)
@@ -2898,6 +2890,25 @@ def use_bind(combo: str, then: str = "none") -> list[Any] | str:
     hyprctl.dispatch(action, *([arg] if arg else []))
     trust.remember_seat()  # the bind may have moved focus/workspace on our behalf
     return _acted(f"ran {bind['combo']}: {action} {arg}".rstrip(), then)
+
+
+def _use_lua_bind(bind: dict[str, Any], then: str) -> list[Any] | str:
+    """A bind in a Lua config: a function or an hl.dsp dispatcher that only
+    the compositor's interpreter holds, run there by hyprctl.run_lua_bind."""
+    what = f"lua {bind['dispatcher']}" if bind.get("dispatcher") else "lua function"
+    if journal.dry_run():
+        return _acted(f"{_DRY} run {bind['combo']}: {what}", then)
+    trust.guard_seat()  # as for any bind: it acts on whatever is focused when it lands
+    try:
+        hyprctl.run_lua_bind(bind["combo"])
+    except hyprctl.LuaBindMoved:
+        raise ValueError(
+            f"{bind['combo']} was not run: the owner's Lua config was reloaded or the "
+            "bind changed between reading it and running it. Call binds() and "
+            "use_bind again."
+        ) from None
+    trust.remember_seat()
+    return _acted(f"ran {bind['combo']}: {what}", then)
 
 
 _WAIT_EVENTS = {
@@ -3073,7 +3084,8 @@ def wait_for(event: str, match: str = "", timeout_s: float = 10) -> dict[str, An
     'title_change' | 'layer_open' | 'layer_close' (layer-shell surfaces:
     launchers, notification popups; match on the namespace, e.g. 'wofi') |
     'urgent' (a window demands attention) | 'screencast' (screen sharing
-    started/stopped). match: optional case-insensitive substring filter
+    started/stopped: state 1|0, owner monitor|window|region|workspace).
+    match: optional case-insensitive substring filter
     over the event's fields (class/title/workspace name/address/namespace).
     timeout_s 1-60, default 10. Returns the event payload, or a timeout
     note; a filtered wait whose condition ALREADY holds (a matching window
@@ -3652,7 +3664,7 @@ _READONLY_DOCS = {
     on-screen keyboards are NOT windows and appear only there, with a
     best-effort `kind` and global geometry you can screenshot by region. A
     listed layer is one the compositor tracks, not one you can see: it may
-    be transparent or dormant, so screenshot when visibility matters. Call
+    be transparent or, before Hyprland 0.57, unmapped, so screenshot when visibility matters. Call
     first; pass the addresses it returns to the other observation tools.""",
     "screenshot": """Capture the focused monitor, a window (`window`: "active" or an
     address or selector, cheapest for reading one app), or a `region`
@@ -3710,8 +3722,9 @@ _READONLY_DOCS = {
     "binds": """The user's own Hyprland keybinds: combo, action, arg, and a
     description when the config provides one. This is how the desktop's
     owner drives it; read them to understand the owner's workflows. An
-    action of `lua` means the bind is a closure in a Lua Hyprland config,
-    so only its combo and description are readable. Running a bind is an
+    action of `lua` is a bind in a Lua Hyprland config: `dispatcher` names
+    the hl.dsp dispatcher it runs, and a bind without one runs a Lua
+    function, which only its description explains. Running a bind is an
     acting operation and is disabled in read-only mode.""",
 }
 
@@ -3907,7 +3920,7 @@ def main() -> None:
     safety.on_shutdown(_release_and_sync)  # kill switch mid-drag
     journal.start(__version__)  # HYPRUSE_JOURNAL: open the session record
     safety.on_shutdown(journal.stop)  # closed on the SIGTERM path too
-    trust.init_marking()  # HYPRUSE_MARK: install the agent-owned border rule
+    trust.init_marking(watch_reloads=True)  # HYPRUSE_MARK: the agent-owned border rule
     _note_clients()  # windows already open are not ones a window_open wait is for
     app().run()
 

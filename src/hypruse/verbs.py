@@ -426,7 +426,7 @@ def run(tool: str, kwargs: dict[str, Any], *, json_out: bool = False,
     if dry_run:
         os.environ["HYPRUSE_DRYRUN"] = "1"
 
-    from hypruse import cli, cli_state, journal, safety, server, session, trust
+    from hypruse import cli, cli_state, hyprctl, journal, safety, server, session, trust
     from hypruse import input as hinput
 
     session.ensure_session_env()
@@ -451,8 +451,14 @@ def run(tool: str, kwargs: dict[str, Any], *, json_out: bool = False,
     # and the windows the agent has seen, which wait_for(window_open)
     # needs to tell a window that opened since the last action
     server.restore_known_clients(cli_state.flag("known_clients"))
-    if tool == "launch" and trust.marking_on() and not cli_state.flag("marking_installed"):
-        trust.init_marking()  # once per compositor instance, not per call
+    if tool == "launch" and trust.marking_on() and (
+        hyprctl.provider() == hyprctl.LUA or not cli_state.flag("marking_installed")
+    ):
+        # once per compositor instance on hyprlang, where a keyword rule
+        # added twice applies twice. On Lua, every launch: the rule is named,
+        # so installing it again replaces it, and a config reload since the
+        # last verb has cleared it
+        trust.init_marking()
         cli_state.set_flag("marking_installed", True)
     try:
         result = getattr(server, tool)(**kwargs)
@@ -669,7 +675,8 @@ def _render_items(tool: str, items: list[dict[str, Any]]) -> str:
         lines = []
         for b in items:
             parts = [_safe(b.get("combo", ""))]
-            action = f"{_safe(b.get('action', ''))} {_safe(b.get('arg', ''))}".strip()
+            detail = b.get("arg", "") or b.get("dispatcher", "")
+            action = f"{_safe(b.get('action', ''))} {_safe(detail)}".strip()
             parts.append(action)
             if b.get("description"):
                 parts.append(_q(b["description"]))

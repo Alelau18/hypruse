@@ -79,6 +79,21 @@ def test_a_malformed_range_refuses(monkeypatch, raw):
         bg.agent_workspaces()
 
 
+@pytest.mark.parametrize("raw", ["name:42", "99,name:-3", "name:007"])
+def test_a_workspace_named_with_a_number_refuses_up_front(monkeypatch, raw):
+    # Hyprland 0.57 answers "Invalid workspace" to name:<number>
+    # (hyprwm/Hyprland#16319), so every launch there would fail later
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", raw)
+    with pytest.raises(trust.TrustError, match="names a workspace with a number"):
+        bg.agent_workspaces()
+
+
+@pytest.mark.parametrize("raw", ["name:+3", "name:4a", "name:r2d2"])
+def test_a_name_with_more_than_digits_is_a_name(monkeypatch, raw):
+    monkeypatch.setenv("HYPRUSE_AGENT_WORKSPACES", raw)
+    assert bg.agent_workspaces() == [raw]
+
+
 def _c(addr, ws):
     return {"address": addr, "stableId": addr[2:], "workspace": _ws(ws)}
 

@@ -41,7 +41,9 @@ _SCHEMAS: dict[str, tuple[tuple[str, ...], int]] = {
     "openlayer": (("namespace",), 0),
     "closelayer": (("namespace",), 0),
     "urgent": (("address",), 0),
-    # screen sharing started/stopped: state 0|1, owner 0=monitor 1=window
+    # screen sharing started/stopped: state 0|1, then what is shared, as a
+    # word: monitor, window or region, and on Hyprland 0.57 also workspace
+    # (anything else is passed through as it came)
     "screencast": (("state", "owner"), 1),
 }
 

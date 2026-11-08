@@ -389,7 +389,8 @@ def stop() -> int:
     Cleaner than `pkill -f hypruse` (it targets the beacon's own pid and
     triggers the graceful SIGTERM path), and safe to bind to a key:
 
-        bind = SUPER SHIFT, BackSpace, exec, hypruse stop
+        bind = SUPER SHIFT, BackSpace, exec, hypruse stop                   (hyprland.conf)
+        hl.bind("SUPER + SHIFT + BackSpace", hl.dsp.exec_cmd("hypruse stop"))  (hyprland.lua)
     """
     from hypruse import safety
 
@@ -1099,7 +1100,9 @@ For the owner:
   doctor         diagnose dependencies, session, protocols; exit 0 if green
   init [--yes] [--skill]   register hypruse in detected MCP clients, then doctor
   stop           emergency stop: signal a running server to shut down safely
-                 (bind it: bind = SUPER SHIFT, BackSpace, exec, hypruse stop)
+                 (bind it: bind = SUPER SHIFT, BackSpace, exec, hypruse stop
+                 or, in hyprland.lua, hl.bind("SUPER + SHIFT + BackSpace",
+                 hl.dsp.exec_cmd("hypruse stop")))
   journal        read back what an agent did (needs HYPRUSE_JOURNAL);
                  --acts, --refused, -n N
   replay         re-issue a journal's actions through the same guards;

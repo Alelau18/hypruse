@@ -13,6 +13,7 @@ HYPRUSE_BACKGROUND=0: off, 0.12's behaviour unless a call passes background=true
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable, Iterable
 from typing import Any, NoReturn
 
@@ -75,6 +76,14 @@ def agent_workspaces() -> list[str]:
     raw = os.environ.get("HYPRUSE_AGENT_WORKSPACES", "99-90").strip()
     out: list[str] = []
     for part in (p.strip() for p in raw.split(",")):
+        if part.startswith("name:") and _NUMERIC_NAME.fullmatch(part[5:]):
+            raise trust.TrustError(
+                f"HYPRUSE_AGENT_WORKSPACES={raw!r}: {part} names a workspace with a number, "
+                f"which Hyprland 0.57 refuses as an invalid workspace; use {part[5:]} for the "
+                "numbered one, or a name with a letter in it. Placing an app on the agent's "
+                "workspaces, and every action under HYPRUSE_BACKGROUND=1, is refused until "
+                "it is fixed"
+            )
         if part.startswith("name:") and part[5:]:
             out.append(part)
             continue
@@ -99,6 +108,9 @@ def agent_workspaces() -> list[str]:
 
 
 _MAX_WORKSPACES = 1000
+# what Hyprland 0.57's resolver takes for a number after `name:`
+# (isNumber2: an optional minus, then digits), hyprwm/Hyprland#16319
+_NUMERIC_NAME = re.compile(r"-?[0-9]+")
 _MAX_ID = 2**31 - 1  # Hyprland's workspace ids are 32-bit
 
 

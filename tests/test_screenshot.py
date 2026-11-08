@@ -305,8 +305,9 @@ def _scene(monkeypatch, clients, toplevel=None):
 
 
 def test_an_inactive_group_tab_is_not_shown(monkeypatch):
-    tab = {**SHOWN, "address": "0xt", "visible": False, "stableId": "180000aa"}
-    _scene(monkeypatch, [SHOWN, tab])
+    tab = {**SHOWN, "address": "0xt", "visible": False, "stableId": "180000aa",
+           "grouped": ["0xa", "0xt"]}
+    _scene(monkeypatch, [{**SHOWN, "grouped": ["0xa", "0xt"]}, tab])
     _, meta = screenshot.capture(window="0xt")
     assert meta["visible"] is False
     with pytest.raises(screenshot.ScreenshotError, match="inactive tab"):
@@ -321,6 +322,23 @@ def test_a_window_behind_a_fullscreen_sibling_is_not_shown(monkeypatch):
     with pytest.raises(screenshot.ScreenshotError, match="fullscreen"):
         screenshot.zoom_region(100, 100, window="0xb2")
     assert screenshot.capture(window="0xf")[1]["visible"] is True
+
+
+def test_hyprland_057_hides_a_window_behind_a_fullscreen_one_with_visible_false(monkeypatch):
+    # 0.57 reports visible false here too (hyprwm/Hyprland#15779), which
+    # must not read as a group tab
+    full = {**SHOWN, "address": "0xf", "fullscreen": 2, "stableId": "180000ab"}
+    behind = {**SHOWN, "address": "0xb2", "visible": False, "stableId": "180000ac"}
+    _scene(monkeypatch, [full, behind])
+    with pytest.raises(screenshot.ScreenshotError, match="fullscreen window on its workspace"):
+        screenshot.zoom_region(100, 100, window="0xb2")
+
+
+def test_hyprland_057_hides_an_inactive_monocle_window(monkeypatch):
+    inactive = {**SHOWN, "address": "0xm", "visible": False, "stableId": "180000ad", "grouped": []}
+    _scene(monkeypatch, [SHOWN, inactive])
+    with pytest.raises(screenshot.ScreenshotError, match="layout does not draw it"):
+        screenshot.zoom_region(100, 100, window="0xm")
 
 
 def test_a_toplevel_capture_says_where_its_pixels_came_from(monkeypatch):

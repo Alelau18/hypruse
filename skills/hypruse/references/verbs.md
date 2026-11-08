@@ -31,7 +31,7 @@ compact JSON.
 | code | meaning |
 |---|---|
 | 0 | delivered (acting verbs) or observed (observation verbs) |
-| 1 | runtime error: IPC down, window address gone, grim or wtype failed, no such bind, Lua bind |
+| 1 | runtime error: IPC down, window address gone, grim or wtype failed, no such bind, a Lua bind that failed or moved under the call |
 | 2 | usage: bad flag, missing argument, malformed JSON |
 | 3 | refused by a trust layer (confinement scope, authentication dialog, password field, locked session, launcher keyboard grab, strict-mode seat contention), by background mode (something the background cannot do, with what works instead), or a mode gate (HYPRUSE_READONLY for acting verbs, HYPRUSE_CLIPBOARD unset for clipboard) |
 | 4 | ran but produced no result: wait_for timeout, launch saw no window, ui or marks found no accessibility tree or no elements, click_ui ambiguous or no tree, sequence stopped early |
@@ -277,9 +277,10 @@ SUPER+F  lua  "scratchpad"
 Exit codes: 0, 1.
 
 Notes: this is how the owner drives the desktop; run one with `use_bind`.
-An action of `lua` is a closure in a Lua Hyprland config that nothing can
-run from outside: read its description and do the same thing with `hypr` or
-`launch`. `keyboard key super+...` never triggers these binds.
+An action of `lua` is a bind in a Lua Hyprland config: it names the
+`hl.dsp` dispatcher when it is one, and a bare `lua` runs a Lua function,
+which only its description explains. `use_bind` runs both.
+`keyboard key super+...` never triggers these binds.
 
 ## wait_for
 
@@ -637,9 +638,11 @@ Output:
 
 ```
 ran SUPER+SPACE: exec wofi --show drun
+ran SUPER+L: lua close
 ```
 
-Exit codes: 0; 1 (no such bind, or a `lua` bind, with the explanation); 3
+Exit codes: 0; 1 (no such bind, a `lua` bind whose function failed, or one
+the config reload moved between reading it and running it: run it again); 3
 (refused outright while HYPRUSE_CONFINE or HYPRUSE_BACKGROUND=1 is set,
 because a bind runs an arbitrary compositor action that cannot be scoped to
 a window).
@@ -647,8 +650,8 @@ a window).
 Notes: the only reliable way to run the owner's launchers, scratchpads and
 layout shortcuts, because synthetic keypresses never reach Hyprland's bind
 matcher. After a launcher bind, `wait_for layer_open --match <namespace>`,
-then drive the launcher with `keyboard` and no `--window`. A `lua` bind cannot
-be run by anything: do the action with `hypr` or `launch`.
+then drive the launcher with `keyboard` and no `--window`. A `lua` bind runs
+like any other: hypruse calls the bound Lua function in the compositor.
 
 ## sequence
 

@@ -98,8 +98,10 @@ what keeps multi-monitor and fractional scaling tractable.
 ## The two config managers
 
 Hyprland 0.56 added a Lua config manager beside the original hyprlang one
-and picks between them by the config file's extension, so a session runs
-one or the other and no version check can tell you which. The choice
+and picks between them by the config file's extension, so a 0.56 session
+runs one or the other and no version check can tell you which. 0.57
+removed the hyprlang manager, so every 0.57 session runs Lua; the
+hyprlang paths stay for 0.56 and older. The choice
 reaches the IPC, not just the config file: under the Lua manager `hyprctl
 dispatch X` evaluates the Lua expression `hl.dispatch(X)`, so every legacy
 dispatcher string is a syntax error, and `hyprctl keyword` is refused
@@ -112,12 +114,21 @@ lands on the same compositor action, and re-probes if a call fails, since
 Callers upstack never see the difference, which is the point: a window op
 is described once.
 
-Two things the Lua manager takes away rather than renames. `use_bind`
-cannot run a bind, because a Lua config binds an anonymous closure that
-Hyprland exposes no IPC route to call; `binds` still reports the combo and
-description, and `use_bind` refuses with that explanation instead of a
-parser error. And a runtime window rule becomes `hl.window_rule` rather
-than a keyword, which is what `border_rule()` exists to hide.
+Two things the Lua manager changes rather than renames. A Lua bind holds
+a Lua value (an `hl.dsp` dispatcher or a function), not a dispatcher name,
+and Hyprland has no IPC to fire a bind. `binds` reports it as action `lua`
+(0.56 names every one `__lua`; 0.57 prints the value, `HL.Dispatcher(close)`
+or `function: 0x…`), with the registry index of the bound function as its
+argument. `use_bind` runs it with `hl.dispatch(debug.getregistry()[N])`
+through `hyprctl eval` (`hyprctl.run_lua_bind`). A reload rebuilds the Lua
+state and renumbers the registry, so the index is read in the same batched
+request that plants a token as a Lua global, and the eval refuses unless the
+token is still there (a reload drops every global); a function bind is also
+checked by its printed address. And a runtime window rule becomes
+`hl.window_rule` rather than a keyword, which is what `border_rule()`
+exists to hide. Either kind of rule is cleared by a config reload, so the
+MCP server installs the `HYPRUSE_MARK` rule again on every
+`configreloaded` event.
 
 Everything the Lua path sends is built by `lua_str()` and the `_lua_*`
 builders. That is a security boundary, not formatting: `hyprctl dispatch`

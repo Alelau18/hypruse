@@ -1,3 +1,5 @@
+import pytest
+
 from hypruse import events
 
 
@@ -55,9 +57,12 @@ def test_parse_urgent_normalizes_address():
     assert (name, p["address"]) == ("urgent", "0x5f2a1b")
 
 
-def test_parse_screencast():
-    name, p = events.parse_event("screencast>>1,0")
-    assert (name, p) == ("screencast", {"state": "1", "owner": "0"})
+@pytest.mark.parametrize("owner", ["monitor", "window", "region", "workspace", "something-new"])
+def test_parse_screencast(owner):
+    # the owner is a word (Hyprland formats its share type); 0.57 adds
+    # workspace sharing, and a kind this version never heard of passes through
+    name, p = events.parse_event(f"screencast>>1,{owner}")
+    assert (name, p) == ("screencast", {"state": "1", "owner": owner})
 
 
 def test_a_wait_keeps_what_it_skips_for_the_next_drain():

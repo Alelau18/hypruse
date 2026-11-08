@@ -28,6 +28,7 @@ import contextlib
 import json
 import os
 import re
+import secrets
 import socket
 from typing import Any
 
@@ -832,13 +833,14 @@ def parse_layers(raw: dict[str, Any]) -> list[dict[str, Any]]:
     `at`/`size`.
 
     A surface listed here is one Hyprland TRACKS, which is weaker than
-    visible and weaker even than mapped: the compositor appends a layer
-    surface to the monitor's list when the client creates it and drops it
-    only when the client destroys it, so one that never mapped, or that
-    unmapped and stayed alive, is reported exactly like a live launcher.
-    The dump carries no visibility flag, so nothing downstream may read a
-    namespace's presence as 'that overlay is up'; only a frame answers
-    that."""
+    visible: up to 0.56 weaker even than mapped, since the compositor
+    appends a layer surface to the monitor's list when the client creates
+    it and drops it only when the client destroys it, so one that never
+    mapped, or that unmapped and stayed alive, is reported exactly like a
+    live launcher. 0.57 lists only mapped surfaces (hyprwm/Hyprland#15937),
+    and a mapped one can still be fully transparent. The dump carries no
+    visibility flag, so nothing downstream may read a namespace's presence
+    as 'that overlay is up'; only a frame answers that."""
     out: list[dict[str, Any]] = []
     for monitor, entry in (raw or {}).items():
         for level_id, surfaces in (entry.get("levels") or {}).items():
@@ -925,14 +927,29 @@ def modmask_to_names(mask: int) -> list[str]:
     return [name for bit, name in _MOD_BITS if mask & bit]
 
 
-# A Lua config binds a closure rather than a named dispatcher, and Hyprland
-# reports every one of them as the pseudo-dispatcher `__lua` with a Lua
-# registry index for an argument. That index means nothing outside the
-# compositor and there is no IPC route that calls the closure, so parse_binds
-# reports the fact instead of the number: the combo and the description still
-# say what the owner's workflow IS, which is most of what `binds` is for.
+# A Lua config binds a Lua value rather than a named dispatcher: an hl.dsp
+# dispatcher (`hl.dsp.window.close()`) or a function. Hyprland 0.56 reports
+# every one as the pseudo-dispatcher `__lua`; 0.57 reports the value as Lua
+# prints it, `HL.Dispatcher(close)` for a dispatcher (its leaf name only, not
+# its arguments) and `function: 0x...` for a function (hyprwm/Hyprland#15722).
+# Either way `arg` is the bind's index in the compositor's Lua registry,
+# which only run_lua_bind uses: parse_binds shows the dispatcher's name, never
+# the index, which means nothing outside the compositor.
 _LUA_HANDLER = "__lua"
+_LUA_DISPATCHER = re.compile(r"HL\.Dispatcher\((.*)\)")
+_LUA_FUNCTION = re.compile(r"function: (?:builtin: )?0x[0-9a-fA-F]+")
 LUA_BIND = "lua"
+
+
+def lua_bind_kind(handler: str) -> tuple[bool, str]:
+    """(is this a Lua bind, the hl.dsp dispatcher's name when it names one)."""
+    if handler == _LUA_HANDLER or _LUA_FUNCTION.fullmatch(handler):
+        return True, ""
+    m = _LUA_DISPATCHER.fullmatch(handler)
+    if m:
+        return True, "" if m.group(1) == "INVALID" else m.group(1)
+    return False, ""
+
 
 # A bind on a device that is not the keyboard. `mouse` is the hyprlang
 # manager's own flag and a Lua config never sets it, so the key name has to
@@ -947,22 +964,21 @@ def parse_binds(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     Pointer-button and lid/switch binds are dropped (nothing here can
     reproduce them); keycode-only binds keep a code: marker so they are at
-    least visible; a Lua closure's action reads `lua` and carries no arg.
+    least visible; a Lua bind's action reads `lua`, with the hl.dsp
+    dispatcher's name when it is one, and no arg.
     """
     out: list[dict[str, Any]] = []
     for b in raw:
-        if b.get("mouse"):
+        combo = _bind_combo(b)
+        if combo is None:
             continue
-        key = b.get("key") or ""
-        if not key and b.get("keycode"):
-            key = f"code:{b['keycode']}"
-        if not key or key.startswith(_UNPRESSABLE_KEYS):
-            continue
-        combo = "+".join([*modmask_to_names(int(b.get("modmask", 0))), key])
         action = b.get("dispatcher", "")
         entry: dict[str, Any] = {"combo": combo}
-        if action == _LUA_HANDLER:
+        is_lua, name = lua_bind_kind(action)
+        if is_lua:
             entry["action"] = LUA_BIND
+            if name:
+                entry["dispatcher"] = name
         else:
             entry["action"] = action
             entry["arg"] = b.get("arg", "")
@@ -974,8 +990,102 @@ def parse_binds(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _bind_combo(b: dict[str, Any]) -> str | None:
+    """A raw bind record's combo, or None for one nothing here can press."""
+    if b.get("mouse"):
+        return None
+    key = b.get("key") or ""
+    if not key and b.get("keycode"):
+        key = f"code:{b['keycode']}"
+    if not key or key.startswith(_UNPRESSABLE_KEYS):
+        return None
+    return "+".join([*modmask_to_names(int(b.get("modmask", 0))), key])
+
+
 def binds() -> list[dict[str, Any]]:
     return parse_binds(query("binds"))
+
+
+# run_lua_bind's guard against a reload. A reload builds a fresh Lua state
+# (reinitLuaState, in 0.56 and 0.57 alike), which renumbers every bind's
+# registry index and drops every global, so a token set as a global in the
+# same request that reads the binds still being there proves the index read
+# is the one about to be called. Lua code holds no `;`, which a batch splits on.
+_LUA_PROBE = "__hypruse_bind_probe"
+_LUA_BIND_STALE = "hypruse: the Lua config was reloaded while use_bind ran"
+_LUA_BIND_CHANGED = "hypruse: the bind changed while use_bind ran"
+
+
+class LuaBindMoved(HyprctlError):
+    """The bind's registry index no longer holds what `binds` reported: the
+    config was reloaded, or the bind replaced, between the read and the call.
+    Nothing ran."""
+
+
+def run_lua_bind(combo: str) -> str:
+    """Run the Lua bind on `combo`, as pressing it would: `hl.dispatch` on
+    the value the bind holds, read from the registry index `binds` reports.
+
+    Hyprland has no IPC to fire a bind, and a Lua bind's action lives only in
+    the compositor's interpreter, so this is the one way in. The index is
+    resolved in the same request that plants a token (a batch runs as one
+    step of the compositor's loop), and the call checks the token first: a
+    reload in between, which would put another bind's function at that
+    index, refuses instead. A 0.57 function bind is also checked by
+    identity, its printed address against the one `binds` reported.
+    Returns the bind's handler as `binds` reported it."""
+    journal.refuse_if_dry(f"use_bind {combo}")
+    token = secrets.token_hex(8)
+    try:
+        out = _run("--batch", f"eval {_LUA_PROBE} = {lua_str(token)} ; j/binds")
+    except HyprctlError as exc:
+        raise HyprctlError(f"use_bind {combo}: {_reply_error(exc)}") from None
+    reply, _, rest = out.partition("\n")
+    if reply.strip() != "ok":
+        raise HyprctlError(f"use_bind {combo}: hyprctl eval: {reply.strip()}")
+    try:
+        raw = json.JSONDecoder().raw_decode(rest.lstrip())[0]
+    except json.JSONDecodeError as exc:
+        raise HyprctlError(f"use_bind {combo}: unparseable binds reply {rest[:120]!r}") from exc
+    target = _norm_combo(combo)
+    record = next(
+        (b for b in raw if isinstance(b, dict) and _norm_combo(_bind_combo(b) or "") == target),
+        None,
+    )
+    if record is None:
+        raise HyprctlError(f"use_bind {combo}: the bind is gone")
+    handler, ref = str(record.get("dispatcher", "")), str(record.get("arg", ""))
+    if not lua_bind_kind(handler)[0] or not ref.isdigit():
+        raise HyprctlError(f"use_bind {combo}: not a Lua bind any more ({handler} {ref})")
+    same = f" or tostring(f) ~= {lua_str(handler)}" if _LUA_FUNCTION.fullmatch(handler) else ""
+    # error(..., 0) and the pcall keep position prefixes off the messages:
+    # Lua names an eval's chunk by its source, so a prefix would carry this
+    # whole snippet, guard messages included, into every failure
+    code = (
+        f"if {_LUA_PROBE} ~= {lua_str(token)} then error({lua_str(_LUA_BIND_STALE)}, 0) end "
+        f"{_LUA_PROBE} = nil "
+        f"local f = debug.getregistry()[{int(ref)}] "
+        f'if type(f) ~= "function"{same} then error({lua_str(_LUA_BIND_CHANGED)}, 0) end '
+        "local ok, err = pcall(hl.dispatch, f) "
+        "if not ok then error(tostring(err), 0) end"
+    )
+    try:
+        out = _run("eval", code)
+    except HyprctlError as exc:  # the bind's own failure, or one of the guards above
+        # a C function's position reads `=[C]:-1:`, which says nothing
+        detail = _reply_error(exc).removeprefix("=[C]:-1: ")
+        if detail.startswith((_LUA_BIND_STALE, _LUA_BIND_CHANGED)):
+            raise LuaBindMoved(f"use_bind {combo}: {detail}") from None
+        raise HyprctlError(f"use_bind {combo}: {detail}") from None
+    if out != "ok":
+        raise HyprctlError(f"use_bind {combo}: {out}")
+    return handler
+
+
+def _reply_error(exc: HyprctlError) -> str:
+    """The compositor's own words from a failed request, without the
+    request (`hyprctl eval <the whole snippet>: error: ...`)."""
+    return str(exc).split(": error: ", 1)[-1]
 
 
 def _norm_combo(combo: str) -> str:

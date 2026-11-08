@@ -281,6 +281,83 @@ def test_init_marking_noop_without_flag(monkeypatch):
     assert called == []
 
 
+class _Reloads:
+    """An event stream that reports `n` config reloads, then dies the way
+    socket2 does when the compositor goes away."""
+
+    def __init__(self, n, log):
+        self.left, self.log = n, log
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+    def wait_for(self, names, matcher, timeout):
+        assert names == {"configreloaded"}
+        if self.left == 0:
+            from hypruse import events
+            raise events.EventError("event socket closed by compositor")
+        self.left -= 1
+        self.log.append("reload")
+        return ("configreloaded", {"data": ""})
+
+
+def test_the_border_rule_comes_back_after_every_reload(monkeypatch):
+    # a reload clears every runtime rule but exec rules (Engine.cpp
+    # clearAllRules), and this desktop reloads on every monitor change
+    monkeypatch.setenv("HYPRUSE_MARK", "1")
+    log = []
+    monkeypatch.setattr(trust.hyprctl, "border_rule", lambda tag, color: log.append("rule"))
+    monkeypatch.setattr(trust.hyprctl, "forget_provider", lambda: log.append("probe"))
+    opened = []
+
+    def connect():
+        opened.append(1)
+        return _Reloads(2 if len(opened) == 1 else 1, log)
+
+    # 2 reloads on one connection, the socket dies, 1 more after the reconnect
+    trust._reinstall_on_reload(connect, retry_s=0, rounds=4)
+    assert log == ["reload", "probe", "rule", "reload", "probe", "rule", "reload", "probe", "rule"]
+    assert len(opened) == 2  # one connection carries every reload
+
+
+def test_a_dead_event_socket_is_retried_not_fatal(monkeypatch):
+    from hypruse import events
+
+    monkeypatch.setenv("HYPRUSE_MARK", "1")
+    tries = []
+
+    def unreachable():
+        tries.append(1)
+        raise events.EventError("cannot connect")
+
+    monkeypatch.setattr(trust.hyprctl, "border_rule", lambda *a: pytest.fail("no reload happened"))
+    trust._reinstall_on_reload(unreachable, retry_s=0, rounds=3)
+    assert len(tries) == 3
+
+
+def test_only_the_server_watches_for_reloads(monkeypatch):
+    monkeypatch.setenv("HYPRUSE_MARK", "1")
+    monkeypatch.setattr(trust.hyprctl, "border_rule", lambda *a: None)
+    started = []
+
+    class FakeThread:
+        def __init__(self, target, name, daemon):
+            assert target is trust._reinstall_on_reload and daemon
+            started.append(name)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(trust.threading, "Thread", FakeThread)
+    trust.init_marking()
+    assert started == []
+    trust.init_marking(watch_reloads=True)
+    assert started == ["hypruse-mark"]
+
+
 def test_note_launched_tags_and_notifies_when_marking(monkeypatch):
     monkeypatch.setenv("HYPRUSE_MARK", "1")
     dispatched, notes = [], []

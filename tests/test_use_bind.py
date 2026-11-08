@@ -112,31 +112,54 @@ def test_hypr_focus_window_refused_out_of_scope(monkeypatch):
 
 LUA_BINDS = [
     {"combo": "SUPER+F", "action": "lua", "description": "open files"},
-    {"combo": "SUPER+G", "action": "lua"},
+    {"combo": "SUPER+L", "action": "lua", "dispatcher": "close"},
 ]
 
 
 @pytest.fixture
 def fake_lua_binds(monkeypatch):
     monkeypatch.setattr(hyprctl, "binds", lambda: LUA_BINDS)
-    dispatched = []
+    ran, dispatched = [], []
     monkeypatch.setattr(hyprctl, "dispatch", lambda *a: dispatched.append(a))
-    return dispatched
+    monkeypatch.setattr(hyprctl, "run_lua_bind", lambda combo: ran.append(combo) or "function: 0x1")
+    return ran, dispatched
 
 
-def test_use_bind_refuses_a_lua_bind_and_says_why(fake_lua_binds):
-    with pytest.raises(ValueError, match="Lua Hyprland config") as exc:
-        server.use_bind("super+f")
-    msg = str(exc.value)
-    assert "retrying will not help" in msg  # close the retry loop
-    assert "'open files'" in msg  # what the bind was FOR
-    assert "hypr" in msg and "launch" in msg  # somewhere else to go
-    assert fake_lua_binds == []
+def test_use_bind_runs_a_lua_bind(fake_lua_binds):
+    ran, dispatched = fake_lua_binds
+    assert "ran SUPER+L: lua close" in str(server.use_bind("super+l"))
+    assert "ran SUPER+F: lua function" in str(server.use_bind("SUPER+F"))
+    assert ran == ["SUPER+L", "SUPER+F"] and dispatched == []
 
 
-def test_use_bind_refuses_a_lua_bind_before_the_dry_run_plan(fake_lua_binds, monkeypatch):
-    # a rehearsal that reported a plan here would be describing something
-    # that can never happen, on any run
+def test_a_lua_bind_rehearses_under_dry_run(fake_lua_binds, monkeypatch):
+    ran, _ = fake_lua_binds
     monkeypatch.setenv("HYPRUSE_DRYRUN", "1")
-    with pytest.raises(ValueError, match="Lua Hyprland config"):
-        server.use_bind("super+g")
+    out = str(server.use_bind("super+l"))
+    assert "run SUPER+L: lua close" in out and ran == []
+
+
+def test_a_lua_bind_that_moved_under_the_call_says_to_retry(fake_lua_binds, monkeypatch):
+    def stale(combo):
+        raise hyprctl.LuaBindMoved(f"use_bind {combo}: reloaded")
+
+    monkeypatch.setattr(hyprctl, "run_lua_bind", stale)
+    with pytest.raises(ValueError, match="use_bind again"):
+        server.use_bind("super+l")
+
+
+def test_a_lua_bind_s_own_failure_is_reported_as_it_is(fake_lua_binds, monkeypatch):
+    def boom(combo):
+        raise hyprctl.HyprctlError(f"use_bind {combo}: hl.dispatch: boom")
+
+    monkeypatch.setattr(hyprctl, "run_lua_bind", boom)
+    with pytest.raises(hyprctl.HyprctlError, match="boom"):
+        server.use_bind("super+l")
+
+
+def test_a_lua_bind_is_refused_under_confinement(fake_lua_binds, monkeypatch):
+    ran, _ = fake_lua_binds
+    monkeypatch.setenv("HYPRUSE_CONFINE", "class:kitty")
+    with pytest.raises(server.trust.TrustError, match="cannot be confined"):
+        server.use_bind("super+l")
+    assert ran == []
